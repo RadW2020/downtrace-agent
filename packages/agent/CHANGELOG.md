@@ -1,5 +1,11 @@
 # @downtrace/agent
 
+## 0.1.1
+
+### Patch Changes
+
+- 7d83e3e: README: state the Node versions the built package is verified on and link the changelog.
+
 ## 0.1.0
 
 ### Minor Changes

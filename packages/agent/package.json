@@ -1,6 +1,6 @@
 {
   "name": "@downtrace/agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Downtrace agent for Node.js: a flight recorder for your backend. Observes HTTP requests, aggregates locally, ships compact batches, never in your request path.",
   "type": "module",
   "exports": {
