@@ -1,0 +1,22 @@
+{
+  "name": "downtrace",
+  "private": true,
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build": "pnpm --filter @downtrace/protocol --filter @downtrace/agent run build",
+    "release": "pnpm run build && pnpm changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@changesets/cli": "^3.0.1",
+    "@types/node": "^26.4.1",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

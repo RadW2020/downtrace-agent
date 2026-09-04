@@ -1,0 +1,54 @@
+{
+  "name": "@downtrace/protocol",
+  "version": "0.0.0",
+  "description": "Downtrace ingestion protocol: JSON Schema, fixtures and generated TypeScript types",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema/v0/aggregates.schema.json": "./schema/v0/aggregates.schema.json"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "gen": "node scripts/gen.ts",
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "json-schema-to-typescript": "^16.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RadW2020/downtrace-agent.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/RadW2020/downtrace-agent#readme",
+  "keywords": [
+    "downtrace",
+    "observability",
+    "protocol",
+    "json-schema"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./schema/v0/aggregates.schema.json": "./schema/v0/aggregates.schema.json"
+    }
+  }
+}

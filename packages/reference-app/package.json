@@ -1,0 +1,29 @@
+{
+  "name": "@downtrace/reference-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reference backend with switchable regressions: benchmark target, integration bed and eval generator",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env src/main.ts",
+    "start": "node src/main.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run test/integration.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "protocol": "0.1.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [
+    {
+      "start": 1756900010000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 40,
+          "errors": 0,
+          "status": {
+            "success": 40,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 10, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 130.0,
+            "max": 4.8
+          }
+        },
+        {
+          "method": "GET",
+          "route": "/products/:id",
+          "count": 30,
+          "errors": 0,
+          "status": {
+            "success": 28,
+            "redirect": 0,
+            "clientError": 2,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 10, 15, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 90.5,
+            "max": 6.2
+          }
+        },
+        {
+          "method": "POST",
+          "route": "/checkout",
+          "count": 12,
+          "errors": 2,
+          "status": {
+            "success": 10,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 2
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+            ],
+            "sum": 130450.0,
+            "max": 61200.0
+          }
+        },
+        {
+          "method": "GET",
+          "route": "(other)",
+          "count": 5,
+          "errors": 0,
+          "status": {
+            "success": 0,
+            "redirect": 0,
+            "clientError": 5,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 1.1,
+            "max": 0.3
+          }
+        }
+      ]
+    }
+  ]
+}

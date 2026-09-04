@@ -1,0 +1,170 @@
+{
+  "protocol": "0.1.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [
+    {
+      "start": 1756900000000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 10,
+          "errors": 0,
+          "status": {
+            "success": 10,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 30.0,
+            "max": 3.9
+          }
+        }
+      ]
+    },
+    {
+      "start": 1756900010000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 11,
+          "errors": 0,
+          "status": {
+            "success": 11,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 31.0,
+            "max": 3.9
+          }
+        }
+      ]
+    },
+    {
+      "start": 1756900020000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 12,
+          "errors": 0,
+          "status": {
+            "success": 12,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 32.0,
+            "max": 3.9
+          }
+        }
+      ]
+    },
+    {
+      "start": 1756900030000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 13,
+          "errors": 0,
+          "status": {
+            "success": 13,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 33.0,
+            "max": 3.9
+          }
+        }
+      ]
+    },
+    {
+      "start": 1756900040000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 14,
+          "errors": 0,
+          "status": {
+            "success": 14,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 34.0,
+            "max": 3.9
+          }
+        }
+      ]
+    },
+    {
+      "start": 1756900050000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "GET",
+          "route": "/products",
+          "count": 15,
+          "errors": 0,
+          "status": {
+            "success": 15,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 35.0,
+            "max": 3.9
+          }
+        }
+      ]
+    }
+  ]
+}

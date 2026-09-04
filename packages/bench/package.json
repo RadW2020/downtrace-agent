@@ -1,0 +1,20 @@
+{
+  "name": "@downtrace/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic load generator and agent overhead benchmark for the reference app",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "load": "node src/load-cli.ts",
+    "bench": "node src/bench-cli.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run test/bench.integration.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@downtrace/reference-app": "workspace:*"
+  }
+}

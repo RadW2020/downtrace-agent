@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://downtrace.io/schema/v0/aggregates.schema.json",
+  "title": "AggregatesBatch",
+  "description": "A batch of per-interval, per-route aggregates sent by an agent to the cloud (POST /v0/aggregates).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "agent", "instance", "deploy", "intervals"],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "const": "0.1.0",
+      "description": "Protocol version this batch conforms to."
+    },
+    "agent": {
+      "$ref": "#/$defs/AgentInfo"
+    },
+    "instance": {
+      "$ref": "#/$defs/InstanceInfo"
+    },
+    "deploy": {
+      "$ref": "#/$defs/DeployInfo"
+    },
+    "intervals": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/Interval"
+      }
+    }
+  },
+  "$defs": {
+    "AgentInfo": {
+      "title": "AgentInfo",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "runtime", "runtimeVersion"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "runtime": {
+          "enum": ["node", "go"]
+        },
+        "runtimeVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "InstanceInfo": {
+      "title": "InstanceInfo",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "hostname", "pid"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Random identifier generated once per process."
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "DeployInfo": {
+      "title": "DeployInfo",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "environment"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Deployed version or commit; \"unknown\" when undetectable."
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "Interval": {
+      "title": "Interval",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "durationMs", "endpoints"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Interval start, Unix epoch milliseconds."
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000
+        },
+        "endpoints": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          }
+        }
+      }
+    },
+    "Endpoint": {
+      "title": "Endpoint",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "route", "count", "errors", "status", "latency"],
+      "properties": {
+        "method": {
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"]
+        },
+        "route": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Normalised route template, e.g. /products/:id, or (other)."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Responses with a 5xx status."
+        },
+        "status": {
+          "$ref": "#/$defs/StatusClasses"
+        },
+        "latency": {
+          "$ref": "#/$defs/LatencyHistogram"
+        }
+      }
+    },
+    "StatusClasses": {
+      "title": "StatusClasses",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "redirect", "clientError", "serverError"],
+      "properties": {
+        "success": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "2xx"
+        },
+        "redirect": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "3xx"
+        },
+        "clientError": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "4xx"
+        },
+        "serverError": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "5xx"
+        }
+      }
+    },
+    "LatencyHistogram": {
+      "title": "LatencyHistogram",
+      "description": "Fixed-bucket latency histogram in milliseconds. counts[i] is the number of requests with latency <= boundaries[i]; the last bucket holds everything above the last boundary. Fixed buckets add up across instances.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts", "sum", "max"],
+      "x-latency-boundaries-ms": [
+        0.5, 1, 1.5, 2, 3, 4, 5, 7.5, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 300, 400, 500, 750, 1000, 1500, 2000,
+        3000, 4000, 5000, 7500, 10000, 15000, 20000, 30000, 60000
+      ],
+      "properties": {
+        "counts": {
+          "type": "array",
+          "minItems": 35,
+          "maxItems": 35,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "sum": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sum of latencies in ms."
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum latency in ms."
+        }
+      }
+    }
+  }
+}
