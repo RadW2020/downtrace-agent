@@ -42,7 +42,11 @@ Only structural metadata: method, **route template** (`/products/:id`, never the
 
 ## Requirements
 
-Node.js 20 or newer (see `engines`). Express route templates are used when present; without a framework, identifier-looking path segments (numbers, UUIDs, long hex) are collapsed into `:id`.
+Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI. Express route templates are used when present; without a framework, identifier-looking path segments (numbers, UUIDs, long hex) are collapsed into `:id`.
+
+## Changelog
+
+See [`CHANGELOG.md`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/CHANGELOG.md).
 
 ## Source
 
