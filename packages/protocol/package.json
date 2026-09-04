@@ -1,6 +1,6 @@
 {
   "name": "@downtrace/protocol",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Downtrace ingestion protocol: JSON Schema, fixtures and generated TypeScript types",
   "type": "module",
   "exports": {
