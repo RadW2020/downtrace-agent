@@ -1,5 +1,11 @@
 # @downtrace/agent
 
+## 0.1.2
+
+### Patch Changes
+
+- ef87598: README: document `DOWNTRACE_DEBUG=true`, `http://` URLs and the interval fallback.
+
 ## 0.1.1
 
 ### Patch Changes
