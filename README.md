@@ -2,7 +2,12 @@
 
 > **Downtrace is a flight recorder for your backend.** It learns how your application normally behaves and, when something gets slower or breaks, captures what happened and tells you what changed.
 
-This repository is a **read-only mirror** of the public packages of Downtrace, synchronised automatically from the private monorepo where development happens. Issues are welcome here; pull requests are ported by hand.
+[![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@downtrace/agent)](https://www.npmjs.com/package/@downtrace/agent)
+
+This repository is a **read-only mirror** of the public packages of Downtrace, synchronised from the private monorepo where development happens, together with the hosted backend and the project's documents. Every commit here carries the real subject of the change and every published version is tagged, so you can read what changed between two releases. The tests above run here, on this code.
+
+Issues are welcome and answered here. Pull requests cannot be merged in place; see [CONTRIBUTING.md](CONTRIBUTING.md) for why, and how a patch gets in. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 | Package | What it is |
 |---|---|

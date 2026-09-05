@@ -1,0 +1,56 @@
+# Runs in the public mirror, so anyone can see the packages tested on their own.
+# Kept in the private monorepo under .github/mirror/ and copied by mirror.yml; do not edit it in the mirror.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: downtrace
+          POSTGRES_PASSWORD: downtrace
+          POSTGRES_DB: downtrace
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U downtrace -d downtrace"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://downtrace:downtrace@localhost:5432/downtrace
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Types and lint
+        run: |
+          pnpm -r --if-present run typecheck
+          pnpm exec biome ci packages
+      - name: Unit tests
+        run: pnpm -r run test
+      - name: Integration tests (reference app and load generator against real services)
+        run: pnpm --workspace-concurrency=1 --filter @downtrace/reference-app --filter @downtrace/bench run test:integration
