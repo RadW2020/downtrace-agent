@@ -8,3 +8,9 @@ export const LATENCY_BOUNDARIES_V0: readonly number[] = [
 
 /** Number of buckets: boundaries + 1 open-ended bucket. */
 export const LATENCY_BUCKETS_V0 = 35;
+
+/** Upper bounds of the fixed queries-per-request buckets; the last bucket is open-ended. */
+export const QUERIES_PER_REQUEST_BOUNDARIES_V0: readonly number[] = [0, 1, 2, 5, 10, 20, 50];
+
+/** Number of queries-per-request buckets: boundaries + 1 open-ended bucket. */
+export const QUERIES_PER_REQUEST_BUCKETS_V0 = 8;

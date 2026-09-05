@@ -21,6 +21,8 @@ await writeFile(`${outDir}aggregates.ts`, types);
 const defs = schema.$defs as Record<string, Record<string, unknown>>;
 const boundaries = defs.LatencyHistogram?.["x-latency-boundaries-ms"] as number[];
 if (!Array.isArray(boundaries)) throw new Error("schema: LatencyHistogram.x-latency-boundaries-ms missing");
+const queryBoundaries = defs.PostgresStats?.["x-queries-per-request-boundaries"] as number[];
+if (!Array.isArray(queryBoundaries)) throw new Error("schema: PostgresStats.x-queries-per-request-boundaries missing");
 await writeFile(
   `${outDir}boundaries.ts`,
   `${header}
@@ -29,6 +31,12 @@ export const LATENCY_BOUNDARIES_V0: readonly number[] = [${boundaries.join(", ")
 
 /** Number of buckets: boundaries + 1 open-ended bucket. */
 export const LATENCY_BUCKETS_V0 = ${boundaries.length + 1};
+
+/** Upper bounds of the fixed queries-per-request buckets; the last bucket is open-ended. */
+export const QUERIES_PER_REQUEST_BOUNDARIES_V0: readonly number[] = [${queryBoundaries.join(", ")}];
+
+/** Number of queries-per-request buckets: boundaries + 1 open-ended bucket. */
+export const QUERIES_PER_REQUEST_BUCKETS_V0 = ${queryBoundaries.length + 1};
 `,
 );
 console.log(`generated aggregates.ts and boundaries.ts (${boundaries.length + 1} buckets)`);

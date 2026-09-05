@@ -9,8 +9,8 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "const": "0.1.0",
-      "description": "Protocol version this batch conforms to."
+      "enum": ["0.1.0", "0.2.0"],
+      "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
       "$ref": "#/$defs/AgentInfo"
@@ -153,6 +153,9 @@
         },
         "latency": {
           "$ref": "#/$defs/LatencyHistogram"
+        },
+        "postgres": {
+          "$ref": "#/$defs/PostgresStats"
         }
       }
     },
@@ -213,6 +216,36 @@
           "type": "number",
           "minimum": 0,
           "description": "Maximum latency in ms."
+        }
+      }
+    },
+    "PostgresStats": {
+      "title": "PostgresStats",
+      "description": "Postgres work done per request on this route during the interval. Optional: agents that do not observe queries omit it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["queriesPerRequest", "totalMs", "max"],
+      "x-queries-per-request-boundaries": [0, 1, 2, 5, 10, 20, 50],
+      "properties": {
+        "queriesPerRequest": {
+          "type": "array",
+          "description": "Requests per bucket of queries-per-request; bounds in x-queries-per-request-boundaries, last bucket open-ended.",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "totalMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sum of query durations (ms) across every request on this route."
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Slowest single query (ms)."
         }
       }
     }

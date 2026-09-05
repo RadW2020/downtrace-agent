@@ -11,6 +11,7 @@ import type { Logger } from "../src/log.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
+ajv.addKeyword("x-queries-per-request-boundaries");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 /** In-process stand-in for the cloud: captures batches, answers with a configurable status. */

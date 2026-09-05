@@ -1,4 +1,4 @@
-import type { Interval } from "@downtrace/protocol";
+import { type Interval, PROTOCOL_VERSION } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import type { Logger } from "../src/log.ts";
 import { Sender } from "../src/transport.ts";
@@ -35,7 +35,7 @@ describe("Sender", () => {
     expect(await s.flush()).toBe(true);
     expect(calls[0]?.url).toBe("http://cloud.test/v0/aggregates");
     expect(calls[0]?.auth).toBe("Bearer tok");
-    expect(calls[0]?.body).toMatchObject({ protocol: "0.1.0", intervals: [{ start: 1 }, { start: 2 }] });
+    expect(calls[0]?.body).toMatchObject({ protocol: PROTOCOL_VERSION, intervals: [{ start: 1 }, { start: 2 }] });
     expect(s.pending).toBe(0);
     expect(s.sent).toBe(1);
   });

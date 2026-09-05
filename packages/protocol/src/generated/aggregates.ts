@@ -5,9 +5,9 @@
  */
 export interface AggregatesBatch {
   /**
-   * Protocol version this batch conforms to.
+   * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0";
+  protocol: "0.1.0" | "0.2.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -68,6 +68,7 @@ export interface Endpoint {
   errors: number;
   status: StatusClasses;
   latency: LatencyHistogram;
+  postgres?: PostgresStats;
 }
 export interface StatusClasses {
   /**
@@ -138,6 +139,26 @@ export interface LatencyHistogram {
   sum: number;
   /**
    * Maximum latency in ms.
+   */
+  max: number;
+}
+/**
+ * Postgres work done per request on this route during the interval. Optional: agents that do not observe queries omit it.
+ */
+export interface PostgresStats {
+  /**
+   * Requests per bucket of queries-per-request; bounds in x-queries-per-request-boundaries, last bucket open-ended.
+   *
+   * @minItems 8
+   * @maxItems 8
+   */
+  queriesPerRequest: [number, number, number, number, number, number, number, number];
+  /**
+   * Sum of query durations (ms) across every request on this route.
+   */
+  totalMs: number;
+  /**
+   * Slowest single query (ms).
    */
   max: number;
 }
