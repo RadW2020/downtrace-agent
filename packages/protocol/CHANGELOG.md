@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.2.1
+
+### Patch Changes
+
+- 7c267ba: README: document the `postgres` field, the queries-per-request bucket helpers added in 0.2.0, and how the protocol evolves (additive optional fields, minor bumps, an enum of published versions).
+
 ## 0.2.0
 
 ### Minor Changes
