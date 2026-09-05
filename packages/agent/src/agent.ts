@@ -8,6 +8,7 @@ import { enterRequest, type RequestContext } from "./context.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
+import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
 import { AGENT_VERSION } from "./version.ts";
 
@@ -56,6 +57,7 @@ export class Agent {
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
   private readonly contexts = new WeakMap<object, RequestContext>();
+  private readonly runtime = new RuntimeSampler();
   private instrumented = false;
   private timer: NodeJS.Timeout | undefined;
   private started = false;
@@ -119,6 +121,8 @@ export class Agent {
       this.instrumented = pg !== undefined;
       if (pg) this.log.debug(`instrumented pg ${pg}`);
     }
+    // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
+    this.runtime.start();
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
@@ -137,6 +141,7 @@ export class Agent {
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
     if (this.timer) clearInterval(this.timer);
+    this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);
     await this.flushNow(SHUTDOWN_FLUSH_MS);
@@ -146,7 +151,11 @@ export class Agent {
   async flushNow(timeoutMs?: number): Promise<boolean> {
     try {
       const interval = this.recorder.rotate();
-      if (interval) this.sender.enqueue(interval);
+      if (interval) {
+        // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
+        const runtime = this.runtime.rotate();
+        this.sender.enqueue(runtime ? { ...interval, runtime } : interval);
+      }
       return await this.sender.flush(timeoutMs);
     } catch (err) {
       this.internalError(err);
@@ -158,6 +167,7 @@ export class Agent {
     const request = (message as { request?: object }).request;
     if (!request) return;
     this.starts.set(request, performance.now());
+    this.runtime.requestStarted();
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     if (this.instrumented) this.contexts.set(request, enterRequest());
   }
@@ -168,6 +178,7 @@ export class Agent {
     const startedAt = this.starts.get(request);
     this.starts.delete(request);
     const ms = startedAt === undefined ? 0 : performance.now() - startedAt;
+    this.runtime.requestFinished();
     const work = this.contexts.get(request);
     this.contexts.delete(request);
     this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms, work);

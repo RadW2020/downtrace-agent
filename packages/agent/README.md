@@ -33,6 +33,13 @@ Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is
 
 Only structural metadata: method, **route template** (`/products/:id`, never the actual URL), status, counts and a fixed-bucket latency histogram per route and interval, plus the process identity (random id, hostname, pid) and the deploy (version, environment). No bodies, no headers, no query strings. The exact contract is the JSON Schema in [`@downtrace/protocol`](https://www.npmjs.com/package/@downtrace/protocol).
 
+### The health of your process
+
+Every interval the agent also reports how late Node's event loop ran (median, p99 and worst), how much time went to
+garbage collection, heap and resident memory, and the peak number of requests in flight. In Node many slowdowns are
+neither the database nor the network but the process itself, and a diagnosis that does not measure it will blame
+whatever it does measure. It all comes from Node's own instruments, which run whether anyone looks at them or not.
+
 ### Database work per request
 
 When your application uses `pg`, the agent also counts the queries each request makes, how long they took in total
