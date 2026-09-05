@@ -47,7 +47,11 @@ jobs:
             fi
             echo "publishing $name@$version"
             pnpm --filter "$name" run build
-            ( cd "$dir" && npm publish --provenance --access public )
+            # `pnpm pack` applies publishConfig, which is what rewrites exports to dist/; plain `npm publish` does
+            # not, and would ship a package pointing at sources that are not in the tarball. npm then does the
+            # publishing, because that is what mints the OIDC token and the provenance attestation.
+            tgz=$(cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP" | tail -1)
+            npm publish "$tgz" --provenance --access public
             published=$((published + 1))
           done
           echo "published $published package(s)"
