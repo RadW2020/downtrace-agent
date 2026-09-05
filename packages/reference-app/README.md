@@ -9,7 +9,12 @@ make dev            # Postgres 17 + Redis 8 en Docker y la app con recarga en :4
 make test-integration
 ```
 
-Configuración por entorno en `.env.example`; los valores por defecto coinciden con `docker-compose.yml`.
+Configuración por entorno en `.env.example`; los valores por defecto coinciden con `docker-compose.yml`. Lo que el `.env.example` no cuenta:
+
+- `PORT=0` y `PROVIDER_PORT=0` eligen un puerto libre (así arranca la app el harness de bench); la app escucha solo en `127.0.0.1`.
+- `STARTUP_FAILURE_MS=<ms>` simula una base de datos fría: el tráfico de producto recibe 503 (`ColdStartError`) durante esos ms desde la primera request; `/__admin/*` no se ve afectado. 0 desactiva.
+- Un nombre desconocido en `REGRESSIONS` aborta el arranque. Un entero mal formado en cualquier variable cae al valor por defecto sin aviso.
+- Cada 5xx deja una línea JSON en stderr (`level`, `status`, `method`, `path`, `error`, `message`); el bench la copia en el motivo de su veredicto.
 
 ## Endpoints
 

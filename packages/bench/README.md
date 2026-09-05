@@ -12,6 +12,25 @@ pnpm --filter @downtrace/bench run load --url http://127.0.0.1:4000 --rps 100 --
 
 Necesita Postgres y Redis (`make dev` o `DATABASE_URL`/`REDIS_URL`); la app de referencia la arranca el propio harness en procesos hijos con puertos aleatorios.
 
+### Opciones
+
+`bench` (todas opcionales; `make bench BENCH_ARGS="…"`):
+
+| Bandera | Defecto | Qué es |
+|---|---|---|
+| `--rounds` | 3 | Rondas B/A; cada una arranca la app en un proceso nuevo |
+| `--rps` | 200 | Tasa fija del bucle abierto |
+| `--measure` | 20 | Segundos medidos por ronda |
+| `--warmup` | 3 | Segundos limpios consecutivos antes de medir |
+| `--warmup-max` | 30 | Tope de calentamiento; si la app no llega a estar limpia, el bench termina |
+| `--seed` | 42 | Semilla del tráfico, la misma para ambas variantes |
+| `--agent` | `packages/agent/src/register.ts` | Módulo que se carga con `--import` en la variante con agente (p. ej. `fixtures/slow-agent.ts`) |
+| `--out` | `bench-report.json` | Ruta del informe JSON |
+
+La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y hereda el resto del entorno (`DATABASE_URL`, `REDIS_URL`); la variante con agente recibe además `DOWNTRACE_TOKEN=bench` y `DOWNTRACE_URL` hacia un sumidero local que cuenta los lotes.
+
+`load` (`pnpm --filter @downtrace/bench run load …`): `--url` (`http://127.0.0.1:4000`), `--rps` (200), `--duration` (10), `--seed` (42) y `--json` para el informe completo en vez de la tabla. Sale con 1 si alguna request falló.
+
 ## Cómo mide
 
 - **Bucle abierto**: las requests salen a tasa fija con independencia de lo que tarde el servidor, y la latencia se mide desde el instante *programado* de envío. Un servidor que se retrasa aparece como cola, no se esconde tras un cliente más lento.

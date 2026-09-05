@@ -20,13 +20,13 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | Variable | Required | What it is |
 |---|---|---|
 | `DOWNTRACE_TOKEN` | yes | The project's ingest token |
-| `DOWNTRACE_URL` | yes | Base URL of the cloud (`https://…`) |
+| `DOWNTRACE_URL` | yes | Base URL of the cloud, `http://` or `https://`; trailing slashes are ignored |
 | `DOWNTRACE_ENV` | no | Environment; falls back to `NODE_ENV`, then `production` |
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
-| `DOWNTRACE_DEBUG` | no | `1` to log the agent's own activity to stderr |
-| `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval (min 1000; default 10000) |
+| `DOWNTRACE_DEBUG` | no | `1` or `true` to log the agent's own activity to stderr |
+| `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 
-Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` the agent prints one warning and does nothing else.
+Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the agent prints one warning and does nothing else.
 
 ## What leaves your server
 
