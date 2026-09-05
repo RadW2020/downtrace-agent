@@ -42,10 +42,13 @@ whatever it does measure. It all comes from Node's own instruments, which run wh
 
 ### Database work per request
 
-When your application uses `pg`, the agent also counts the queries each request makes, how long they took in total
-and the slowest one, and reports that distribution per route. It is what turns "this endpoint got slower" into "this
-endpoint went from 12 queries per request to 65". **It never reads the query text or its values**, only counts and
-durations.
+When your application uses `pg`, the agent also counts the calls each request makes to it, how long they took in
+total, the slowest one and how many failed, and reports that distribution per route. It is what turns "this endpoint
+got slower" into "this endpoint went from 12 queries per request to 65". **It never reads the query text or its
+values**, only counts and durations.
+
+Dependencies are reported as a list, so Redis, MySQL and outgoing HTTP will appear the same way as they are added,
+each identified by its kind and, where it matters, its host.
 
 The agent loads before your application (`node --import`), so it wraps the driver before you import it and you write
 no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query

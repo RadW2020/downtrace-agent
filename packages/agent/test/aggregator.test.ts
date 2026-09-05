@@ -70,37 +70,72 @@ describe("IntervalAggregator", () => {
   });
 });
 
-describe("Postgres composition", () => {
-  it("bins each request by how many queries it made, and sums their time", () => {
+/** One request's work against one dependency, in the shape the recorder takes. */
+function work(calls: number, ms: number, maxMs = ms, kind: "postgres" | "redis" | "http" = "postgres", target = "") {
+  const key = target === "" ? kind : `${kind} ${target}`;
+  return new Map([[key, { kind, target, calls, ms, maxMs, errors: 0 }]]);
+}
+
+describe("dependencies", () => {
+  it("bins each request by how many calls it made, and sums their time", () => {
     const agg = new IntervalAggregator();
-    agg.record("POST", "/checkout", 201, 5, { queries: 12, queryMs: 20, queryMaxMs: 9 });
-    agg.record("POST", "/checkout", 201, 6, { queries: 14, queryMs: 22, queryMaxMs: 11 });
-    agg.record("POST", "/checkout", 201, 4, { queries: 2, queryMs: 3, queryMaxMs: 2 });
+    agg.record("POST", "/checkout", 201, 5, work(12, 20, 9));
+    agg.record("POST", "/checkout", 201, 6, work(14, 22, 11));
+    agg.record("POST", "/checkout", 201, 4, work(2, 3, 2));
     const interval = must(agg.rotate(), "interval");
-    const pg = must(interval.endpoints[0]?.postgres, "postgres");
-    expect(pg.queriesPerRequest[2]).toBe(1); // the 2-query request
-    expect(pg.queriesPerRequest[5]).toBe(2); // both in the 11–20 bucket
+    const deps = must(interval.endpoints[0]?.dependencies, "dependencies");
+    expect(deps).toHaveLength(1);
+    const pg = must(deps[0], "postgres dependency");
+    expect(pg.kind).toBe("postgres");
+    expect(pg.target).toBe("");
+    expect(pg.callsPerRequest[2]).toBe(1); // the 2-call request
+    expect(pg.callsPerRequest[5]).toBe(2); // both in the 11–20 bucket
     expect(pg.totalMs).toBe(45);
     expect(pg.max).toBe(11);
   });
 
-  it("omits the field entirely for endpoints where no query was observed", () => {
+  it("keeps one entry per kind and target, so many hosts do not collapse into one", () => {
+    const agg = new IntervalAggregator();
+    const mixed = new Map([
+      ["postgres", { kind: "postgres" as const, target: "", calls: 3, ms: 9, maxMs: 4, errors: 0 }],
+      [
+        "http api.stripe.com",
+        { kind: "http" as const, target: "api.stripe.com", calls: 2, ms: 300, maxMs: 200, errors: 1 },
+      ],
+      [
+        "http api.other.com",
+        { kind: "http" as const, target: "api.other.com", calls: 1, ms: 40, maxMs: 40, errors: 0 },
+      ],
+    ]);
+    agg.record("POST", "/checkout", 201, 5, mixed);
+    const interval = must(agg.rotate(), "interval");
+    const deps = must(interval.endpoints[0]?.dependencies, "dependencies");
+    expect(deps).toHaveLength(3);
+    const stripe = must(
+      deps.find((d) => d.target === "api.stripe.com"),
+      "stripe dependency",
+    );
+    expect(stripe.errors).toBe(1);
+    expect(stripe.max).toBe(200);
+  });
+
+  it("omits the field entirely for endpoints where no call was observed", () => {
     const agg = new IntervalAggregator();
     agg.record("GET", "/healthz", 200, 1);
     const interval = must(agg.rotate(), "interval");
-    expect(interval.endpoints[0]?.postgres).toBeUndefined();
+    expect(interval.endpoints[0]?.dependencies).toBeUndefined();
   });
 
   it("an N+1 moves the histogram to a higher bucket", () => {
     const normal = new IntervalAggregator();
     const broken = new IntervalAggregator();
     for (let i = 0; i < 10; i++) {
-      normal.record("GET", "/products", 200, 5, { queries: 2, queryMs: 4, queryMaxMs: 3 });
-      broken.record("GET", "/products", 200, 40, { queries: 53, queryMs: 80, queryMaxMs: 4 });
+      normal.record("GET", "/products", 200, 5, work(2, 4, 3));
+      broken.record("GET", "/products", 200, 40, work(53, 80, 4));
     }
     const bucketOf = (agg: IntervalAggregator) => {
-      const pg = must(must(agg.rotate(), "interval").endpoints[0]?.postgres, "postgres");
-      return pg.queriesPerRequest.findIndex((c) => c > 0);
+      const deps = must(must(agg.rotate(), "interval").endpoints[0]?.dependencies, "dependencies");
+      return must(deps[0], "dependency").callsPerRequest.findIndex((c) => c > 0);
     };
     expect(bucketOf(broken)).toBeGreaterThan(bucketOf(normal));
   });

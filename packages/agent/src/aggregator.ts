@@ -1,13 +1,14 @@
 import {
   CALLS_PER_REQUEST_BUCKETS_V0,
   callsPerRequestBucket,
+  type Dependency,
   type Endpoint,
   type Interval,
   LATENCY_BUCKETS_V0,
   type LatencyHistogram,
   latencyBucket,
-  type PostgresStats,
 } from "@downtrace/protocol";
+import type { DependencyKind, DependencyWork } from "./context.ts";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
 
 /** Per-route accumulator with preallocated histogram buckets. */
@@ -23,25 +24,27 @@ interface EndpointAcc {
   counts: Uint32Array;
   sum: number;
   max: number;
-  /** Postgres composition; only allocated for endpoints where a query was actually observed. */
-  pg: PgAcc | undefined;
+  /** One accumulator per dependency this route touched; only allocated when a call was actually observed. */
+  deps: Map<string, DependencyAcc> | undefined;
 }
 
-interface PgAcc {
+interface DependencyAcc {
+  kind: DependencyKind;
+  target: string;
   counts: Uint32Array;
   sum: number;
   max: number;
-}
-
-/** What one finished request did in Postgres, as seen by the instrumented driver. */
-export interface QueryWork {
-  queries: number;
-  queryMs: number;
-  queryMaxMs: number;
+  errors: number;
 }
 
 export interface Recorder {
-  record(method: Method, route: string, status: number, ms: number, work?: QueryWork | undefined): void;
+  record(
+    method: Method,
+    route: string,
+    status: number,
+    ms: number,
+    work?: Map<string, DependencyWork> | undefined,
+  ): void;
   rotate(): Interval | null;
 }
 
@@ -68,7 +71,13 @@ export class IntervalAggregator implements Recorder {
     return this.endpoints.size;
   }
 
-  record(method: Method, route: string, status: number, ms: number, work?: QueryWork | undefined): void {
+  record(
+    method: Method,
+    route: string,
+    status: number,
+    ms: number,
+    work?: Map<string, DependencyWork> | undefined,
+  ): void {
     let key = `${method} ${route}`;
     let acc = this.endpoints.get(key);
     if (!acc) {
@@ -92,7 +101,7 @@ export class IntervalAggregator implements Recorder {
           counts: new Uint32Array(LATENCY_BUCKETS_V0),
           sum: 0,
           max: 0,
-          pg: undefined,
+          deps: undefined,
         };
         this.endpoints.set(key, acc);
       }
@@ -110,12 +119,27 @@ export class IntervalAggregator implements Recorder {
     acc.sum += latency;
     if (latency > acc.max) acc.max = latency;
     if (work) {
-      // Only requests served while the driver was instrumented carry work; the field stays absent otherwise.
-      acc.pg ??= { counts: new Uint32Array(CALLS_PER_REQUEST_BUCKETS_V0), sum: 0, max: 0 };
-      const bucket = callsPerRequestBucket(work.queries);
-      acc.pg.counts[bucket] = (acc.pg.counts[bucket] ?? 0) + 1;
-      acc.pg.sum += work.queryMs;
-      if (work.queryMaxMs > acc.pg.max) acc.pg.max = work.queryMaxMs;
+      // Only requests served while a driver was instrumented carry work; the field stays absent otherwise.
+      acc.deps ??= new Map();
+      for (const [key, w] of work) {
+        let dep = acc.deps.get(key);
+        if (!dep) {
+          dep = {
+            kind: w.kind,
+            target: w.target,
+            counts: new Uint32Array(CALLS_PER_REQUEST_BUCKETS_V0),
+            sum: 0,
+            max: 0,
+            errors: 0,
+          };
+          acc.deps.set(key, dep);
+        }
+        const callBucket = callsPerRequestBucket(w.calls);
+        dep.counts[callBucket] = (dep.counts[callBucket] ?? 0) + 1;
+        dep.sum += w.ms;
+        if (w.maxMs > dep.max) dep.max = w.maxMs;
+        dep.errors += w.errors;
+      }
     }
   }
 
@@ -130,12 +154,15 @@ export class IntervalAggregator implements Recorder {
     if (endpoints.size === 0) return null;
     const out: Endpoint[] = [];
     for (const acc of endpoints.values()) {
-      const postgres: PostgresStats | undefined = acc.pg
-        ? {
-            queriesPerRequest: Array.from(acc.pg.counts) as PostgresStats["queriesPerRequest"],
-            totalMs: round3(acc.pg.sum),
-            max: round3(acc.pg.max),
-          }
+      const dependencies: Dependency[] | undefined = acc.deps
+        ? [...acc.deps.values()].map((d) => ({
+            kind: d.kind,
+            target: d.target,
+            callsPerRequest: Array.from(d.counts) as Dependency["callsPerRequest"],
+            totalMs: round3(d.sum),
+            max: round3(d.max),
+            errors: d.errors,
+          }))
         : undefined;
       out.push({
         method: acc.method,
@@ -154,7 +181,7 @@ export class IntervalAggregator implements Recorder {
           sum: round3(acc.sum),
           max: round3(acc.max),
         },
-        ...(postgres ? { postgres } : {}),
+        ...(dependencies ? { dependencies } : {}),
       });
     }
     return { start: Math.floor(start), durationMs: Math.max(1, Math.round(now - start)), endpoints: out };

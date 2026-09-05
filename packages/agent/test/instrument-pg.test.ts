@@ -5,6 +5,11 @@ import type { Logger } from "../src/log.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 
+/** What the current request recorded against Postgres. */
+function pgWork(ctx: { work: Map<string, { calls: number; ms: number; errors: number }> | undefined }) {
+  return ctx.work?.get("postgres") ?? { calls: 0, ms: 0, errors: 0 };
+}
+
 /** A stand-in for `pg` whose `query` covers the shapes the real driver accepts. */
 function fakePg(): { module: { Client: { prototype: Record<string, unknown> } }; calls: unknown[][] } {
   const calls: unknown[][] = [];
@@ -39,8 +44,8 @@ describe("instrumentPg", () => {
     const ctx = enterRequest();
     await client.query("select 1");
     await client.query({ text: "select $1", values: [1] });
-    expect(ctx.queries).toBe(2);
-    expect(ctx.queryMs).toBeGreaterThanOrEqual(0);
+    expect(pgWork(ctx).calls).toBe(2);
+    expect(pgWork(ctx).ms).toBeGreaterThanOrEqual(0);
   });
 
   it("counts the callback form, and the application still gets its callback", async () => {
@@ -48,14 +53,15 @@ describe("instrumentPg", () => {
     const ctx = enterRequest();
     const res = await new Promise((resolve) => client.query("select 1", (_e: unknown, r: unknown) => resolve(r)));
     expect(res).toEqual({ rows: [] });
-    expect(ctx.queries).toBe(1);
+    expect(pgWork(ctx).calls).toBe(1);
   });
 
   it("a failing query reaches the application unchanged, and still counts", async () => {
     const { client } = instrumented();
     const ctx = enterRequest();
     await expect(client.query("boom")).rejects.toThrow("query failed");
-    expect(ctx.queries).toBe(1);
+    expect(pgWork(ctx).calls).toBe(1);
+    expect(pgWork(ctx).errors).toBe(1); // a failed call is counted as an error against the dependency
   });
 
   it("passes the arguments through untouched", async () => {
@@ -75,7 +81,7 @@ describe("instrumentPg", () => {
     const { client } = instrumented();
     const ctx = enterRequest();
     expect(client.query("cursor")).toEqual({ read: expect.any(Function) });
-    expect(ctx.queries).toBe(1); // counted at call time; its duration is not observable here
+    expect(pgWork(ctx).calls).toBe(1); // counted at call time; its duration is not observable here
   });
 
   it("instruments once, however many times it is called", () => {

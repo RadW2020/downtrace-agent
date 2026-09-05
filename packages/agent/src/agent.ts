@@ -179,9 +179,9 @@ export class Agent {
     this.starts.delete(request);
     const ms = startedAt === undefined ? 0 : performance.now() - startedAt;
     this.runtime.requestFinished();
-    const work = this.contexts.get(request);
+    const ctx = this.contexts.get(request);
     this.contexts.delete(request);
-    this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms, work);
+    this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms, ctx?.work);
     this.recorded += 1;
   }
 

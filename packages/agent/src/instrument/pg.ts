@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { recordQuery } from "../context.ts";
+import { recordCall } from "../context.ts";
 import type { Logger } from "../log.ts";
 
 const MARK = Symbol.for("downtrace.pg.instrumented");
@@ -58,14 +58,14 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
     // Everything below is best effort: a bug here must never change what the application's query does.
-    let done: (() => void) | undefined;
+    let done: ((failed?: boolean) => void) | undefined;
     try {
       const started = performance.now();
       let counted = false;
-      done = () => {
+      done = (failed = false) => {
         if (counted) return;
         counted = true;
-        recordQuery(performance.now() - started);
+        recordCall("postgres", "", performance.now() - started, failed);
       };
       const last = args.at(-1);
       if (typeof last === "function") {
@@ -73,7 +73,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
         const callback = last as (...cbArgs: unknown[]) => unknown;
         const finish = done;
         args[args.length - 1] = function (this: unknown, ...cbArgs: unknown[]): unknown {
-          finish();
+          finish(cbArgs[0] != null); // pg's callback convention: a non-null first argument is the error
           return callback.apply(this, cbArgs);
         };
         return original.apply(this, args);
@@ -92,7 +92,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
           return value;
         },
         (err: unknown) => {
-          settle?.();
+          settle?.(true);
           throw err; // the application sees exactly the error it would have seen
         },
       );
