@@ -9,7 +9,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -121,6 +121,9 @@
           "items": {
             "$ref": "#/$defs/Endpoint"
           }
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeHealth"
         }
       }
     },
@@ -246,6 +249,63 @@
           "type": "number",
           "minimum": 0,
           "description": "Slowest single query (ms)."
+        }
+      }
+    },
+    "RuntimeHealth": {
+      "title": "RuntimeHealth",
+      "description": "Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventLoopDelayMs", "gcPauseMs", "gcCount", "heapUsedMb", "rssMb", "inFlightMax"],
+      "properties": {
+        "eventLoopDelayMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["p50", "p99", "max"],
+          "description": "How long the event loop was late, in ms. The signal that says the process itself is the bottleneck.",
+          "properties": {
+            "p50": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Median delay."
+            },
+            "p99": {
+              "type": "number",
+              "minimum": 0,
+              "description": "99th percentile delay."
+            },
+            "max": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Worst delay."
+            }
+          }
+        },
+        "gcPauseMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Total time spent in garbage collection during the interval."
+        },
+        "gcCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Garbage collections during the interval."
+        },
+        "heapUsedMb": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Heap in use at the end of the interval."
+        },
+        "rssMb": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Resident set size at the end of the interval."
+        },
+        "inFlightMax": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Peak concurrent in-flight requests during the interval."
         }
       }
     }

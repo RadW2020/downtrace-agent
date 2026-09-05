@@ -28,6 +28,7 @@ describe("aggregates schema v0", () => {
     expect(accepted).toContain(PROTOCOL_VERSION);
     // Agents already installed keep working: the cloud never stops accepting a minor it once published (ADR 0008).
     expect(accepted).toContain("0.1.0");
+    expect(accepted).toContain("0.2.0");
   });
 
   it("accepts every valid fixture", async () => {
@@ -49,6 +50,7 @@ describe("aggregates schema v0", () => {
     expect(reason("negative-count.json")).toMatch(/count must be >= 0/);
     expect(reason("unknown-protocol.json")).toMatch(/protocol must be equal to one of the allowed values/);
     expect(reason("postgres-buckets-length.json")).toMatch(/queriesPerRequest must NOT have fewer than 8 items/);
+    expect(reason("runtime-missing-rss.json")).toMatch(/must have required property 'rssMb'/);
   });
 });
 

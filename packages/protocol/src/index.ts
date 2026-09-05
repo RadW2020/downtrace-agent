@@ -5,7 +5,7 @@ import { LATENCY_BOUNDARIES_V0, QUERIES_PER_REQUEST_BOUNDARIES_V0 } from "./gene
  * Version of the ingestion protocol this package speaks. Every published minor of v0 stays acceptable to the
  * cloud, so an agent on an older minor keeps working: fields are only ever added, and always optional (ADR 0008).
  */
-export const PROTOCOL_VERSION = "0.2.0";
+export const PROTOCOL_VERSION = "0.3.0";
 
 /** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
 export const AGGREGATES_PATH = "/v0/aggregates";
@@ -22,6 +22,7 @@ export type {
   Interval,
   LatencyHistogram,
   PostgresStats,
+  RuntimeHealth,
   StatusClasses,
 } from "./generated/aggregates.ts";
 export {

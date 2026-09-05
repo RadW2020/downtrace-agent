@@ -7,7 +7,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -54,6 +54,7 @@ export interface Interval {
    * @maxItems 4096
    */
   endpoints: Endpoint[];
+  runtime?: RuntimeHealth;
 }
 export interface Endpoint {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "OTHER";
@@ -161,4 +162,46 @@ export interface PostgresStats {
    * Slowest single query (ms).
    */
   max: number;
+}
+/**
+ * Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.
+ */
+export interface RuntimeHealth {
+  /**
+   * How long the event loop was late, in ms. The signal that says the process itself is the bottleneck.
+   */
+  eventLoopDelayMs: {
+    /**
+     * Median delay.
+     */
+    p50: number;
+    /**
+     * 99th percentile delay.
+     */
+    p99: number;
+    /**
+     * Worst delay.
+     */
+    max: number;
+  };
+  /**
+   * Total time spent in garbage collection during the interval.
+   */
+  gcPauseMs: number;
+  /**
+   * Garbage collections during the interval.
+   */
+  gcCount: number;
+  /**
+   * Heap in use at the end of the interval.
+   */
+  heapUsedMb: number;
+  /**
+   * Resident set size at the end of the interval.
+   */
+  rssMb: number;
+  /**
+   * Peak concurrent in-flight requests during the interval.
+   */
+  inFlightMax: number;
 }
