@@ -5,6 +5,7 @@ import type { AgentInfo, DeployInfo, InstanceInfo } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import type { AgentConfig } from "./config.ts";
 import { enterRequest, type RequestContext } from "./context.ts";
+import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
@@ -59,6 +60,7 @@ export class Agent {
   private readonly contexts = new WeakMap<object, RequestContext>();
   private readonly runtime = new RuntimeSampler();
   private instrumented = false;
+  private stopHttp: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   private started = false;
   private recorded = 0;
@@ -118,8 +120,10 @@ export class Agent {
     this.started = true;
     if (this.config.instrument) {
       const pg = instrumentPg({ log: this.log });
-      this.instrumented = pg !== undefined;
       if (pg) this.log.debug(`instrumented pg ${pg}`);
+      // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
+      this.stopHttp = instrumentHttp(this.log);
+      this.instrumented = true;
     }
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
     this.runtime.start();
@@ -141,6 +145,8 @@ export class Agent {
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
     if (this.timer) clearInterval(this.timer);
+    this.stopHttp?.();
+    this.stopHttp = undefined;
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);

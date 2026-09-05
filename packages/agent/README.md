@@ -47,8 +47,18 @@ total, the slowest one and how many failed, and reports that distribution per ro
 got slower" into "this endpoint went from 12 queries per request to 65". **It never reads the query text or its
 values**, only counts and durations.
 
-Dependencies are reported as a list, so Redis, MySQL and outgoing HTTP will appear the same way as they are added,
-each identified by its kind and, where it matters, its host.
+### Calls to other services
+
+Outgoing HTTP is reported the same way, grouped by the host your application asked for: how many calls per request,
+how long they took, the slowest one, and how many failed. A 5xx from a dependency counts as a failure of that
+dependency, because for "is this service degraded?" a 500 and a timeout are the same answer.
+
+Nothing is patched here either: `fetch` and the `node:http` client both publish on Node's `diagnostics_channel`, and
+the agent only listens. One gap worth knowing: when a `fetch` cannot connect at all, undici publishes nothing, so
+that call is invisible to the agent. The `node:http` client does report it.
+
+Dependencies are reported as a list, so Redis and MySQL will appear the same way as they are added, each identified
+by its kind and, where it matters, its host.
 
 The agent loads before your application (`node --import`), so it wraps the driver before you import it and you write
 no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query
