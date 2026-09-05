@@ -11,7 +11,7 @@
     "load": "node src/load-cli.ts",
     "bench": "node src/bench-cli.ts",
     "test": "vitest run",
-    "test:integration": "vitest run test/bench.integration.test.ts",
+    "test:integration": "vitest run integration",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, type RoundMetrics } from "../src/verdict.ts";
+import { mulberry32 } from "../src/prng.ts";
+import { pooledPercentile, splitHalfNoise } from "../src/stats.ts";
+import { applyRoundErrors, evaluate, type RoundMetrics } from "../src/verdict.ts";
 
 const r = (p99Ms: number, cpuPct = 10, rssMb = 100): RoundMetrics => ({ p99Ms, cpuPct, rssMb });
 
@@ -31,5 +33,106 @@ describe("evaluate", () => {
 
   it("rejects empty input", () => {
     expect(() => evaluate([], [r(1)])).toThrow(/at least one round/);
+  });
+});
+
+/** Synthetic latencies shaped like the real app: a fast bulk and a slow tail. */
+function samples(seed: number, n: number, shiftMs = 0): number[] {
+  const rand = mulberry32(seed);
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const u = rand();
+    const base = u < 0.9 ? 1 + rand() * 4 : 10 + rand() * 15; // 90 % in 1–5 ms, 10 % in 10–25 ms
+    out.push(base + shiftMs);
+  }
+  return out;
+}
+
+describe("evaluate with pooled latency samples", () => {
+  const rounds = (p99: number): RoundMetrics[] => [r(p99), r(p99), r(p99), r(p99), r(p99)];
+  const baselinePools = [1, 2, 3, 4, 5].map((s) => samples(s, 2400));
+
+  it("two identical distributions come out equal within the noise: pass", () => {
+    const agentPools = [11, 12, 13, 14, 15].map((s) => samples(s, 2400));
+    const { metrics, verdict } = evaluate(rounds(20), rounds(20), undefined, {
+      baseline: baselinePools,
+      agent: agentPools,
+      seed: 42,
+    });
+    const p99 = metrics.find((m) => m.metric === "p99Ms");
+    expect(p99?.method).toBe("pooled-p99");
+    expect(p99?.samples).toBe(12000);
+    expect(Math.abs(p99?.delta ?? 99)).toBeLessThan(0.3);
+    expect(verdict).toBe("pass");
+  });
+
+  it("an agent that adds 5 ms to every request is always caught: fail", () => {
+    const agentPools = [1, 2, 3, 4, 5].map((s) => samples(s, 2400, 5));
+    const { metrics, verdict } = evaluate(rounds(20), rounds(25), undefined, {
+      baseline: baselinePools,
+      agent: agentPools,
+      seed: 42,
+    });
+    const p99 = metrics.find((m) => m.metric === "p99Ms");
+    expect(p99?.delta).toBeGreaterThan(4.5);
+    expect(p99?.delta).toBeLessThan(5.5);
+    expect(p99?.noise).toBeLessThan(1);
+    expect(p99?.status).toBe("fail");
+    expect(verdict).toBe("fail");
+  });
+
+  it("split-half noise is deterministic for a seed and small for a large pool", () => {
+    const pool = baselinePools.flat();
+    const a = splitHalfNoise(pool, 99, 20, 7);
+    const b = splitHalfNoise(pool, 99, 20, 7);
+    expect(a).toBe(b);
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(1);
+    expect(splitHalfNoise([1, 2, 3], 99)).toBe(0);
+  });
+
+  it("pooledPercentile matches the percentile of the concatenation", () => {
+    expect(
+      pooledPercentile(
+        [
+          [1, 2, 3],
+          [4, 5, 6],
+        ],
+        50,
+      ),
+    ).toBe(3);
+    expect(pooledPercentile([[10], [1, 2]], 99)).toBe(10);
+  });
+
+  it("without pools the latency metric keeps the median-of-rounds method", () => {
+    const { metrics } = evaluate([r(5), r(5), r(5)], [r(5.2), r(5.2), r(5.2)]);
+    expect(metrics.find((m) => m.metric === "p99Ms")?.method).toBe("median-of-rounds");
+  });
+});
+
+describe("applyRoundErrors", () => {
+  const clean = { errors: 0 };
+  it("leaves a clean run alone", () => {
+    expect(
+      applyRoundErrors("pass", [
+        { variant: "baseline", round: 1, ...clean },
+        { variant: "agent", round: 1, ...clean },
+      ]),
+    ).toEqual({ verdict: "pass" });
+  });
+  it("fails when the agent variant produced request errors, whatever the numbers said", () => {
+    const r = applyRoundErrors("pass", [{ variant: "agent", round: 2, errors: 3, errorStatuses: { "502": 3 } }]);
+    expect(r.verdict).toBe("fail");
+    expect(r.reason).toMatch(/agent rounds had request errors — agent#2: 3 failed \(502×3\)/);
+  });
+  it("is inconclusive — never a pass — when only baseline rounds had errors", () => {
+    const r = applyRoundErrors("pass", [
+      { variant: "baseline", round: 1, errors: 586, errorStatuses: { "503": 500, timeout: 86 } },
+    ]);
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.reason).toMatch(/baseline rounds had request errors/);
+  });
+  it("keeps a fail when baseline rounds had errors but the agent already failed", () => {
+    expect(applyRoundErrors("fail", [{ variant: "baseline", round: 1, errors: 1 }]).verdict).toBe("fail");
   });
 });

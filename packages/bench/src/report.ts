@@ -32,6 +32,8 @@ export interface BenchReport {
   rounds: RoundResult[];
   metrics: MetricVerdict[];
   verdict: Verdict;
+  /** Why the verdict was overridden (request errors in rounds), when it was. */
+  reason?: string | undefined;
 }
 
 const ICON: Record<MetricVerdict["status"], string> = { ok: "✅", fail: "❌", inconclusive: "⚠️" };
@@ -42,12 +44,13 @@ export function toMarkdown(r: BenchReport): string {
     "",
     `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (+${r.config.warmupSec}s warmup) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,
+    ...(r.reason ? ["", `**${r.reason}**`] : []),
     "",
-    "| Metric | Baseline (median) | Agent (median) | Δ | Noise | Budget | |",
+    "| Metric | Baseline | Agent | Δ | Noise | Budget | |",
     "|---|---:|---:|---:|---:|---:|:-:|",
     ...r.metrics.map(
       (m) =>
-        `| ${m.metric} (${m.unit}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.noise} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status} |`,
+        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.noise} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status} |`,
     ),
     "",
     "<details><summary>Rounds</summary>",
@@ -69,8 +72,10 @@ function totalBatches(r: BenchReport): number {
   return r.rounds.reduce((n, x) => n + (x.sink?.batches ?? 0), 0);
 }
 
+/** Raw latency samples stay in memory; the JSON report carries the derived numbers only. */
 export async function writeJson(report: BenchReport, path: string): Promise<void> {
-  await writeFile(path, `${JSON.stringify(report, null, 2)}\n`);
+  const slim = { ...report, rounds: report.rounds.map((r) => ({ ...r, load: { ...r.load, samples: undefined } })) };
+  await writeFile(path, `${JSON.stringify(slim, null, 2)}\n`);
 }
 
 /** Appends the Markdown to GitHub's job summary when running in Actions. */

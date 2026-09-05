@@ -16,8 +16,9 @@ Necesita Postgres y Redis (`make dev` o `DATABASE_URL`/`REDIS_URL`); la app de r
 
 - **Bucle abierto**: las requests salen a tasa fija con independencia de lo que tarde el servidor, y la latencia se mide desde el instante *programado* de envío. Un servidor que se retrasa aparece como cola, no se esconde tras un cliente más lento.
 - **Mismo tráfico**: la secuencia de endpoints e ids sale de una semilla; ambas variantes reciben exactamente las mismas requests.
-- **Rondas alternas** B/A/B/A/B/A, cada una en un proceso nuevo, para que el ruido de la máquina se reparta entre variantes. Se comparan **medianas**.
-- **Veredicto** por métrica: `ok` si Δ ≤ presupuesto; `fail` si Δ > presupuesto y Δ > ruido (ruido = máx − mín entre rondas baseline); `inconclusive` si Δ > presupuesto pero ≤ ruido — la máquina no puede resolver el presupuesto. `fail` → exit 1; lo demás → exit 0 (`inconclusive` avisa).
+- **Rondas alternas** B/A/B/A/B/A, cada una en un proceso nuevo, para que el ruido de la máquina se reparta entre variantes.
+- **Latencia**: p99 sobre **todas las muestras agrupadas** de cada variante (5 × 2400 → ~120 valores deciden el p99), y ruido por mitades (barajar el baseline con semilla, partir en dos, |p99(A) − p99(B)|, máximo de 20 repeticiones). **CPU y RSS**: mediana por ronda y ruido máx − mín.
+- **Veredicto** por métrica: `ok` si Δ ≤ presupuesto; `fail` si Δ > presupuesto y Δ > ruido; `inconclusive` si Δ > presupuesto pero ≤ ruido — la máquina no puede resolver el presupuesto. `fail` → exit 1; lo demás → exit 0 (`inconclusive` avisa). Los **errores de request** mandan: en rondas del agente → `fail`; solo en baseline → `inconclusive` (nunca `pass` con datos rotos). El informe desglosa los errores por código (`502×3, timeout×86`).
 - **Informe**: `bench-report.json` y tabla Markdown por stdout; se añade a `$GITHUB_STEP_SUMMARY` en CI.
 
-El presupuesto vive en `src/budget.ts`. `fixtures/slow-agent.ts` es un agente falso que añade 5 ms por request: prueba que el benchmark sabe fallar.
+El presupuesto vive en `src/budget.ts`. `fixtures/slow-agent.ts` es un agente falso que retrasa 200 ms una de cada 50 requests (una regresión de cola, la que vigila el p99): prueba que el benchmark sabe fallar también en máquinas ruidosas.

@@ -4,7 +4,7 @@ import { runLoad } from "./load.ts";
 import { ProcessSampler } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
-import { evaluate, type RoundMetrics } from "./verdict.ts";
+import { applyRoundErrors, evaluate, type RoundMetrics } from "./verdict.ts";
 
 export const DEFAULT_AGENT_PATH = fileURLToPath(new URL("../../agent/src/register.ts", import.meta.url));
 
@@ -63,8 +63,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
         const sinkStats = sink ? { ...sink.stats } : undefined;
         rounds.push({ round, variant, load, usage, sink: sinkStats });
+        const errs = load.errors
+          ? ` · errors ${load.errors} (${Object.entries(load.errorStatuses ?? {})
+              .map(([k, v]) => `${k}×${v}`)
+              .join(", ")})`
+          : " · errors 0";
         log(
-          `round ${round}/${config.rounds} · ${variant}: p99 ${load.overall.p99} ms · cpu ${usage.cpuPct.toFixed(1)} % · rss ${usage.rssMaxMb.toFixed(1)} MiB · errors ${load.errors}${sinkStats ? ` · batches ${sinkStats.batches}` : ""}`,
+          `round ${round}/${config.rounds} · ${variant}: p99 ${load.overall.p99} ms · cpu ${usage.cpuPct.toFixed(1)} % · rss ${usage.rssMaxMb.toFixed(1)} MiB${errs}${sinkStats ? ` · batches ${sinkStats.batches}` : ""}`,
         );
       } finally {
         await app.stop();
@@ -77,8 +82,22 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     rounds
       .filter((r) => r.variant === variant)
       .map((r) => ({ p99Ms: r.load.overall.p99, cpuPct: r.usage.cpuPct, rssMb: r.usage.rssMaxMb }));
-  const { metrics, verdict } = evaluate(toMetrics("baseline"), toMetrics("agent"));
+  const pools = (variant: Variant) => rounds.filter((r) => r.variant === variant).map((r) => r.load.samples);
+  const { metrics, verdict } = evaluate(toMetrics("baseline"), toMetrics("agent"), undefined, {
+    baseline: pools("baseline"),
+    agent: pools("agent"),
+    seed: config.seed,
+  });
 
+  const checked = applyRoundErrors(
+    verdict,
+    rounds.map((r) => ({
+      variant: r.variant,
+      round: r.round,
+      errors: r.load.errors,
+      errorStatuses: r.load.errorStatuses,
+    })),
+  );
   return {
     generatedAt: new Date().toISOString(),
     node: process.version,
@@ -86,6 +105,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     config,
     rounds,
     metrics,
-    verdict,
+    verdict: checked.verdict,
+    reason: checked.reason,
   };
 }

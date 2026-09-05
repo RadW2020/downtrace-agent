@@ -87,15 +87,21 @@ export interface LoadReport {
   requested: number;
   completed: number;
   errors: number;
+  /** Failed requests by outcome: HTTP status ("502", "503"…), "timeout" or "network". */
+  errorStatuses?: Record<string, number> | undefined;
   elapsedMs: number;
   overall: Percentiles;
   byEndpoint: Record<string, EndpointReport>;
+  /** Every completed request's latency (ms), unsorted; kept in memory for pooled statistics, stripped from JSON reports. */
+  samples: number[];
 }
 
 interface Sample {
   endpoint: EndpointName;
   ms: number;
   error: boolean;
+  /** Outcome for failed requests: status code, "timeout" or "network". */
+  outcome?: string | undefined;
 }
 
 /**
@@ -117,8 +123,8 @@ export async function runLoad(opts: LoadOptions): Promise<LoadReport> {
     const wait = due - performance.now();
     if (wait > 1) await sleep(wait);
     const p = fire(opts.baseUrl, req, timeoutMs)
-      .then((ok) => {
-        samples.push({ endpoint: req.endpoint, ms: performance.now() - due, error: !ok });
+      .then((outcome) => {
+        samples.push({ endpoint: req.endpoint, ms: performance.now() - due, error: outcome !== "ok", outcome });
       })
       .finally(() => inflight.delete(p));
     inflight.add(p);
@@ -136,28 +142,34 @@ export async function runLoad(opts: LoadOptions): Promise<LoadReport> {
       errors: s.filter((x) => x.error).length,
     };
   }
+  const errorStatuses: Record<string, number> = {};
+  for (const x of samples)
+    if (x.error) errorStatuses[x.outcome ?? "unknown"] = (errorStatuses[x.outcome ?? "unknown"] ?? 0) + 1;
   return {
     targetRps: opts.rps,
     achievedRps: round((samples.length / elapsedMs) * 1000),
     requested: plan.length,
     completed: samples.length,
     errors: samples.filter((x) => x.error).length,
+    errorStatuses,
     elapsedMs: round(elapsedMs),
     overall: roundPct(percentiles(samples.map((x) => x.ms))),
     byEndpoint,
+    samples: samples.map((x) => x.ms),
   };
 }
 
-async function fire(baseUrl: string, req: PlannedRequest, timeoutMs: number): Promise<boolean> {
+/** "ok", or why the request failed: its HTTP status, "timeout" or "network". */
+async function fire(baseUrl: string, req: PlannedRequest, timeoutMs: number): Promise<string> {
   try {
     const init: RequestInit = { method: req.method, signal: AbortSignal.timeout(timeoutMs) };
     if (req.headers) init.headers = req.headers;
     if (req.body !== undefined) init.body = req.body;
     const res = await fetch(baseUrl + req.path, init);
     await res.arrayBuffer(); // drain so the connection is reusable
-    return res.ok;
-  } catch {
-    return false;
+    return res.ok ? "ok" : String(res.status);
+  } catch (err) {
+    return err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network";
   }
 }
 

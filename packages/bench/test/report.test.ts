@@ -22,6 +22,7 @@ const report: BenchReport = {
         elapsedMs: 2010,
         overall: { p50: 2, p95: 4, p99: 6, max: 9 },
         byEndpoint: {},
+        samples: [],
       },
       usage: { cpuPct: 12.3, rssMaxMb: 80.2, elu: 0.41 },
     },
@@ -37,16 +38,29 @@ const report: BenchReport = {
         elapsedMs: 2012,
         overall: { p50: 2, p95: 4, p99: 6.4, max: 9 },
         byEndpoint: {},
+        samples: [],
       },
       usage: { cpuPct: 12.5, rssMaxMb: 81, elu: 0.42 },
       sink: { batches: 2, intervals: 2, endpoints: 8, requests: 400, rejected: 0 },
     },
   ],
   metrics: [
-    { metric: "p99Ms", unit: "ms", baselineMedian: 6, agentMedian: 6.4, delta: 0.4, noise: 0, budget: 1, status: "ok" },
+    {
+      metric: "p99Ms",
+      unit: "ms",
+      method: "pooled-p99",
+      samples: 12000,
+      baselineMedian: 6,
+      agentMedian: 6.4,
+      delta: 0.4,
+      noise: 0,
+      budget: 1,
+      status: "ok",
+    },
     {
       metric: "cpuPct",
       unit: "pp",
+      method: "median-of-rounds",
       baselineMedian: 12.3,
       agentMedian: 12.5,
       delta: 0.2,
@@ -57,6 +71,7 @@ const report: BenchReport = {
     {
       metric: "rssMb",
       unit: "MiB",
+      method: "median-of-rounds",
       baselineMedian: 80.2,
       agentMedian: 81,
       delta: 0.8,
@@ -72,7 +87,8 @@ describe("report", () => {
   it("renders a markdown table with one row per metric and per round", () => {
     const md = toMarkdown(report);
     expect(md).toContain("**PASS**");
-    expect(md).toContain("| p99Ms (ms) | 6 | 6.4 | +0.4 | 0 | ≤ 1 | ✅ ok |");
+    expect(md).toContain("| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | 0 | ≤ 1 | ✅ ok |");
+    expect(md).toContain("| cpuPct (pp, median of rounds) |");
     expect(md).toContain("| 1 | baseline | 2 | 4 | 6 | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — |");
     expect(md).toContain("| 1 | agent | 2 | 4 | 6.4 | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | 2 |");
     expect(md).toContain("Agent shipped 2 batch(es)");

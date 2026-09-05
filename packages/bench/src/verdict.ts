@@ -1,5 +1,5 @@
 import { BUDGET, METRICS, type MetricName, UNITS } from "./budget.ts";
-import { median, round } from "./stats.ts";
+import { median, pooledPercentile, round, splitHalfNoise } from "./stats.ts";
 
 export type RoundMetrics = Record<MetricName, number>;
 export type MetricStatus = "ok" | "fail" | "inconclusive";
@@ -8,6 +8,10 @@ export type Verdict = "pass" | "fail" | "inconclusive";
 export interface MetricVerdict {
   metric: MetricName;
   unit: string;
+  /** How the two values were obtained: per-round medians, or one percentile over all pooled samples. */
+  method: "median-of-rounds" | "pooled-p99";
+  /** Samples behind each pooled value (per variant); absent for median-of-rounds. */
+  samples?: number | undefined;
   baselineMedian: number;
   agentMedian: number;
   delta: number;
@@ -16,7 +20,18 @@ export interface MetricVerdict {
   status: MetricStatus;
 }
 
+export interface LatencyPools {
+  /** One array of latency samples per baseline round. */
+  baseline: readonly (readonly number[])[];
+  agent: readonly (readonly number[])[];
+  /** Seed for the split-half shuffle; fixed so the noise estimate is reproducible. */
+  seed?: number | undefined;
+}
+
 /**
+ * Latency (p99Ms), when pools are given: the p99 of ALL samples of a variant
+ * (5 × 2400 → decided by ~120 values instead of ~24), and noise = split-half
+ * spread of the baseline pool. Otherwise, and for CPU/RSS always:
  * delta  = median(agent) − median(baseline)
  * noise  = max(baseline) − min(baseline): how much the machine itself moves between identical runs
  * ok            delta ≤ budget
@@ -27,19 +42,34 @@ export function evaluate(
   baseline: RoundMetrics[],
   agent: RoundMetrics[],
   budget: Record<MetricName, number> = BUDGET,
+  latency?: LatencyPools,
 ): { metrics: MetricVerdict[]; verdict: Verdict } {
   if (baseline.length === 0 || agent.length === 0) throw new Error("evaluate: need at least one round per variant");
   const metrics = METRICS.map((metric): MetricVerdict => {
-    const b = baseline.map((r) => r[metric]);
-    const a = agent.map((r) => r[metric]);
-    const baselineMedian = median(b);
-    const agentMedian = median(a);
+    const pooled = metric === "p99Ms" && latency !== undefined;
+    let baselineMedian: number;
+    let agentMedian: number;
+    let noise: number;
+    let samples: number | undefined;
+    if (pooled) {
+      baselineMedian = pooledPercentile(latency.baseline, 99);
+      agentMedian = pooledPercentile(latency.agent, 99);
+      const pool = latency.baseline.flat();
+      noise = splitHalfNoise(pool, 99, 20, latency.seed ?? 7);
+      samples = pool.length;
+    } else {
+      const b = baseline.map((r) => r[metric]);
+      baselineMedian = median(b);
+      agentMedian = median(agent.map((r) => r[metric]));
+      noise = Math.max(...b) - Math.min(...b);
+    }
     const delta = agentMedian - baselineMedian;
-    const noise = Math.max(...b) - Math.min(...b);
     const status: MetricStatus = delta <= budget[metric] ? "ok" : delta > noise ? "fail" : "inconclusive";
     return {
       metric,
       unit: UNITS[metric],
+      method: pooled ? "pooled-p99" : "median-of-rounds",
+      samples,
       baselineMedian: round(baselineMedian, 3),
       agentMedian: round(agentMedian, 3),
       delta: round(delta, 3),
@@ -54,4 +84,38 @@ export function evaluate(
       ? "inconclusive"
       : "pass";
   return { metrics, verdict };
+}
+
+export interface RoundErrors {
+  variant: "baseline" | "agent";
+  round: number;
+  errors: number;
+  errorStatuses?: Record<string, number> | undefined;
+}
+
+/**
+ * A benchmark is only as good as its data. Failed requests in agent rounds mean
+ * the agent breaks the application: fail. Failed requests in baseline rounds
+ * mean the machine could not run the reference app cleanly: nothing can be
+ * measured, so the result is inconclusive — never a pass by accident.
+ */
+export function applyRoundErrors(
+  verdict: Verdict,
+  rounds: readonly RoundErrors[],
+): { verdict: Verdict; reason?: string } {
+  const describe = (r: RoundErrors) =>
+    `${r.variant}#${r.round}: ${r.errors} failed (${Object.entries(r.errorStatuses ?? {})
+      .map(([k, v]) => `${k}×${v}`)
+      .join(", ")})`;
+  const agentBad = rounds.filter((r) => r.variant === "agent" && r.errors > 0);
+  if (agentBad.length > 0)
+    return { verdict: "fail", reason: `agent rounds had request errors — ${agentBad.map(describe).join("; ")}` };
+  const baseBad = rounds.filter((r) => r.variant === "baseline" && r.errors > 0);
+  if (baseBad.length > 0 && verdict !== "fail") {
+    return {
+      verdict: "inconclusive",
+      reason: `baseline rounds had request errors, nothing can be measured — ${baseBad.map(describe).join("; ")}`,
+    };
+  }
+  return { verdict };
 }
