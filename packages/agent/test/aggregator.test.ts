@@ -5,6 +5,12 @@ import { OTHER_ROUTE } from "../src/routes.ts";
 
 const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
 
+/** Narrows an optional value in tests, failing loudly instead of asserting with `!`. */
+function must<T>(value: T | undefined | null, what: string): T {
+  if (value === undefined || value === null) throw new Error(`missing ${what}`);
+  return value;
+}
+
 describe("IntervalAggregator", () => {
   it("counts requests, status classes, errors and latency per route", () => {
     let t = 1_000;
@@ -61,5 +67,41 @@ describe("IntervalAggregator", () => {
     const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(50);
     expect(sum(agg.rotate()?.endpoints.map((e) => e.count) ?? [])).toBe(10_000);
+  });
+});
+
+describe("Postgres composition", () => {
+  it("bins each request by how many queries it made, and sums their time", () => {
+    const agg = new IntervalAggregator();
+    agg.record("POST", "/checkout", 201, 5, { queries: 12, queryMs: 20, queryMaxMs: 9 });
+    agg.record("POST", "/checkout", 201, 6, { queries: 14, queryMs: 22, queryMaxMs: 11 });
+    agg.record("POST", "/checkout", 201, 4, { queries: 2, queryMs: 3, queryMaxMs: 2 });
+    const interval = must(agg.rotate(), "interval");
+    const pg = must(interval.endpoints[0]?.postgres, "postgres");
+    expect(pg.queriesPerRequest[2]).toBe(1); // the 2-query request
+    expect(pg.queriesPerRequest[5]).toBe(2); // both in the 11–20 bucket
+    expect(pg.totalMs).toBe(45);
+    expect(pg.max).toBe(11);
+  });
+
+  it("omits the field entirely for endpoints where no query was observed", () => {
+    const agg = new IntervalAggregator();
+    agg.record("GET", "/healthz", 200, 1);
+    const interval = must(agg.rotate(), "interval");
+    expect(interval.endpoints[0]?.postgres).toBeUndefined();
+  });
+
+  it("an N+1 moves the histogram to a higher bucket", () => {
+    const normal = new IntervalAggregator();
+    const broken = new IntervalAggregator();
+    for (let i = 0; i < 10; i++) {
+      normal.record("GET", "/products", 200, 5, { queries: 2, queryMs: 4, queryMaxMs: 3 });
+      broken.record("GET", "/products", 200, 40, { queries: 53, queryMs: 80, queryMaxMs: 4 });
+    }
+    const bucketOf = (agg: IntervalAggregator) => {
+      const pg = must(must(agg.rotate(), "interval").endpoints[0]?.postgres, "postgres");
+      return pg.queriesPerRequest.findIndex((c) => c > 0);
+    };
+    expect(bucketOf(broken)).toBeGreaterThan(bucketOf(normal));
   });
 });

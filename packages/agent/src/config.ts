@@ -7,6 +7,8 @@ export interface AgentConfig {
   debug: boolean;
   /** Aggregation interval; 10 s in production. */
   intervalMs: number;
+  /** Observe database drivers to attribute work to each request. `DOWNTRACE_INSTRUMENT=none` turns it off. */
+  instrument: boolean;
 }
 
 export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
@@ -44,6 +46,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       version: detectVersion(env),
       debug: env.DOWNTRACE_DEBUG === "1" || env.DOWNTRACE_DEBUG === "true",
       intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
+      instrument: (env.DOWNTRACE_INSTRUMENT ?? "auto") !== "none",
     },
   };
 }

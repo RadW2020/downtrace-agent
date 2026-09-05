@@ -4,6 +4,9 @@ import {
   LATENCY_BUCKETS_V0,
   type LatencyHistogram,
   latencyBucket,
+  type PostgresStats,
+  QUERIES_PER_REQUEST_BUCKETS_V0,
+  queriesPerRequestBucket,
 } from "@downtrace/protocol";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
 
@@ -20,10 +23,25 @@ interface EndpointAcc {
   counts: Uint32Array;
   sum: number;
   max: number;
+  /** Postgres composition; only allocated for endpoints where a query was actually observed. */
+  pg: PgAcc | undefined;
+}
+
+interface PgAcc {
+  counts: Uint32Array;
+  sum: number;
+  max: number;
+}
+
+/** What one finished request did in Postgres, as seen by the instrumented driver. */
+export interface QueryWork {
+  queries: number;
+  queryMs: number;
+  queryMaxMs: number;
 }
 
 export interface Recorder {
-  record(method: Method, route: string, status: number, ms: number): void;
+  record(method: Method, route: string, status: number, ms: number, work?: QueryWork | undefined): void;
   rotate(): Interval | null;
 }
 
@@ -50,7 +68,7 @@ export class IntervalAggregator implements Recorder {
     return this.endpoints.size;
   }
 
-  record(method: Method, route: string, status: number, ms: number): void {
+  record(method: Method, route: string, status: number, ms: number, work?: QueryWork | undefined): void {
     let key = `${method} ${route}`;
     let acc = this.endpoints.get(key);
     if (!acc) {
@@ -74,6 +92,7 @@ export class IntervalAggregator implements Recorder {
           counts: new Uint32Array(LATENCY_BUCKETS_V0),
           sum: 0,
           max: 0,
+          pg: undefined,
         };
         this.endpoints.set(key, acc);
       }
@@ -90,6 +109,14 @@ export class IntervalAggregator implements Recorder {
     acc.counts[bucket] = (acc.counts[bucket] ?? 0) + 1;
     acc.sum += latency;
     if (latency > acc.max) acc.max = latency;
+    if (work) {
+      // Only requests served while the driver was instrumented carry work; the field stays absent otherwise.
+      acc.pg ??= { counts: new Uint32Array(QUERIES_PER_REQUEST_BUCKETS_V0), sum: 0, max: 0 };
+      const bucket = queriesPerRequestBucket(work.queries);
+      acc.pg.counts[bucket] = (acc.pg.counts[bucket] ?? 0) + 1;
+      acc.pg.sum += work.queryMs;
+      if (work.queryMaxMs > acc.pg.max) acc.pg.max = work.queryMaxMs;
+    }
   }
 
   /** Closes the current interval and starts a new one. Returns null when nothing was recorded. */
@@ -103,6 +130,13 @@ export class IntervalAggregator implements Recorder {
     if (endpoints.size === 0) return null;
     const out: Endpoint[] = [];
     for (const acc of endpoints.values()) {
+      const postgres: PostgresStats | undefined = acc.pg
+        ? {
+            queriesPerRequest: Array.from(acc.pg.counts) as PostgresStats["queriesPerRequest"],
+            totalMs: round3(acc.pg.sum),
+            max: round3(acc.pg.max),
+          }
+        : undefined;
       out.push({
         method: acc.method,
         route: acc.route,
@@ -120,6 +154,7 @@ export class IntervalAggregator implements Recorder {
           sum: round3(acc.sum),
           max: round3(acc.max),
         },
+        ...(postgres ? { postgres } : {}),
       });
     }
     return { start: Math.floor(start), durationMs: Math.max(1, Math.round(now - start)), endpoints: out };

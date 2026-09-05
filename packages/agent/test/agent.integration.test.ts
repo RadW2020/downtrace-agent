@@ -52,7 +52,16 @@ async function startApp() {
 }
 
 function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
-  return { token: "test-token", url, environment: "test", version: "t1", debug: false, intervalMs: 60_000, ...extra };
+  return {
+    token: "test-token",
+    url,
+    environment: "test",
+    version: "t1",
+    debug: false,
+    intervalMs: 60_000,
+    instrument: false,
+    ...extra,
+  };
 }
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };

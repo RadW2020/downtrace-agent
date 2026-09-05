@@ -25,6 +25,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the agent's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
+| `DOWNTRACE_INSTRUMENT` | no | `none` stops the agent from observing database drivers; anything else keeps it on |
 
 Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the agent prints one warning and does nothing else.
 
@@ -32,9 +33,22 @@ Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is
 
 Only structural metadata: method, **route template** (`/products/:id`, never the actual URL), status, counts and a fixed-bucket latency histogram per route and interval, plus the process identity (random id, hostname, pid) and the deploy (version, environment). No bodies, no headers, no query strings. The exact contract is the JSON Schema in [`@downtrace/protocol`](https://www.npmjs.com/package/@downtrace/protocol).
 
+### Database work per request
+
+When your application uses `pg`, the agent also counts the queries each request makes, how long they took in total
+and the slowest one, and reports that distribution per route. It is what turns "this endpoint got slower" into "this
+endpoint went from 12 queries per request to 65". **It never reads the query text or its values**, only counts and
+durations.
+
+The agent loads before your application (`node --import`), so it wraps the driver before you import it and you write
+no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query
+anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
+
 ## Guarantees
 
-- Observation through Node's `diagnostics_channel`; nothing in your application is monkey-patched.
+- HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
+  request the agent does wrap one method, `pg`'s `Client.prototype.query`: it passes arguments, results and errors
+  through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Every hook is guarded; after 10 internal errors the agent disables itself and says so once.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.

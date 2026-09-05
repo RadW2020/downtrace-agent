@@ -4,6 +4,8 @@ import { hostname } from "node:os";
 import type { AgentInfo, DeployInfo, InstanceInfo } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import type { AgentConfig } from "./config.ts";
+import { enterRequest, type RequestContext } from "./context.ts";
+import { instrumentPg } from "./instrument/pg.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { Sender } from "./transport.ts";
@@ -53,6 +55,8 @@ export class Agent {
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
+  private readonly contexts = new WeakMap<object, RequestContext>();
+  private instrumented = false;
   private timer: NodeJS.Timeout | undefined;
   private started = false;
   private recorded = 0;
@@ -110,6 +114,11 @@ export class Agent {
   start(): void {
     if (this.started || this.disabled) return;
     this.started = true;
+    if (this.config.instrument) {
+      const pg = instrumentPg({ log: this.log });
+      this.instrumented = pg !== undefined;
+      if (pg) this.log.debug(`instrumented pg ${pg}`);
+    }
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
@@ -147,7 +156,10 @@ export class Agent {
 
   private requestStarted(message: unknown): void {
     const request = (message as { request?: object }).request;
-    if (request) this.starts.set(request, performance.now());
+    if (!request) return;
+    this.starts.set(request, performance.now());
+    // Node publishes this inside the request's async context, so what the handler does lands in this store.
+    if (this.instrumented) this.contexts.set(request, enterRequest());
   }
 
   private responseFinished(message: unknown): void {
@@ -156,7 +168,9 @@ export class Agent {
     const startedAt = this.starts.get(request);
     this.starts.delete(request);
     const ms = startedAt === undefined ? 0 : performance.now() - startedAt;
-    this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms);
+    const work = this.contexts.get(request);
+    this.contexts.delete(request);
+    this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms, work);
     this.recorded += 1;
   }
 
