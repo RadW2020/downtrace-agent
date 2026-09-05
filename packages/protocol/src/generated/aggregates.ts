@@ -7,7 +7,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -70,6 +70,12 @@ export interface Endpoint {
   status: StatusClasses;
   latency: LatencyHistogram;
   postgres?: PostgresStats;
+  /**
+   * One entry per dependency this route touched. Replaces `postgres` (ADR 0011).
+   *
+   * @maxItems 64
+   */
+  dependencies?: Dependency[];
 }
 export interface StatusClasses {
   /**
@@ -144,7 +150,7 @@ export interface LatencyHistogram {
   max: number;
 }
 /**
- * Postgres work done per request on this route during the interval. Optional: agents that do not observe queries omit it.
+ * DEPRECATED since 0.4.0, use `dependencies` with kind `postgres` (ADR 0011). Still accepted, and translated at ingest, so agents on 0.2.x and 0.3.x keep working. Will be removed in v1. Its buckets are the same as Dependency's, declared there.
  */
 export interface PostgresStats {
   /**
@@ -162,6 +168,38 @@ export interface PostgresStats {
    * Slowest single query (ms).
    */
   max: number;
+}
+/**
+ * What one request did against one dependency, aggregated over the interval for this route. The same shape for every kind, so the cloud stores and compares them uniformly (ADR 0011).
+ */
+export interface Dependency {
+  /**
+   * What kind of dependency this is.
+   */
+  kind: "postgres" | "mysql" | "redis" | "http";
+  /**
+   * Host for outgoing HTTP (`api.stripe.com`); empty when the dependency is a single one, like the application's own database.
+   */
+  target: string;
+  /**
+   * Requests per bucket of calls-per-request; bounds in x-calls-per-request-boundaries, last bucket open-ended.
+   *
+   * @minItems 8
+   * @maxItems 8
+   */
+  callsPerRequest: [number, number, number, number, number, number, number, number];
+  /**
+   * Sum of call durations (ms) across every request on this route.
+   */
+  totalMs: number;
+  /**
+   * Slowest single call (ms).
+   */
+  max: number;
+  /**
+   * Calls that failed.
+   */
+  errors: number;
 }
 /**
  * Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.

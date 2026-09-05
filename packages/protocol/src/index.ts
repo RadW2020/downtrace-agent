@@ -1,11 +1,11 @@
 import schema from "../schema/v0/aggregates.schema.json" with { type: "json" };
-import { LATENCY_BOUNDARIES_V0, QUERIES_PER_REQUEST_BOUNDARIES_V0 } from "./generated/boundaries.ts";
+import { CALLS_PER_REQUEST_BOUNDARIES_V0, LATENCY_BOUNDARIES_V0 } from "./generated/boundaries.ts";
 
 /**
  * Version of the ingestion protocol this package speaks. Every published minor of v0 stays acceptable to the
  * cloud, so an agent on an older minor keeps working: fields are only ever added, and always optional (ADR 0008).
  */
-export const PROTOCOL_VERSION = "0.3.0";
+export const PROTOCOL_VERSION = "0.4.0";
 
 /** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
 export const AGGREGATES_PATH = "/v0/aggregates";
@@ -16,6 +16,7 @@ export const AGGREGATES_SCHEMA_V0 = schema;
 export type {
   AgentInfo,
   AggregatesBatch,
+  Dependency,
   DeployInfo,
   Endpoint,
   InstanceInfo,
@@ -26,10 +27,10 @@ export type {
   StatusClasses,
 } from "./generated/aggregates.ts";
 export {
+  CALLS_PER_REQUEST_BOUNDARIES_V0,
+  CALLS_PER_REQUEST_BUCKETS_V0,
   LATENCY_BOUNDARIES_V0,
   LATENCY_BUCKETS_V0,
-  QUERIES_PER_REQUEST_BOUNDARIES_V0,
-  QUERIES_PER_REQUEST_BUCKETS_V0,
 } from "./generated/boundaries.ts";
 
 /** Index of the bucket a latency (ms) falls into: first boundary >= latency, else the open-ended last bucket. */
@@ -42,12 +43,12 @@ export function latencyBucket(ms: number): number {
   return n;
 }
 
-/** Index of the bucket a query count falls into: first boundary >= count, else the open-ended last bucket. */
-export function queriesPerRequestBucket(queries: number): number {
-  const n = QUERIES_PER_REQUEST_BOUNDARIES_V0.length;
+/** Index of the bucket a call count falls into: first boundary >= count, else the open-ended last bucket. */
+export function callsPerRequestBucket(calls: number): number {
+  const n = CALLS_PER_REQUEST_BOUNDARIES_V0.length;
   for (let i = 0; i < n; i++) {
-    const bound = QUERIES_PER_REQUEST_BOUNDARIES_V0[i];
-    if (bound !== undefined && queries <= bound) return i;
+    const bound = CALLS_PER_REQUEST_BOUNDARIES_V0[i];
+    if (bound !== undefined && calls <= bound) return i;
   }
   return n;
 }

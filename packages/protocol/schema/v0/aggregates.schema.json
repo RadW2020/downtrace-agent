@@ -9,7 +9,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -159,6 +159,14 @@
         },
         "postgres": {
           "$ref": "#/$defs/PostgresStats"
+        },
+        "dependencies": {
+          "type": "array",
+          "description": "One entry per dependency this route touched. Replaces `postgres` (ADR 0011).",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
         }
       }
     },
@@ -224,11 +232,10 @@
     },
     "PostgresStats": {
       "title": "PostgresStats",
-      "description": "Postgres work done per request on this route during the interval. Optional: agents that do not observe queries omit it.",
+      "description": "DEPRECATED since 0.4.0, use `dependencies` with kind `postgres` (ADR 0011). Still accepted, and translated at ingest, so agents on 0.2.x and 0.3.x keep working. Will be removed in v1. Its buckets are the same as Dependency's, declared there.",
       "type": "object",
       "additionalProperties": false,
       "required": ["queriesPerRequest", "totalMs", "max"],
-      "x-queries-per-request-boundaries": [0, 1, 2, 5, 10, 20, 50],
       "properties": {
         "queriesPerRequest": {
           "type": "array",
@@ -306,6 +313,50 @@
           "type": "integer",
           "minimum": 0,
           "description": "Peak concurrent in-flight requests during the interval."
+        }
+      }
+    },
+    "Dependency": {
+      "title": "Dependency",
+      "description": "What one request did against one dependency, aggregated over the interval for this route. The same shape for every kind, so the cloud stores and compares them uniformly (ADR 0011).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target", "callsPerRequest", "totalMs", "max", "errors"],
+      "x-calls-per-request-boundaries": [0, 1, 2, 5, 10, 20, 50],
+      "properties": {
+        "kind": {
+          "enum": ["postgres", "mysql", "redis", "http"],
+          "description": "What kind of dependency this is."
+        },
+        "target": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Host for outgoing HTTP (`api.stripe.com`); empty when the dependency is a single one, like the application's own database."
+        },
+        "callsPerRequest": {
+          "type": "array",
+          "description": "Requests per bucket of calls-per-request; bounds in x-calls-per-request-boundaries, last bucket open-ended.",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "totalMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sum of call durations (ms) across every request on this route."
+        },
+        "max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Slowest single call (ms)."
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Calls that failed."
         }
       }
     }

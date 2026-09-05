@@ -1,12 +1,12 @@
 import {
+  CALLS_PER_REQUEST_BUCKETS_V0,
+  callsPerRequestBucket,
   type Endpoint,
   type Interval,
   LATENCY_BUCKETS_V0,
   type LatencyHistogram,
   latencyBucket,
   type PostgresStats,
-  QUERIES_PER_REQUEST_BUCKETS_V0,
-  queriesPerRequestBucket,
 } from "@downtrace/protocol";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
 
@@ -111,8 +111,8 @@ export class IntervalAggregator implements Recorder {
     if (latency > acc.max) acc.max = latency;
     if (work) {
       // Only requests served while the driver was instrumented carry work; the field stays absent otherwise.
-      acc.pg ??= { counts: new Uint32Array(QUERIES_PER_REQUEST_BUCKETS_V0), sum: 0, max: 0 };
-      const bucket = queriesPerRequestBucket(work.queries);
+      acc.pg ??= { counts: new Uint32Array(CALLS_PER_REQUEST_BUCKETS_V0), sum: 0, max: 0 };
+      const bucket = callsPerRequestBucket(work.queries);
       acc.pg.counts[bucket] = (acc.pg.counts[bucket] ?? 0) + 1;
       acc.pg.sum += work.queryMs;
       if (work.queryMaxMs > acc.pg.max) acc.pg.max = work.queryMaxMs;

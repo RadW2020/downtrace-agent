@@ -4,7 +4,7 @@ The ingestion contract between Downtrace agents and the Downtrace cloud, as a JS
 
 - `schema/v0/aggregates.schema.json` — the contract. Everything else derives from it.
 - `schema/v0/fixtures/{valid,invalid}/` — examples every implementation must accept and reject.
-- Exports: `PROTOCOL_VERSION`, `AGGREGATES_PATH`, `AGGREGATES_SCHEMA_V0`, `LATENCY_BOUNDARIES_V0`, `LATENCY_BUCKETS_V0`, `latencyBucket()`, `QUERIES_PER_REQUEST_BOUNDARIES_V0`, `QUERIES_PER_REQUEST_BUCKETS_V0`, `queriesPerRequestBucket()`, and the types `AggregatesBatch`, `Interval`, `Endpoint`, `LatencyHistogram`, `PostgresStats`, …
+- Exports: `PROTOCOL_VERSION`, `AGGREGATES_PATH`, `AGGREGATES_SCHEMA_V0`, `LATENCY_BOUNDARIES_V0`, `LATENCY_BUCKETS_V0`, `latencyBucket()`, `CALLS_PER_REQUEST_BOUNDARIES_V0`, `CALLS_PER_REQUEST_BUCKETS_V0`, `callsPerRequestBucket()`, and the types `AggregatesBatch`, `Interval`, `Endpoint`, `LatencyHistogram`, `Dependency`, `PostgresStats`, …
 
 ## v0 in one sentence
 
