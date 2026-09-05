@@ -7,6 +7,7 @@ import type { AgentConfig } from "./config.ts";
 import { enterRequest, type RequestContext } from "./context.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
+import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
@@ -61,6 +62,7 @@ export class Agent {
   private readonly runtime = new RuntimeSampler();
   private instrumented = false;
   private stopHttp: (() => void) | undefined;
+  private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   private started = false;
   private recorded = 0;
@@ -123,6 +125,7 @@ export class Agent {
       if (pg) this.log.debug(`instrumented pg ${pg}`);
       // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
       this.stopHttp = instrumentHttp(this.log);
+      this.stopRedis = instrumentRedis(this.log);
       this.instrumented = true;
     }
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
@@ -147,6 +150,8 @@ export class Agent {
     if (this.timer) clearInterval(this.timer);
     this.stopHttp?.();
     this.stopHttp = undefined;
+    this.stopRedis?.();
+    this.stopRedis = undefined;
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);

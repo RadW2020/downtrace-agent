@@ -57,6 +57,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
 
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
+    const target = targetOfClient(this);
     // Everything below is best effort: a bug here must never change what the application's query does.
     let done: ((failed?: boolean) => void) | undefined;
     try {
@@ -65,7 +66,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
       done = (failed = false) => {
         if (counted) return;
         counted = true;
-        recordCall("postgres", "", performance.now() - started, failed);
+        recordCall("postgres", target, performance.now() - started, failed);
       };
       const last = args.at(-1);
       if (typeof last === "function") {
@@ -105,4 +106,12 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   proto[MARK] = true;
   deps.log.debug(`instrumented pg ${version}`);
   return version;
+}
+
+/** Which database this client talks to, so a read replica and a primary are two dependencies. */
+function targetOfClient(client: unknown): string {
+  if (!client || typeof client !== "object") return "";
+  const { host, port } = client as { host?: unknown; port?: unknown };
+  if (typeof host !== "string" || host === "") return "";
+  return typeof port === "number" ? `${host}:${port}` : host;
 }

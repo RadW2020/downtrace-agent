@@ -58,8 +58,14 @@ exception: when a `fetch` cannot connect at all, undici publishes nothing, and t
 dependency is down. For that, and only that, the agent wraps `globalThis.fetch`: if a call rejects and nothing was
 recorded for it, it counts as a failed call. On every other path the wrapper does nothing.
 
-Dependencies are reported as a list, so Redis and MySQL will appear the same way as they are added, each identified
-by its kind and, where it matters, its host.
+### Redis
+
+The commands each request issues are reported the same way, per server: how many per request, how long they took and
+how many failed. ioredis publishes on a tracing channel, so nothing is patched.
+
+Every dependency carries a **target** saying which instance of its kind it is, taken from the driver: the host for
+outgoing HTTP, host and port for Postgres and Redis. A read replica and a primary are two dependencies, not one.
+MySQL will appear the same way when it is added.
 
 The agent loads before your application (`node --import`), so it wraps the driver before you import it and you write
 no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query
