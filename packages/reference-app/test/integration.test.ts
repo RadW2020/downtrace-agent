@@ -219,3 +219,33 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     }
   });
 });
+
+describe.skipIf(!DATABASE_URL)("checkout under concurrency", () => {
+  let ref: ReferenceApp;
+  let base: string;
+  beforeAll(async () => ({ ref, base } = await boot({ pgPoolMax: 10 })));
+  afterAll(() => ref.stop());
+
+  it("20 concurrent checkouts over the same products, carts in mixed order: all 201, no deadlock", async () => {
+    const cart = Array.from({ length: 12 }, (_, i) => ({ productId: i + 1, quantity: 1 }));
+    const reversed = [...cart].reverse();
+    const statuses: number[] = [];
+    for (let burst = 0; burst < 3; burst++) {
+      const responses = await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          fetch(`${base}/checkout`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ userId: (i % 5) + 1, items: i % 2 ? cart : reversed }),
+            signal: AbortSignal.timeout(15_000),
+          }),
+        ),
+      );
+      statuses.push(...responses.map((r) => r.status));
+    }
+    expect(
+      statuses.filter((s) => s !== 201),
+      `statuses: ${JSON.stringify(statuses)}`,
+    ).toEqual([]);
+  }, 90_000);
+});

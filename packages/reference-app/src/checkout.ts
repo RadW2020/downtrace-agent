@@ -100,7 +100,7 @@ async function addItemsInBulk(client: CountingClient, orderId: number, items: Ch
   const ids = items.map((i) => i.productId);
   const quantities = items.map((i) => i.quantity);
   const products = await client.query<{ id: number; price_cents: number; stock: number }>(
-    "SELECT id, price_cents, stock FROM products WHERE id = ANY($1::int[]) FOR UPDATE",
+    "SELECT id, price_cents, stock FROM products WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE",
     [ids],
   );
   const byId = new Map(products.rows.map((p) => [p.id, p]));
