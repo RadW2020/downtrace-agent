@@ -1,0 +1,53 @@
+# Publishes to npm from the public mirror, so npm can attest provenance: the attestation links the tarball to
+# this public commit and this workflow run. npm refuses provenance when the source repository is private, which
+# is why publishing moved here (#56).
+#
+# Idempotent by design: it publishes a package only when its version is not on the registry yet. While the private
+# monorepo still publishes, every version is already there by the time this runs, so this workflow does nothing and
+# stays green. That is what makes it safe to install before the trusted publisher exists.
+#
+# Kept in the private monorepo under .github/mirror/ and copied by mirror.yml; do not edit it in the mirror.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing mints its token from this; there is no npm token anywhere
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      # No registry-url: setup-node would write an .npmrc with a placeholder NODE_AUTH_TOKEN that npm sends
+      # instead of minting an OIDC token, and the registry answers 404 to that.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Publish the packages whose version is not on npm yet
+        run: |
+          set -euo pipefail
+          published=0
+          for dir in packages/protocol packages/agent; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm, nothing to do"
+              continue
+            fi
+            echo "publishing $name@$version"
+            pnpm --filter "$name" run build
+            ( cd "$dir" && npm publish --provenance --access public )
+            published=$((published + 1))
+          done
+          echo "published $published package(s)"
