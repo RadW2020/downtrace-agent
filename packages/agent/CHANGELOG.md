@@ -1,5 +1,16 @@
 # @downtrace/agent
 
+## 0.2.0
+
+### Minor Changes
+
+- 59fe767: Per-request context and Postgres composition: the agent counts the queries each request makes, their total and slowest duration, and reports the distribution per route (protocol 0.2). It wraps `pg`'s `Client.prototype.query` without any code change in your application, passing arguments, results and errors through untouched. `DOWNTRACE_INSTRUMENT=none` turns it off.
+
+### Patch Changes
+
+- Updated dependencies [1f30299]
+  - @downtrace/protocol@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes
