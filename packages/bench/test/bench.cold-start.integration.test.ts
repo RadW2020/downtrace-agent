@@ -58,7 +58,8 @@ describe.skipIf(!DATABASE_URL)("bench warmup gate (integration)", () => {
     expect(reason).toMatch(
       /^baseline round could not warm up, nothing can be measured — baseline#1: app not clean after 4 s of warmup — last second: \d+ failed \(503×\d+\)/,
     );
-    expect(reason).toContain("503 GET /products ColdStartError: database not ready yet");
+    // Lines are now distinct by status and error name, so which path lost the race is not deterministic.
+    expect(reason).toMatch(/app: 503 [A-Z]+ \/\S* ColdStartError: database not ready yet/);
   });
 
   it("agent variant that never gets clean while the baseline did: fail", { timeout: 60_000 }, async () => {

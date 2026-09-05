@@ -9,15 +9,27 @@ export interface AppHandle {
   pid: number;
   port: number;
   baseUrl: string;
-  /** The first distinct error lines the app wrote to stderr after it started listening (at most MAX_ERROR_LINES). */
+  /** The first distinct error lines the app wrote to stderr since the last reset (at most MAX_ERROR_LINES). */
   firstErrors(): readonly string[];
+  /** Forgets the lines collected so far, so a later phase reports its own errors with the full cap available. */
+  resetErrors(): void;
   stop(): Promise<void>;
 }
 
 export const MAX_ERROR_LINES = 5;
 
+export interface ErrorLine {
+  /** What is shown: `503 GET /me ColdStartError: database not ready yet`. */
+  summary: string;
+  /**
+   * What distinctness means: status and error name, so one failure hitting twenty paths keeps one slot
+   * instead of filling the cap and hiding a different error.
+   */
+  key: string;
+}
+
 /** `{"level":"error","status":503,"method":"GET","path":"/me","error":"ColdStartError","message":"…"}` → one readable line. */
-export function summarizeErrorLine(line: string): string {
+export function summarizeErrorLine(line: string): ErrorLine {
   try {
     const e = JSON.parse(line) as {
       status?: unknown;
@@ -29,12 +41,13 @@ export function summarizeErrorLine(line: string): string {
     if (typeof e.status === "number" && typeof e.error === "string") {
       const where = typeof e.method === "string" && typeof e.path === "string" ? ` ${e.method} ${e.path}` : "";
       const msg = typeof e.message === "string" && e.message !== "" ? `: ${e.message}` : "";
-      return `${e.status}${where} ${e.error}${msg}`;
+      return { summary: `${e.status}${where} ${e.error}${msg}`, key: `${e.status} ${e.error}` };
     }
   } catch {
     // not JSON: keep the raw line
   }
-  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  const summary = line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  return { summary, key: summary };
 }
 
 export interface StartOptions {
@@ -65,14 +78,14 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
   return new Promise<AppHandle>((resolve, reject) => {
     const stderr: string[] = [];
     let listening = false;
-    const errorLines: string[] = [];
+    let errorLines: ErrorLine[] = [];
     stderrPipe.on("data", (d: Buffer) => {
       if (!listening) stderr.push(d.toString());
     });
     createInterface({ input: stderrPipe }).on("line", (line) => {
       if (!listening || line.trim() === "" || errorLines.length >= MAX_ERROR_LINES) return;
-      const summary = summarizeErrorLine(line);
-      if (!errorLines.includes(summary)) errorLines.push(summary);
+      const parsed = summarizeErrorLine(line);
+      if (!errorLines.some((e) => e.key === parsed.key)) errorLines.push(parsed);
     });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -100,7 +113,10 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
           pid: child.pid ?? -1,
           port,
           baseUrl: `http://127.0.0.1:${port}`,
-          firstErrors: () => errorLines,
+          firstErrors: () => errorLines.map((e) => e.summary),
+          resetErrors: () => {
+            errorLines = [];
+          },
           stop: () => stop(child),
         });
       }
@@ -110,7 +126,9 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
 
 function stop(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => {
-    if (child.exitCode !== null) return resolve();
+    // `exitCode` stays null when the child died from a signal, and its "exit" event has already fired:
+    // waiting for another one would hang forever.
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
     const killer = setTimeout(() => child.kill("SIGKILL"), 10_000);
     child.once("exit", () => {
       clearTimeout(killer);

@@ -18,15 +18,24 @@ const { values } = parseArgs({
   },
 });
 
-const num = (v: string | undefined): number | undefined => (v === undefined ? undefined : Number(v));
+/** Configuration is validated once, here: a bad flag is a usage error, never a benchmark that reports "NaN s". */
+function num(name: string, v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.error(`[bench] --${name} must be a positive number, got ${JSON.stringify(v)}`);
+    process.exit(2);
+  }
+  return n;
+}
 
 const report = await runBench({
-  rounds: num(values.rounds),
-  warmupCleanSec: num(values.warmup),
-  warmupMaxSec: num(values["warmup-max"]),
-  measureSec: num(values.measure),
-  rps: num(values.rps),
-  seed: num(values.seed),
+  rounds: num("rounds", values.rounds),
+  warmupCleanSec: num("warmup", values.warmup),
+  warmupMaxSec: num("warmup-max", values["warmup-max"]),
+  measureSec: num("measure", values.measure),
+  rps: num("rps", values.rps),
+  seed: num("seed", values.seed),
   agentPath: values.agent,
   log: (line) => console.error(`[bench] ${line}`),
 });

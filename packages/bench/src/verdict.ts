@@ -151,3 +151,24 @@ export function applyRoundErrors(
   }
   return { verdict };
 }
+
+/** A round the benchmark could not measure at all, with the verdict it forces. */
+export interface Aborted {
+  verdict: Verdict;
+  reason: string;
+}
+
+/**
+ * A round that could not be measured never rescues a `fail` that the measured rounds already earned: if either
+ * says `fail`, the benchmark fails and the report carries both reasons. Otherwise the abort wins, because from
+ * that round on nothing was measured.
+ */
+export function combineWithAbort(
+  measured: { verdict: Verdict; reason?: string },
+  aborted: Aborted | undefined,
+): { verdict: Verdict; reason?: string } {
+  if (!aborted) return measured;
+  if (measured.verdict !== "fail") return aborted;
+  const measuredReason = measured.reason ?? "the rounds that were measured exceeded the overhead budget";
+  return { verdict: "fail", reason: `${measuredReason} · ${aborted.reason}` };
+}

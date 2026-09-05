@@ -5,7 +5,9 @@ import { ProcessSampler } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import {
+  type Aborted,
   applyRoundErrors,
+  combineWithAbort,
   describeStatuses,
   evaluate,
   type MetricVerdict,
@@ -34,11 +36,6 @@ export interface BenchOptions {
   log?: ((line: string) => void) | undefined;
 }
 
-interface Aborted {
-  verdict: Verdict;
-  reason: string;
-}
-
 /**
  * Runs the reference app without and with the agent in alternating rounds
  * (B, A, B, A, …), each in a fresh process, under identical seeded load, and
@@ -65,15 +62,21 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     for (const variant of ["baseline", "agent"] as Variant[]) {
       log(`round ${round}/${config.rounds} · ${variant}: starting app`);
       const sink = variant === "agent" ? new Sink() : undefined;
-      const sinkUrl = sink ? await sink.listen() : undefined;
-      const app = await startReferenceApp({
-        importPath: variant === "agent" ? config.agentPath : undefined,
-        env: {
-          APP_VERSION: `bench-${variant}`,
-          ...opts.appEnv,
-          ...(sinkUrl ? { DOWNTRACE_TOKEN: "bench", DOWNTRACE_URL: sinkUrl, ...opts.agentEnv } : {}),
-        },
-      });
+      let app: AppHandle;
+      try {
+        const sinkUrl = sink ? await sink.listen() : undefined;
+        app = await startReferenceApp({
+          importPath: variant === "agent" ? config.agentPath : undefined,
+          env: {
+            APP_VERSION: `bench-${variant}`,
+            ...opts.appEnv,
+            ...(sinkUrl ? { DOWNTRACE_TOKEN: "bench", DOWNTRACE_URL: sinkUrl, ...opts.agentEnv } : {}),
+          },
+        });
+      } catch (err) {
+        await sink?.close(); // the app never started: nothing else will close the sink's server
+        throw err;
+      }
       try {
         const warmup = await warm(app, config);
         if (!warmup.clean) {
@@ -89,6 +92,8 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           aborted = w;
           break outer;
         }
+        // The measured round reports its own errors: a cold start during warmup must not fill the cap.
+        app.resetErrors();
         const sampler = new ProcessSampler(app.baseUrl);
         await sampler.start();
         const load = await runLoad({
@@ -115,18 +120,17 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
   }
 
   const { metrics, verdict } = evaluateRounds(rounds, config.seed);
-  const checked = aborted
-    ? aborted
-    : applyRoundErrors(
-        verdict,
-        rounds.map((r) => ({
-          variant: r.variant,
-          round: r.round,
-          errors: r.load.errors,
-          errorStatuses: r.load.errorStatuses,
-          firstErrors: r.firstErrors,
-        })),
-      );
+  const measured = applyRoundErrors(
+    verdict,
+    rounds.map((r) => ({
+      variant: r.variant,
+      round: r.round,
+      errors: r.load.errors,
+      errorStatuses: r.load.errorStatuses,
+      firstErrors: r.firstErrors,
+    })),
+  );
+  const checked = combineWithAbort(measured, aborted);
   return {
     generatedAt: new Date().toISOString(),
     node: process.version,
@@ -142,7 +146,15 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
 /** One second of the seeded load at a time; each second uses a different slice of the plan so every endpoint gets warm. */
 function warm(app: AppHandle, config: BenchConfig): Promise<WarmupResult> {
   return runWarmup({ cleanSec: config.warmupCleanSec, maxSec: config.warmupMaxSec }, async (second) => {
-    const slice = await runLoad({ baseUrl: app.baseUrl, rps: config.rps, durationSec: 1, seed: config.seed + second });
+    const slice = await runLoad({
+      baseUrl: app.baseUrl,
+      rps: config.rps,
+      durationSec: 1,
+      seed: config.seed + second,
+      // A slice waits for its own requests, so the default 10 s timeout would stretch every second of a stalled
+      // warmup to eleven and make `warmupMaxSec` a lie. A request that takes 5 s is not a warm application anyway.
+      requestTimeoutMs: 5_000,
+    });
     return { errors: slice.errors, errorStatuses: slice.errorStatuses };
   });
 }

@@ -62,7 +62,7 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
   // Simulated cold start: the first STARTUP_FAILURE_MS of product traffic get a 503, like a database still warming up.
   let firstRequestAt: number | undefined;
   app.use((req, _res, next) => {
-    if (config.startupFailureMs <= 0 || req.path.startsWith("/__admin")) return next();
+    if (config.startupFailureMs <= 0 || req.path.startsWith("/__admin") || req.path === "/healthz") return next();
     firstRequestAt ??= performance.now();
     if (performance.now() - firstRequestAt < config.startupFailureMs) return next(new ColdStartError());
     next();

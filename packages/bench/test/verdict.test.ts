@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { mulberry32 } from "../src/prng.ts";
 import { pooledPercentile, splitHalfNoise } from "../src/stats.ts";
-import { applyRoundErrors, evaluate, type RoundMetrics, warmupVerdict } from "../src/verdict.ts";
+import {
+  type Aborted,
+  applyRoundErrors,
+  combineWithAbort,
+  evaluate,
+  type RoundMetrics,
+  warmupVerdict,
+} from "../src/verdict.ts";
 
 const r = (p99Ms: number, cpuPct = 10, rssMb = 100): RoundMetrics => ({ p99Ms, cpuPct, rssMb });
 
@@ -183,5 +190,38 @@ describe("warmupVerdict", () => {
       lastErrorStatuses: { "500": 1 },
     });
     expect(r.reason).toMatch(/last second: 1 failed \(500×1\)$/);
+  });
+});
+
+describe("combineWithAbort", () => {
+  const abortedBaseline: Aborted = { verdict: "inconclusive", reason: "baseline round could not warm up" };
+  const abortedAgent: Aborted = { verdict: "fail", reason: "agent round could not warm up" };
+
+  it("without an abort the measured verdict stands", () => {
+    expect(combineWithAbort({ verdict: "pass" }, undefined)).toEqual({ verdict: "pass" });
+  });
+
+  it("an unmeasurable baseline round never rescues a fail the measured rounds already earned", () => {
+    const r = combineWithAbort(
+      { verdict: "fail", reason: "agent rounds had request errors — agent#1: 3 failed (502×3)" },
+      abortedBaseline,
+    );
+    expect(r.verdict).toBe("fail");
+    expect(r.reason).toBe(
+      "agent rounds had request errors — agent#1: 3 failed (502×3) · baseline round could not warm up",
+    );
+  });
+
+  it("a fail on the numbers alone still wins, and says so", () => {
+    const r = combineWithAbort({ verdict: "fail" }, abortedBaseline);
+    expect(r.verdict).toBe("fail");
+    expect(r.reason).toBe(
+      "the rounds that were measured exceeded the overhead budget · baseline round could not warm up",
+    );
+  });
+
+  it("with nothing failing in the measured rounds, the abort decides", () => {
+    expect(combineWithAbort({ verdict: "pass" }, abortedBaseline)).toEqual(abortedBaseline);
+    expect(combineWithAbort({ verdict: "inconclusive" }, abortedAgent)).toEqual(abortedAgent);
   });
 });
