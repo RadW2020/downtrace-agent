@@ -9,7 +9,32 @@ export interface AppHandle {
   pid: number;
   port: number;
   baseUrl: string;
+  /** The first distinct error lines the app wrote to stderr after it started listening (at most MAX_ERROR_LINES). */
+  firstErrors(): readonly string[];
   stop(): Promise<void>;
+}
+
+export const MAX_ERROR_LINES = 5;
+
+/** `{"level":"error","status":503,"method":"GET","path":"/me","error":"ColdStartError","message":"…"}` → one readable line. */
+export function summarizeErrorLine(line: string): string {
+  try {
+    const e = JSON.parse(line) as {
+      status?: unknown;
+      method?: unknown;
+      path?: unknown;
+      error?: unknown;
+      message?: unknown;
+    };
+    if (typeof e.status === "number" && typeof e.error === "string") {
+      const where = typeof e.method === "string" && typeof e.path === "string" ? ` ${e.method} ${e.path}` : "";
+      const msg = typeof e.message === "string" && e.message !== "" ? `: ${e.message}` : "";
+      return `${e.status}${where} ${e.error}${msg}`;
+    }
+  } catch {
+    // not JSON: keep the raw line
+  }
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
 export interface StartOptions {
@@ -39,7 +64,16 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
 
   return new Promise<AppHandle>((resolve, reject) => {
     const stderr: string[] = [];
-    stderrPipe.on("data", (d: Buffer) => stderr.push(d.toString()));
+    let listening = false;
+    const errorLines: string[] = [];
+    stderrPipe.on("data", (d: Buffer) => {
+      if (!listening) stderr.push(d.toString());
+    });
+    createInterface({ input: stderrPipe }).on("line", (line) => {
+      if (!listening || line.trim() === "" || errorLines.length >= MAX_ERROR_LINES) return;
+      const summary = summarizeErrorLine(line);
+      if (!errorLines.includes(summary)) errorLines.push(summary);
+    });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`reference app did not start within ${opts.readyTimeoutMs ?? 30_000} ms\n${stderr.join("")}`));
@@ -60,8 +94,15 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
       if (msg.msg === "reference-app listening" && typeof msg.port === "number") {
         clearTimeout(timer);
         child.removeAllListeners("exit");
+        listening = true;
         const port = msg.port;
-        resolve({ pid: child.pid ?? -1, port, baseUrl: `http://127.0.0.1:${port}`, stop: () => stop(child) });
+        resolve({
+          pid: child.pid ?? -1,
+          port,
+          baseUrl: `http://127.0.0.1:${port}`,
+          firstErrors: () => errorLines,
+          stop: () => stop(child),
+        });
       }
     });
   });

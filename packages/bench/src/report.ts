@@ -3,21 +3,29 @@ import type { LoadReport } from "./load.ts";
 import type { ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
 import type { MetricVerdict, Verdict } from "./verdict.ts";
+import type { WarmupResult } from "./warmup.ts";
 
 export type Variant = "baseline" | "agent";
 
 export interface RoundResult {
   round: number;
   variant: Variant;
+  /** How long the app was warmed before measuring, and whether it got clean. */
+  warmup: WarmupResult;
   load: LoadReport;
   usage: ResourceUsage;
+  /** First distinct error lines the app wrote to stderr during the round; only present when there were errors. */
+  firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
   sink?: SinkStats | undefined;
 }
 
 export interface BenchConfig {
   rounds: number;
-  warmupSec: number;
+  /** Consecutive error-free seconds of load required before each round is measured. */
+  warmupCleanSec: number;
+  /** Upper bound on warmup; a round that is not clean by then is not measured. */
+  warmupMaxSec: number;
   measureSec: number;
   rps: number;
   seed: number;
@@ -42,7 +50,7 @@ export function toMarkdown(r: BenchReport): string {
   const lines = [
     `### Agent overhead benchmark — **${r.verdict.toUpperCase()}**`,
     "",
-    `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (+${r.config.warmupSec}s warmup) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
+    `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (after ${r.config.warmupCleanSec}s clean warmup, max ${r.config.warmupMaxSec}s) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,
     ...(r.reason ? ["", `**${r.reason}**`] : []),
     "",
@@ -55,11 +63,11 @@ export function toMarkdown(r: BenchReport): string {
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | p50 | p95 | p99 | max | errors | rps | CPU % | RSS max MiB | ELU | batches |",
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | max | errors | rps | CPU % | RSS max MiB | ELU | batches |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
       (x) =>
-        `| ${x.round} | ${x.variant} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.sink ? x.sink.batches : "—"} |`,
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",

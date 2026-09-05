@@ -6,7 +6,10 @@ const { values } = parseArgs({
   allowPositionals: true, // pnpm may forward a literal `--`
   options: {
     rounds: { type: "string" },
+    /** Consecutive clean seconds of warmup before measuring. */
     warmup: { type: "string" },
+    /** Give up on a round that is not clean after this many seconds. */
+    "warmup-max": { type: "string" },
     measure: { type: "string" },
     rps: { type: "string" },
     seed: { type: "string" },
@@ -19,7 +22,8 @@ const num = (v: string | undefined): number | undefined => (v === undefined ? un
 
 const report = await runBench({
   rounds: num(values.rounds),
-  warmupSec: num(values.warmup),
+  warmupCleanSec: num(values.warmup),
+  warmupMaxSec: num(values["warmup-max"]),
   measureSec: num(values.measure),
   rps: num(values.rps),
   seed: num(values.seed),

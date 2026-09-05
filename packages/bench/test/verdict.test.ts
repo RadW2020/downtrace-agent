@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mulberry32 } from "../src/prng.ts";
 import { pooledPercentile, splitHalfNoise } from "../src/stats.ts";
-import { applyRoundErrors, evaluate, type RoundMetrics } from "../src/verdict.ts";
+import { applyRoundErrors, evaluate, type RoundMetrics, warmupVerdict } from "../src/verdict.ts";
 
 const r = (p99Ms: number, cpuPct = 10, rssMb = 100): RoundMetrics => ({ p99Ms, cpuPct, rssMb });
 
@@ -134,5 +134,54 @@ describe("applyRoundErrors", () => {
   });
   it("keeps a fail when baseline rounds had errors but the agent already failed", () => {
     expect(applyRoundErrors("fail", [{ variant: "baseline", round: 1, errors: 1 }]).verdict).toBe("fail");
+  });
+  it("says what the application itself reported, not only how many requests failed", () => {
+    const r = applyRoundErrors("pass", [
+      {
+        variant: "baseline",
+        round: 1,
+        errors: 750,
+        errorStatuses: { "500": 659, "503": 88, timeout: 3 },
+        firstErrors: [
+          "503 GET /me PoolTimeoutError: timed out waiting for a database connection",
+          "500 POST /checkout X",
+        ],
+      },
+    ]);
+    expect(r.reason).toBe(
+      "baseline rounds had request errors, nothing can be measured — baseline#1: 750 failed (500×659, 503×88, timeout×3) — app: 503 GET /me PoolTimeoutError: timed out waiting for a database connection | 500 POST /checkout X",
+    );
+  });
+});
+
+describe("warmupVerdict", () => {
+  const cold = {
+    round: 1,
+    seconds: 30,
+    lastErrors: 88,
+    lastErrorStatuses: { "503": 88 },
+    firstErrors: ["503 GET /products ColdStartError: database not ready yet"],
+  };
+  it("is inconclusive with the full story when the baseline never gets clean", () => {
+    const r = warmupVerdict({ variant: "baseline", ...cold });
+    expect(r.verdict).toBe("inconclusive");
+    expect(r.reason).toBe(
+      "baseline round could not warm up, nothing can be measured — baseline#1: app not clean after 30 s of warmup — last second: 88 failed (503×88) — app: 503 GET /products ColdStartError: database not ready yet",
+    );
+  });
+  it("is a fail when the agent variant never gets clean: the agent breaks the app", () => {
+    const r = warmupVerdict({ variant: "agent", ...cold, round: 2 });
+    expect(r.verdict).toBe("fail");
+    expect(r.reason).toMatch(/^agent round could not warm up — agent#2: app not clean after 30 s of warmup/);
+  });
+  it("copes without application lines", () => {
+    const r = warmupVerdict({
+      variant: "baseline",
+      round: 1,
+      seconds: 5,
+      lastErrors: 1,
+      lastErrorStatuses: { "500": 1 },
+    });
+    expect(r.reason).toMatch(/last second: 1 failed \(500×1\)$/);
   });
 });

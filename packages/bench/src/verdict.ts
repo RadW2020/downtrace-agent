@@ -91,6 +91,40 @@ export interface RoundErrors {
   round: number;
   errors: number;
   errorStatuses?: Record<string, number> | undefined;
+  /** What the application itself said went wrong (first distinct stderr error lines). */
+  firstErrors?: readonly string[] | undefined;
+}
+
+export function describeStatuses(statuses: Record<string, number> | undefined): string {
+  return Object.entries(statuses ?? {})
+    .map(([k, v]) => `${k}×${v}`)
+    .join(", ");
+}
+
+function describeApp(firstErrors: readonly string[] | undefined): string {
+  return firstErrors && firstErrors.length > 0 ? ` — app: ${firstErrors.join(" | ")}` : "";
+}
+
+export interface WarmupOutcome {
+  variant: "baseline" | "agent";
+  round: number;
+  seconds: number;
+  lastErrors: number;
+  lastErrorStatuses?: Record<string, number> | undefined;
+  firstErrors?: readonly string[] | undefined;
+}
+
+/**
+ * The application never strung enough clean seconds together during warmup, so
+ * the round was not measured. Same rule as request errors in measured rounds:
+ * the agent variant breaking the app is a fail; the baseline breaking on its own
+ * means nothing could be measured.
+ */
+export function warmupVerdict(w: WarmupOutcome): { verdict: Verdict; reason: string } {
+  const detail = `${w.variant}#${w.round}: app not clean after ${w.seconds} s of warmup — last second: ${w.lastErrors} failed (${describeStatuses(w.lastErrorStatuses)})${describeApp(w.firstErrors)}`;
+  return w.variant === "agent"
+    ? { verdict: "fail", reason: `agent round could not warm up — ${detail}` }
+    : { verdict: "inconclusive", reason: `baseline round could not warm up, nothing can be measured — ${detail}` };
 }
 
 /**
@@ -104,9 +138,7 @@ export function applyRoundErrors(
   rounds: readonly RoundErrors[],
 ): { verdict: Verdict; reason?: string } {
   const describe = (r: RoundErrors) =>
-    `${r.variant}#${r.round}: ${r.errors} failed (${Object.entries(r.errorStatuses ?? {})
-      .map(([k, v]) => `${k}×${v}`)
-      .join(", ")})`;
+    `${r.variant}#${r.round}: ${r.errors} failed (${describeStatuses(r.errorStatuses)})${describeApp(r.firstErrors)}`;
   const agentBad = rounds.filter((r) => r.variant === "agent" && r.errors > 0);
   if (agentBad.length > 0)
     return { verdict: "fail", reason: `agent rounds had request errors — ${agentBad.map(describe).join("; ")}` };

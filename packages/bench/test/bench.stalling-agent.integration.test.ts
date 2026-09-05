@@ -1,8 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { createReferenceApp, type ReferenceApp } from "@downtrace/reference-app";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_PATH, runBench } from "../src/bench.ts";
-import { runLoad } from "../src/load.ts";
+import { describe, expect, it } from "vitest";
+import { runBench } from "../src/bench.ts";
 import { must } from "./helpers.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -19,7 +17,7 @@ describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
     const report = await runBench({
       log,
       rounds: 2,
-      warmupSec: 1,
+      warmupCleanSec: 1,
       measureSec: 3,
       rps: 100,
       seed: 1,

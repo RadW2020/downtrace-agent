@@ -34,6 +34,13 @@ export class ProviderError extends HttpError {
   }
 }
 
+/** The application is still warming up (STARTUP_FAILURE_MS): a simulated cold database. */
+export class ColdStartError extends HttpError {
+  constructor() {
+    super("database not ready yet", 503);
+  }
+}
+
 /** Could not obtain a database connection from the pool in time. */
 export class PoolTimeoutError extends HttpError {
   constructor(cause?: unknown) {

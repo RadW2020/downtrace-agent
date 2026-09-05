@@ -14,7 +14,7 @@ describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
     const report = await runBench({
       log,
       rounds: 3,
-      warmupSec: 1,
+      warmupCleanSec: 1,
       measureSec: 6,
       rps: 100,
       seed: 1,

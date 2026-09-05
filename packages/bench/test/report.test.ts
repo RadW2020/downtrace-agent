@@ -8,11 +8,20 @@ const report: BenchReport = {
   generatedAt: "2026-09-03T00:00:00.000Z",
   node: "v24.0.0",
   platform: "linux-x64",
-  config: { rounds: 1, warmupSec: 1, measureSec: 2, rps: 100, seed: 1, agentPath: "/x/register.ts" },
+  config: {
+    rounds: 1,
+    warmupCleanSec: 1,
+    warmupMaxSec: 30,
+    measureSec: 2,
+    rps: 100,
+    seed: 1,
+    agentPath: "/x/register.ts",
+  },
   rounds: [
     {
       round: 1,
       variant: "baseline",
+      warmup: { seconds: 1, clean: true, lastErrors: 0 },
       load: {
         targetRps: 100,
         achievedRps: 99.5,
@@ -29,6 +38,7 @@ const report: BenchReport = {
     {
       round: 1,
       variant: "agent",
+      warmup: { seconds: 4, clean: true, lastErrors: 0 },
       load: {
         targetRps: 100,
         achievedRps: 99.4,
@@ -89,8 +99,8 @@ describe("report", () => {
     expect(md).toContain("**PASS**");
     expect(md).toContain("| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | 0 | ≤ 1 | ✅ ok |");
     expect(md).toContain("| cpuPct (pp, median of rounds) |");
-    expect(md).toContain("| 1 | baseline | 2 | 4 | 6 | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — |");
-    expect(md).toContain("| 1 | agent | 2 | 4 | 6.4 | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | 2 |");
+    expect(md).toContain("| 1 | baseline | 1 | 2 | 4 | 6 | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — |");
+    expect(md).toContain("| 1 | agent | 4 | 2 | 4 | 6.4 | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | 2 |");
     expect(md).toContain("Agent shipped 2 batch(es)");
   });
 

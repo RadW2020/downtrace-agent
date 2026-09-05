@@ -9,6 +9,11 @@ export interface AppConfig {
   regressions: string;
   pgPoolMax: number;
   pgConnectionTimeoutMs: number;
+  /**
+   * Answer 503 to product traffic for this many ms after the first request
+   * (STARTUP_FAILURE_MS env): a stand-in for a cold database. 0 disables.
+   */
+  startupFailureMs: number;
 }
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -22,6 +27,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
     regressions: env.REGRESSIONS ?? "",
     pgPoolMax: integer(env.PG_POOL_MAX, 10),
     pgConnectionTimeoutMs: integer(env.PG_CONNECTION_TIMEOUT_MS, 5000),
+    startupFailureMs: integer(env.STARTUP_FAILURE_MS, 0),
   };
 }
 

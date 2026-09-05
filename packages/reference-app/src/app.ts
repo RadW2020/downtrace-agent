@@ -6,7 +6,7 @@ import { Cache } from "./cache.ts";
 import { checkout } from "./checkout.ts";
 import { type AppConfig, configFromEnv } from "./config.ts";
 import { Db } from "./db.ts";
-import { BadRequestError, HttpError, InventoryMismatchError, NotFoundError } from "./errors.ts";
+import { BadRequestError, ColdStartError, HttpError, InventoryMismatchError, NotFoundError } from "./errors.ts";
 import { FakeProvider } from "./provider.ts";
 import { ProviderClient } from "./provider-client.ts";
 import { Regressions } from "./regressions.ts";
@@ -56,6 +56,15 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
       const key = `${req.method} ${route ? req.baseUrl + route : "(unmatched)"}`;
       stats.record(key, res.statusCode, performance.now() - start, ctx);
     });
+    next();
+  });
+
+  // Simulated cold start: the first STARTUP_FAILURE_MS of product traffic get a 503, like a database still warming up.
+  let firstRequestAt: number | undefined;
+  app.use((req, _res, next) => {
+    if (config.startupFailureMs <= 0 || req.path.startsWith("/__admin")) return next();
+    firstRequestAt ??= performance.now();
+    if (performance.now() - firstRequestAt < config.startupFailureMs) return next(new ColdStartError());
     next();
   });
   app.use(express.json());
@@ -150,11 +159,18 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
     next(new NotFoundError("route not found"));
   });
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const name = err instanceof Error ? err.name : "UnknownError";
     countError(res.locals.ctx, name);
     const status = err instanceof HttpError ? err.status : (statusOf(err) ?? 500);
     const message = err instanceof HttpError || status < 500 ? (err as Error).message : "internal error";
+    if (status >= 500) {
+      // One line per 5xx on stderr so whoever runs the app (the bench harness, a developer) sees why it failed.
+      const detail = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+      console.error(
+        JSON.stringify({ level: "error", status, method: req.method, path: req.path, error: name, message: detail }),
+      );
+    }
     res.status(status).json({ error: name, message });
   });
 
