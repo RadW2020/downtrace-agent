@@ -53,9 +53,10 @@ Outgoing HTTP is reported the same way, grouped by the host your application ask
 how long they took, the slowest one, and how many failed. A 5xx from a dependency counts as a failure of that
 dependency, because for "is this service degraded?" a 500 and a timeout are the same answer.
 
-Nothing is patched here either: `fetch` and the `node:http` client both publish on Node's `diagnostics_channel`, and
-the agent only listens. One gap worth knowing: when a `fetch` cannot connect at all, undici publishes nothing, so
-that call is invisible to the agent. The `node:http` client does report it.
+`fetch` and the `node:http` client both publish on Node's `diagnostics_channel`, and the agent listens. There is one
+exception: when a `fetch` cannot connect at all, undici publishes nothing, and that is exactly the case where a
+dependency is down. For that, and only that, the agent wraps `globalThis.fetch`: if a call rejects and nothing was
+recorded for it, it counts as a failed call. On every other path the wrapper does nothing.
 
 Dependencies are reported as a list, so Redis and MySQL will appear the same way as they are added, each identified
 by its kind and, where it matters, its host.

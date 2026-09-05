@@ -65,13 +65,36 @@ describe("instrumentHttp", () => {
     expect(dep?.errors).toBe(1);
   });
 
-  it("does not see a fetch that never connected, which is a known gap", async () => {
-    // Measured on Node 26: when the connection itself fails, undici publishes nothing at all, not even
-    // `undici:request:create`, so there is no call to attribute. The node:http client does publish it (above).
-    // Asserting the gap keeps it honest: the day undici starts publishing, this test fails and we fix the agent.
+  it("counts a fetch that never connected, which undici does not publish", async () => {
     const ctx = enterRequest();
-    await fetch("http://127.0.0.1:1/nowhere").catch(() => {});
-    expect(await workOf(ctx)).toHaveLength(0);
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    expect(dep?.target).toBe("127.0.0.1:1");
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+  });
+
+  it("does not count a successful fetch twice, now that fetch is wrapped as well as listened to", async () => {
+    const ctx = enterRequest();
+    await fetch(`http://127.0.0.1:${port}/a`);
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+  });
+
+  it("does not count a 5xx twice either: the channels saw it, so the wrapper stays out", async () => {
+    const ctx = enterRequest();
+    await fetch(`http://127.0.0.1:${port}/boom`);
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+  });
+
+  it("puts fetch back when it stops observing", async () => {
+    const before = globalThis.fetch;
+    const undo = instrumentHttp(quiet);
+    expect(globalThis.fetch).not.toBe(before);
+    undo();
+    expect(globalThis.fetch).toBe(before);
   });
 
   it("groups calls by host, so two dependencies are not one", async () => {

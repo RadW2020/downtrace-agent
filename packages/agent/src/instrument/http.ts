@@ -73,11 +73,59 @@ export function instrumentHttp(log: Logger): () => void {
   ];
 
   for (const [name, handler] of subscriptions) diagnostics_channel.subscribe(name, handler);
+  const restoreFetch = catchFetchConnectFailures();
   log.debug(`observing outgoing HTTP on ${subscriptions.length} channels`);
 
   return () => {
     for (const [name, handler] of subscriptions) diagnostics_channel.unsubscribe(name, handler);
+    restoreFetch();
   };
+}
+
+/**
+ * The one place outgoing HTTP has to be touched rather than listened to.
+ *
+ * When a `fetch` fails to connect at all, undici publishes nothing: not `undici:request:create`, not
+ * `undici:client:connectError`, nothing (measured on Node 26). That is precisely the "dependency is down" case,
+ * so it cannot be left unseen. This wrapper records **only** that: if the call rejected and nothing was recorded
+ * for this request while it ran, the call is counted as a failed one. On every other path it does nothing and the
+ * channels above do the work, so there is no double counting.
+ */
+function catchFetchConnectFailures(): () => void {
+  const original = globalThis.fetch;
+  if (typeof original !== "function") return () => {};
+
+  const wrapped: typeof fetch = async (input, init) => {
+    const ctx = currentContext();
+    if (!ctx) return original(input, init);
+    const started = performance.now();
+    const before = ctx.recorded;
+    try {
+      return await original(input, init);
+    } catch (error) {
+      if (ctx.recorded === before) {
+        recordCallIn(ctx, "http", hostOfInput(input), performance.now() - started, true);
+      }
+      throw error; // the application sees exactly the error it would have seen
+    }
+  };
+
+  globalThis.fetch = wrapped;
+  return () => {
+    // Only put it back if nobody wrapped it after us.
+    if (globalThis.fetch === wrapped) globalThis.fetch = original;
+  };
+}
+
+function hostOfInput(input: unknown): string {
+  try {
+    if (typeof input === "string") return clamp(new URL(input).host);
+    if (input instanceof URL) return clamp(input.host);
+    if (input instanceof Request) return clamp(new URL(input.url).host);
+  } catch {
+    // not a URL we can read: better an unknown target than losing the call
+  }
+  return "unknown";
 }
 
 /** `http://api.stripe.com:443` → `api.stripe.com:443`. The scheme adds nothing to the identity of a dependency. */
