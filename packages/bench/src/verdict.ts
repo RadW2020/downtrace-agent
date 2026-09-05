@@ -1,5 +1,6 @@
 import { BUDGET, METRICS, type MetricName, UNITS } from "./budget.ts";
-import { median, pooledPercentile, round, splitHalfNoise } from "./stats.ts";
+import { type LatencyRuleResult, latencyStatus } from "./latency-rule.ts";
+import { median, percentile, pooledPercentile, round, splitHalfNoise } from "./stats.ts";
 
 export type RoundMetrics = Record<MetricName, number>;
 export type MetricStatus = "ok" | "fail" | "inconclusive";
@@ -16,8 +17,14 @@ export interface MetricVerdict {
   agentMedian: number;
   delta: number;
   noise: number;
+  /** Which estimate the noise came from; only meaningful for the pooled latency metric. */
+  noiseSource?: "split-half" | "round-spread" | undefined;
   budget: number;
   status: MetricStatus;
+  /** Δ of each agent round against the baseline rounds' median; pooled latency only. */
+  roundDeltas?: number[] | undefined;
+  /** Why a fail was withheld, when corroboration is what decided it. */
+  reason?: string | undefined;
 }
 
 export interface LatencyPools {
@@ -29,9 +36,9 @@ export interface LatencyPools {
 }
 
 /**
- * Latency (p99Ms), when pools are given: the p99 of ALL samples of a variant
- * (5 × 2400 → decided by ~120 values instead of ~24), and noise = split-half
- * spread of the baseline pool. Otherwise, and for CPU/RSS always:
+ * Latency (p99Ms), when pools are given: the p99 of ALL samples of a variant (5 × 2400 → decided by ~120 values
+ * instead of ~24), with the noise and corroboration rule of `latencyStatus` (ADR 0010). Otherwise, and for CPU/RSS
+ * always:
  * delta  = median(agent) − median(baseline)
  * noise  = max(baseline) − min(baseline): how much the machine itself moves between identical runs
  * ok            delta ≤ budget
@@ -51,11 +58,25 @@ export function evaluate(
     let agentMedian: number;
     let noise: number;
     let samples: number | undefined;
+    let rule: LatencyRuleResult | undefined;
     if (pooled) {
       baselineMedian = pooledPercentile(latency.baseline, 99);
       agentMedian = pooledPercentile(latency.agent, 99);
       const pool = latency.baseline.flat();
-      noise = splitHalfNoise(pool, 99, 20, latency.seed ?? 7);
+      const p99Of = (round: readonly number[]) =>
+        percentile(
+          [...round].sort((a, b) => a - b),
+          99,
+        );
+      rule = latencyStatus({
+        pooledBaseline: baselineMedian,
+        pooledAgent: agentMedian,
+        splitHalfNoise: splitHalfNoise(pool, 99, 20, latency.seed ?? 7),
+        baselineRounds: latency.baseline.map(p99Of),
+        agentRounds: latency.agent.map(p99Of),
+        budget: budget[metric],
+      });
+      noise = rule.noise;
       samples = pool.length;
     } else {
       const b = baseline.map((r) => r[metric]);
@@ -64,7 +85,8 @@ export function evaluate(
       noise = Math.max(...b) - Math.min(...b);
     }
     const delta = agentMedian - baselineMedian;
-    const status: MetricStatus = delta <= budget[metric] ? "ok" : delta > noise ? "fail" : "inconclusive";
+    const status: MetricStatus =
+      rule?.status ?? (delta <= budget[metric] ? "ok" : delta > noise ? "fail" : "inconclusive");
     return {
       metric,
       unit: UNITS[metric],
@@ -74,8 +96,11 @@ export function evaluate(
       agentMedian: round(agentMedian, 3),
       delta: round(delta, 3),
       noise: round(noise, 3),
+      noiseSource: rule?.noiseSource,
       budget: budget[metric],
       status,
+      roundDeltas: rule?.roundDeltas.map((d) => round(d, 3)),
+      reason: rule?.reason,
     };
   });
   const verdict: Verdict = metrics.some((m) => m.status === "fail")

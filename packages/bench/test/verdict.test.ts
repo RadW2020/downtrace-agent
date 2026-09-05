@@ -111,6 +111,54 @@ describe("evaluate with pooled latency samples", () => {
     expect(pooledPercentile([[10], [1, 2]], 99)).toBe(10);
   });
 
+  it("a stall in one agent round does not fail the run: the other rounds do not corroborate it", () => {
+    // 3 rounds of 600 requests; in one of them a 200 ms stall queues 40 of them, exactly the shape of run 33967120965.
+    const pools = (stallRound: number) =>
+      [0, 1, 2].map((i) => {
+        const round = samples(20 + i, 600);
+        if (i === stallRound) for (let k = 0; k < 40; k++) round[k] = 200 + k;
+        return round;
+      });
+    const { metrics, verdict } = evaluate(rounds(20), rounds(20), undefined, {
+      baseline: [0, 1, 2].map((i) => samples(i + 1, 600)),
+      agent: pools(1),
+      seed: 42,
+    });
+    const p99 = metrics.find((m) => m.metric === "p99Ms");
+    expect(p99?.delta).toBeGreaterThan(10); // the pooled p99 is dragged up on its own
+    expect(p99?.status).toBe("inconclusive");
+    expect(p99?.reason).toMatch(/one round dominates the tail \(1\/3/);
+    expect(verdict).toBe("inconclusive");
+  });
+
+  it("the same stall in every agent round is a real tail regression: fail", () => {
+    const withStall = [0, 1, 2].map((i) => {
+      const round = samples(30 + i, 600);
+      for (let k = 0; k < 40; k++) round[k] = 200 + k;
+      return round;
+    });
+    const { metrics } = evaluate(rounds(20), rounds(20), undefined, {
+      baseline: [0, 1, 2].map((i) => samples(i + 1, 600)),
+      agent: withStall,
+      seed: 42,
+    });
+    const p99 = metrics.find((m) => m.metric === "p99Ms");
+    expect(p99?.status).toBe("fail");
+  });
+
+  it("a baseline round that drifted is counted as noise, not as precision", () => {
+    const drifted = [samples(1, 2400), samples(2, 2400, 2), samples(3, 2400)];
+    const { metrics } = evaluate(rounds(20), rounds(20), undefined, {
+      baseline: drifted,
+      agent: [11, 12, 13].map((s) => samples(s, 2400)),
+      seed: 42,
+    });
+    const p99 = metrics.find((m) => m.metric === "p99Ms");
+    expect(p99?.noiseSource).toBe("round-spread");
+    expect(p99?.noise).toBeGreaterThan(1.5);
+    expect(p99?.status).toBe("ok");
+  });
+
   it("without pools the latency metric keeps the median-of-rounds method", () => {
     const { metrics } = evaluate([r(5), r(5), r(5)], [r(5.2), r(5.2), r(5.2)]);
     expect(metrics.find((m) => m.metric === "p99Ms")?.method).toBe("median-of-rounds");

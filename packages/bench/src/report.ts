@@ -58,16 +58,16 @@ export function toMarkdown(r: BenchReport): string {
     "|---|---:|---:|---:|---:|---:|:-:|",
     ...r.metrics.map(
       (m) =>
-        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.noise} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status} |`,
+        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.noise}${m.noiseSource ? ` (${m.noiseSource})` : ""} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status}${m.reason ? ` — ${m.reason}` : ""} |`,
     ),
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | warmup s | p50 | p95 | p99 | max | errors | rps | CPU % | RSS max MiB | ELU | batches |",
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | batches |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
-      (x) =>
-        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.sink ? x.sink.batches : "—"} |`,
+      (x, i) =>
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",
@@ -92,4 +92,14 @@ export async function appendStepSummary(markdown: string, env: NodeJS.ProcessEnv
   if (!path) return false;
   await appendFile(path, `${markdown}\n`);
   return true;
+}
+
+/** Δ of an agent round against the baseline rounds' median, as the latency rule saw it. Blank for baseline rounds. */
+function roundDelta(r: BenchReport, index: number): string {
+  const round = r.rounds[index];
+  if (!round || round.variant !== "agent") return "—";
+  const deltas = r.metrics.find((m) => m.metric === "p99Ms")?.roundDeltas;
+  const agentIndex = r.rounds.slice(0, index + 1).filter((x) => x.variant === "agent").length - 1;
+  const d = deltas?.[agentIndex];
+  return d === undefined ? "—" : `${d >= 0 ? "+" : ""}${d}`;
 }

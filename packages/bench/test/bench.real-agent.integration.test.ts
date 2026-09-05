@@ -7,9 +7,9 @@ if (!DATABASE_URL) console.warn("[bench] DATABASE_URL not set: skipping integrat
 const log = (line: string): void => console.info(`[bench] ${line}`);
 
 describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
-  // 6 s × 100 rps × 3 rounds = 1800 pooled samples per variant. With 3 s rounds the p99 rested on the 3 worst of
-  // 300 samples and a laptop hiccup during agent rounds produced a false `fail` (Δ +6.7 ms, not reproducible).
-  // If this fails again, rerun `make bench` before suspecting the agent: a real regression shows up in every round.
+  // 6 s × 100 rps × 3 rounds = 1800 pooled samples per variant. A `fail` here now needs the difference to show in
+  // most rounds and to beat both noise estimates (ADR 0010), so an isolated stall no longer trips it. If it does
+  // fail, the difference was there round after round: suspect the agent before the machine.
   it("bench with the real agent shipping to a sink: 3 rounds/variant, never fails", { timeout: 240_000 }, async () => {
     const report = await runBench({
       log,

@@ -99,8 +99,8 @@ describe("report", () => {
     expect(md).toContain("**PASS**");
     expect(md).toContain("| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | 0 | ≤ 1 | ✅ ok |");
     expect(md).toContain("| cpuPct (pp, median of rounds) |");
-    expect(md).toContain("| 1 | baseline | 1 | 2 | 4 | 6 | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — |");
-    expect(md).toContain("| 1 | agent | 4 | 2 | 4 | 6.4 | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | 2 |");
+    expect(md).toContain("| 1 | baseline | 1 | 2 | 4 | 6 | — | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — |");
+    expect(md).toContain("| 1 | agent | 4 | 2 | 4 | 6.4 | — | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | 2 |");
     expect(md).toContain("Agent shipped 2 batch(es)");
   });
 
