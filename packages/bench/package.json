@@ -12,7 +12,8 @@
     "bench": "node src/bench-cli.ts",
     "test": "vitest run",
     "test:integration": "vitest run integration",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "instruments": "node src/instruments-cli.ts"
   },
   "devDependencies": {
     "@downtrace/reference-app": "workspace:*"

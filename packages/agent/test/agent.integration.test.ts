@@ -59,7 +59,7 @@ function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     version: "t1",
     debug: false,
     intervalMs: 60_000,
-    instrument: false,
+    instrument: new Set(),
     ...extra,
   };
 }

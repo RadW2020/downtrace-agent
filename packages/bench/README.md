@@ -41,4 +41,14 @@ La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y 
 - **Veredicto** por métrica: `ok` si Δ ≤ presupuesto; `fail` si Δ > presupuesto y Δ > ruido; `inconclusive` si Δ > presupuesto pero ≤ ruido — la máquina no puede resolver el presupuesto. `fail` → exit 1; lo demás → exit 0 (`inconclusive` avisa). Los **errores de request** mandan: en rondas del agente → `fail`; solo en baseline → `inconclusive` (nunca `pass` con datos rotos). El informe desglosa los errores por código (`502×3, timeout×86`).
 - **Informe**: `bench-report.json` y tabla Markdown por stdout; se añade a `$GITHUB_STEP_SUMMARY` en CI.
 
+### Qué cuesta cada observador
+
+`make bench-instruments` mide el coste de cada observador **por separado**, ejecutando el benchmark una vez por configuración: sin nada, y luego añadiendo runtime, Postgres, HTTP saliente y Redis uno a uno. La columna marginal es la diferencia con la fila anterior, es decir, lo que cuesta ese observador solo.
+
+El presupuesto del invariante 3 es un número para el agente entero, así que cuando empiece a apretar la única pregunta útil será cuál pagar y cuál no, y eso no se responde con un total.
+
+Un marginal es la **diferencia entre dos mediciones independientes**, así que su incertidumbre es mayor que la de cada una: se combinan. La tabla lo dice en su columna `±` y marca si el marginal se resuelve o no. Donde dice que no, la máquina no ha medido ese observador y el número no significa nada.
+
+No corre en CI: es una ejecución completa del benchmark por instrumento, y es una herramienta para decidir, no un guardarraíl.
+
 El presupuesto vive en `src/budget.ts`. `fixtures/slow-agent.ts` es un agente falso que retrasa 200 ms una de cada 50 requests (una regresión de cola, la que vigila el p99): prueba que el benchmark sabe fallar también en máquinas ruidosas.

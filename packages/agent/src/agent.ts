@@ -120,16 +120,18 @@ export class Agent {
   start(): void {
     if (this.started || this.disabled) return;
     this.started = true;
-    if (this.config.instrument) {
+    const on = this.config.instrument;
+    if (on.has("pg")) {
       const pg = instrumentPg({ log: this.log });
       if (pg) this.log.debug(`instrumented pg ${pg}`);
-      // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
-      this.stopHttp = instrumentHttp(this.log);
-      this.stopRedis = instrumentRedis(this.log);
-      this.instrumented = true;
     }
+    // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
+    if (on.has("http")) this.stopHttp = instrumentHttp(this.log);
+    if (on.has("redis")) this.stopRedis = instrumentRedis(this.log);
+    // A request context is only worth opening if something is going to record into it.
+    this.instrumented = on.has("pg") || on.has("http") || on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
-    this.runtime.start();
+    if (on.has("runtime")) this.runtime.start();
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);

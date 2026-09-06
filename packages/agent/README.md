@@ -25,7 +25,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the agent's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
-| `DOWNTRACE_INSTRUMENT` | no | `none` stops the agent from observing database drivers; anything else keeps it on |
+| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 
 Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the agent prints one warning and does nothing else.
 

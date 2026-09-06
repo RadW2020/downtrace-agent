@@ -33,6 +33,12 @@ export interface BenchOptions {
   appEnv?: Record<string, string> | undefined;
   /** Extra environment for the agent variant only (e.g. DOWNTRACE_INTERVAL_MS in tests). */
   agentEnv?: Record<string, string> | undefined;
+  /**
+   * Runs the agent in the baseline variant too, with this environment. Used to compare two agent configurations
+   * directly: measuring each against a no-agent baseline and subtracting doubles the uncertainty, because two
+   * independent measurements are being differenced.
+   */
+  baselineEnv?: Record<string, string> | undefined;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -61,16 +67,20 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
   outer: for (let round = 1; round <= config.rounds; round++) {
     for (const variant of ["baseline", "agent"] as Variant[]) {
       log(`round ${round}/${config.rounds} · ${variant}: starting app`);
-      const sink = variant === "agent" ? new Sink() : undefined;
+      // The baseline runs the agent too when a configuration for it was given, so two configurations can be
+      // compared head to head instead of each against nothing.
+      const agentHere = variant === "agent" || opts.baselineEnv !== undefined;
+      const sink = agentHere ? new Sink() : undefined;
+      const variantEnv = variant === "agent" ? opts.agentEnv : opts.baselineEnv;
       let app: AppHandle;
       try {
         const sinkUrl = sink ? await sink.listen() : undefined;
         app = await startReferenceApp({
-          importPath: variant === "agent" ? config.agentPath : undefined,
+          importPath: agentHere ? config.agentPath : undefined,
           env: {
             APP_VERSION: `bench-${variant}`,
             ...opts.appEnv,
-            ...(sinkUrl ? { DOWNTRACE_TOKEN: "bench", DOWNTRACE_URL: sinkUrl, ...opts.agentEnv } : {}),
+            ...(sinkUrl ? { DOWNTRACE_TOKEN: "bench", DOWNTRACE_URL: sinkUrl, ...variantEnv } : {}),
           },
         });
       } catch (err) {
@@ -104,7 +114,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         });
         const usage = await sampler.stop();
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
-        const sinkStats = sink ? { ...sink.stats } : undefined;
+        const sinkStats = variant === "agent" && sink ? { ...sink.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
         rounds.push({ round, variant, warmup, load, usage, sink: sinkStats, firstErrors });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";

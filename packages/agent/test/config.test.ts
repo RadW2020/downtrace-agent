@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configFromEnv, DEFAULT_INTERVAL_MS, detectVersion } from "../src/config.ts";
+import { configFromEnv, DEFAULT_INTERVAL_MS, detectVersion, INSTRUMENTS, parseInstruments } from "../src/config.ts";
 
 describe("configFromEnv", () => {
   it("is disabled without token or url, with a precise reason", () => {
@@ -39,5 +39,27 @@ describe("configFromEnv", () => {
     expect(detectVersion({ VERCEL_GIT_COMMIT_SHA: "abc" })).toBe("abc");
     expect(detectVersion({ VERCEL_GIT_COMMIT_SHA: "abc", DOWNTRACE_VERSION: "v1" })).toBe("v1");
     expect(detectVersion({ GIT_SHA: "  8f71ac  " })).toBe("8f71ac");
+  });
+});
+
+describe("which observers to run", () => {
+  it("runs everything by default, and when asked for all", () => {
+    expect([...parseInstruments(undefined)].sort()).toEqual([...INSTRUMENTS].sort());
+    expect([...parseInstruments("all")].sort()).toEqual([...INSTRUMENTS].sort());
+    expect([...parseInstruments("")].sort()).toEqual([...INSTRUMENTS].sort());
+  });
+
+  it("still understands none, which is what the documented switch has always meant", () => {
+    expect([...parseInstruments("none")]).toEqual([]);
+  });
+
+  it("takes a list, so each observer's cost can be measured on its own", () => {
+    expect([...parseInstruments("pg,http")].sort()).toEqual(["http", "pg"]);
+    expect([...parseInstruments(" PG , Redis ")].sort()).toEqual(["pg", "redis"]);
+  });
+
+  it("ignores names it does not know rather than failing to start", () => {
+    expect([...parseInstruments("pg,cassandra")]).toEqual(["pg"]);
+    expect([...parseInstruments("nonsense")]).toEqual([]);
   });
 });
