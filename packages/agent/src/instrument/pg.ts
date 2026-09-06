@@ -1,6 +1,7 @@
+import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { recordCall, recordWait } from "../context.ts";
+import { currentContext, recordCall, recordCallIn, recordWait } from "../context.ts";
 import type { Logger } from "../log.ts";
 
 const MARK = Symbol.for("downtrace.pg.instrumented");
@@ -73,11 +74,17 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
       };
       const last = args.at(-1);
       if (typeof last === "function") {
-        // Callback form: count when the callback fires, then hand control to the application's own callback.
+        // Callback form: pg invokes this from the connection's own async context, not the caller's, so the
+        // request has to be captured here, when the application asks, and written into afterwards. Reading the
+        // current context inside the callback would charge the query to whichever request owns that socket.
+        const ctx = currentContext();
         const callback = last as (...cbArgs: unknown[]) => unknown;
-        const finish = done;
         args[args.length - 1] = function (this: unknown, ...cbArgs: unknown[]): unknown {
-          finish(cbArgs[0] != null); // pg's callback convention: a non-null first argument is the error
+          if (ctx && !counted) {
+            counted = true;
+            // pg's callback convention: a non-null first argument is the error.
+            recordCallIn(ctx, "postgres", target, performance.now() - started, cbArgs[0] != null);
+          }
           return callback.apply(this, cbArgs);
         };
         return original.apply(this, args);
@@ -126,7 +133,20 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
     let started: number;
     try {
       started = performance.now();
-      if (typeof args.at(-1) === "function") return original.apply(this, args); // callback form: left unmeasured
+      if (typeof args.at(-1) === "function") {
+        // The callback form is how `pool.query()` works inside. The pool queues this callback and calls it later
+        // from whoever released a connection, so without binding it the rest of the request would run under
+        // another request's context and its queries would be counted against that one. Binding restores the
+        // caller's context; the wait itself is left to the promise path below.
+        const callback = args.at(-1) as (...cbArgs: unknown[]) => unknown;
+        const bound = AsyncResource.bind(callback);
+        const waited = function (this: unknown, ...cbArgs: unknown[]): unknown {
+          recordWait("postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+          return bound.apply(this, cbArgs);
+        };
+        args[args.length - 1] = AsyncResource.bind(waited);
+        return original.apply(this, args);
+      }
     } catch {
       return original.apply(this, args);
     }

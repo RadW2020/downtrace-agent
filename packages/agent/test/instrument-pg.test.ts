@@ -162,3 +162,86 @@ describe("waiting for a connection", () => {
     expect(pg.module.Pool.prototype.connect).toBe(wrapped);
   });
 });
+
+/**
+ * A pool that behaves like the real one under contention: `connect` queues its callback when no client is free,
+ * and the queue is drained later, from whoever releases a connection. `query`'s callback is fired from the
+ * connection's own timer, not the caller's. Both are context jumps, and both used to send a request's queries to
+ * a different request.
+ */
+function contendedPg(concurrency: number) {
+  const queue: Array<(err: unknown, client: unknown) => void> = [];
+  let free = concurrency;
+
+  class Client {
+    query(...args: unknown[]): unknown {
+      const cb = args.at(-1);
+      if (typeof cb === "function") {
+        setTimeout(() => (cb as (e: unknown, r: unknown) => void)(null, { rows: [] }), 1);
+        return undefined;
+      }
+      return Promise.resolve({ rows: [] });
+    }
+  }
+  const release = () => {
+    const next = queue.shift();
+    if (next) setTimeout(() => next(null, new Client()), 0);
+    else free += 1;
+  };
+  class Pool {
+    connect(cb?: (err: unknown, client: unknown, done: () => void) => void): unknown {
+      const hand = (resolve: (c: unknown) => void) => {
+        if (free > 0) {
+          free -= 1;
+          setTimeout(() => resolve(new Client()), 0);
+        } else {
+          queue.push((_e, client) => resolve(client));
+        }
+      };
+      if (cb) {
+        hand((client) => cb(null, client, release));
+        return undefined;
+      }
+      return new Promise(hand);
+    }
+  }
+  return {
+    module: {
+      Client: Client as unknown as { prototype: Record<string, unknown> },
+      Pool: Pool as unknown as { prototype: Record<string, unknown> },
+    },
+    release,
+  };
+}
+
+describe("attribution under pool contention", () => {
+  it("gives each request its own queries, however long it waited for a connection", async () => {
+    const pg = contendedPg(2); // two connections for ten requests
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const Pool = pg.module.Pool as unknown as new () => {
+      connect: (cb: (err: unknown, client: { query: (...a: unknown[]) => unknown }, done: () => void) => void) => void;
+    };
+    const pool = new Pool();
+
+    // Ten concurrent "requests", each opening its own context and making two queries, the way pool.query() does.
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => {
+        const ctx = enterRequest();
+        return new Promise<number>((resolve) => {
+          pool.connect((_err, client, done) => {
+            client.query("select 1", () => {
+              client.query("select 2", () => {
+                done();
+                resolve(ctx.work?.get("postgres")?.calls ?? 0);
+              });
+            });
+          });
+        });
+      }),
+    );
+
+    // Every request made exactly two queries, so every request must report two. Before the fix, eight reported
+    // none and two reported everyone else's.
+    expect(results).toEqual([2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+  });
+});
