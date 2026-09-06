@@ -1,5 +1,16 @@
 # @downtrace/agent
 
+## 0.5.0
+
+### Minor Changes
+
+- d63ac71: `DOWNTRACE_INSTRUMENT` now takes a list, not just an on/off switch: `all` (the default), `none`, or a selection like `pg,http,redis,runtime`. It exists so each observer's cost can be measured on its own, and it lets an operator run only what they want observed. Unknown names are ignored rather than fatal, so a typo cannot stop the agent from starting.
+
+### Patch Changes
+
+- 8fcaf97: Fixes attribution under connection-pool contention. `pool.query()` uses the callback form of `connect` internally, and pg fires a query's callback from the connection's own context, not the caller's: with ten concurrent requests on a pool of two, all twenty queries were charged to two requests and the other eight reported none. The pool's queued callback is now bound to the request that asked for the connection, and a query's callback records into the request captured when it was issued.
+- 42c1db4: Halves the cost of attributing pooled queries: one async resource per connection acquisition instead of two, and none at all for work outside a request. `pool.query()` acquires a connection for every query, so that path is on the hot path of any application using a pool.
+
 ## 0.4.0
 
 ### Minor Changes
