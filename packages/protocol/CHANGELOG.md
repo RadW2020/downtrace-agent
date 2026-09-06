@@ -1,5 +1,16 @@
 # @downtrace/protocol
 
+## 0.3.0
+
+### Minor Changes
+
+- f88b2d3: Protocol 0.4.0: dependencies are a list, not a field per kind (ADR 0011). An endpoint carries `dependencies`, one entry per dependency with `kind` (`postgres`, `mysql`, `redis`, `http`), `target` (the host for outgoing HTTP), a calls-per-request histogram, total and slowest call, and errors. Outgoing HTTP, Redis and MySQL now need no schema change of their own.
+  
+  `postgres` is deprecated but still accepted and translated by the cloud, so agents on 0.2.x and 0.3.x keep working; it goes away in v1.
+  
+  **Renamed exports**, since the buckets are no longer Postgres-specific: `QUERIES_PER_REQUEST_BOUNDARIES_V0` → `CALLS_PER_REQUEST_BOUNDARIES_V0`, `QUERIES_PER_REQUEST_BUCKETS_V0` → `CALLS_PER_REQUEST_BUCKETS_V0`, `queriesPerRequestBucket()` → `callsPerRequestBucket()`. Adds the `Dependency` type.
+- 831e376: Protocol 0.3.0: optional `runtime` per interval with event loop delay (p50, p99, max), garbage collection time and count, heap and RSS, and peak in-flight requests. It is what tells a saturated process apart from a slow dependency. Adds the `RuntimeHealth` type; agents on 0.1.x and 0.2.x stay valid.
+
 ## 0.2.1
 
 ### Patch Changes
