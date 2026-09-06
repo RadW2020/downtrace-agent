@@ -5,7 +5,7 @@ import { CALLS_PER_REQUEST_BOUNDARIES_V0, LATENCY_BOUNDARIES_V0 } from "./genera
  * Version of the ingestion protocol this package speaks. Every published minor of v0 stays acceptable to the
  * cloud, so an agent on an older minor keeps working: fields are only ever added, and always optional (ADR 0008).
  */
-export const PROTOCOL_VERSION = "0.4.0";
+export const PROTOCOL_VERSION = "0.5.0";
 
 /** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
 export const AGGREGATES_PATH = "/v0/aggregates";

@@ -7,7 +7,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -200,6 +200,10 @@ export interface Dependency {
    * Calls that failed.
    */
   errors: number;
+  /**
+   * Time requests spent waiting to be able to talk to this dependency, on top of the time spent talking to it: a saturated connection pool shows up here and nowhere else. Optional; agents that cannot see it omit it.
+   */
+  waitMs?: number;
 }
 /**
  * Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.

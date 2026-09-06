@@ -9,7 +9,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -357,6 +357,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "Calls that failed."
+        },
+        "waitMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Time requests spent waiting to be able to talk to this dependency, on top of the time spent talking to it: a saturated connection pool shows up here and nowhere else. Optional; agents that cannot see it omit it."
         }
       }
     }
