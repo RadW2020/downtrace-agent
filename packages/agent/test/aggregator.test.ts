@@ -73,7 +73,7 @@ describe("IntervalAggregator", () => {
 /** One request's work against one dependency, in the shape the recorder takes. */
 function work(calls: number, ms: number, maxMs = ms, kind: "postgres" | "redis" | "http" = "postgres", target = "") {
   const key = target === "" ? kind : `${kind} ${target}`;
-  return new Map([[key, { kind, target, calls, ms, maxMs, errors: 0 }]]);
+  return new Map([[key, { kind, target, calls, ms, maxMs, errors: 0, waitMs: 0 }]]);
 }
 
 describe("dependencies", () => {
@@ -97,14 +97,14 @@ describe("dependencies", () => {
   it("keeps one entry per kind and target, so many hosts do not collapse into one", () => {
     const agg = new IntervalAggregator();
     const mixed = new Map([
-      ["postgres", { kind: "postgres" as const, target: "", calls: 3, ms: 9, maxMs: 4, errors: 0 }],
+      ["postgres", { kind: "postgres" as const, target: "", calls: 3, ms: 9, maxMs: 4, errors: 0, waitMs: 12 }],
       [
         "http api.stripe.com",
-        { kind: "http" as const, target: "api.stripe.com", calls: 2, ms: 300, maxMs: 200, errors: 1 },
+        { kind: "http" as const, target: "api.stripe.com", calls: 2, ms: 300, maxMs: 200, errors: 1, waitMs: 0 },
       ],
       [
         "http api.other.com",
-        { kind: "http" as const, target: "api.other.com", calls: 1, ms: 40, maxMs: 40, errors: 0 },
+        { kind: "http" as const, target: "api.other.com", calls: 1, ms: 40, maxMs: 40, errors: 0, waitMs: 0 },
       ],
     ]);
     agg.record("POST", "/checkout", 201, 5, mixed);
@@ -117,6 +117,14 @@ describe("dependencies", () => {
     );
     expect(stripe.errors).toBe(1);
     expect(stripe.max).toBe(200);
+    // Waiting is only sent when there was some: the driver that reported none omits the field entirely.
+    expect(stripe.waitMs).toBeUndefined();
+    expect(
+      must(
+        deps.find((d) => d.kind === "postgres"),
+        "postgres",
+      ).waitMs,
+    ).toBe(12);
   });
 
   it("omits the field entirely for endpoints where no call was observed", () => {

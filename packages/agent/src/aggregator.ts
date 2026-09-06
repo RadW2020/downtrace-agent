@@ -35,6 +35,7 @@ interface DependencyAcc {
   sum: number;
   max: number;
   errors: number;
+  wait: number;
 }
 
 export interface Recorder {
@@ -131,6 +132,7 @@ export class IntervalAggregator implements Recorder {
             sum: 0,
             max: 0,
             errors: 0,
+            wait: 0,
           };
           acc.deps.set(key, dep);
         }
@@ -139,6 +141,7 @@ export class IntervalAggregator implements Recorder {
         dep.sum += w.ms;
         if (w.maxMs > dep.max) dep.max = w.maxMs;
         dep.errors += w.errors;
+        dep.wait += w.waitMs;
       }
     }
   }
@@ -162,6 +165,8 @@ export class IntervalAggregator implements Recorder {
             totalMs: round3(d.sum),
             max: round3(d.max),
             errors: d.errors,
+            // Only sent when there was something to say: a driver that cannot report waiting omits the field.
+            ...(d.wait > 0 ? { waitMs: round3(d.wait) } : {}),
           }))
         : undefined;
       out.push({

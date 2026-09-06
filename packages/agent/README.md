@@ -43,7 +43,9 @@ whatever it does measure. It all comes from Node's own instruments, which run wh
 ### Database work per request
 
 When your application uses `pg`, the agent also counts the calls each request makes to it, how long they took in
-total, the slowest one and how many failed, and reports that distribution per route. It is what turns "this endpoint
+total, the slowest one and how many failed, and reports that distribution per route. It also times how long each
+request **waited for a connection** from the pool. That wait is not the database being slow, it is your application
+having nowhere to run, and it is invisible in the query's own duration. It is what turns "this endpoint
 got slower" into "this endpoint went from 12 queries per request to 65". **It never reads the query text or its
 values**, only counts and durations.
 

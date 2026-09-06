@@ -11,7 +11,10 @@ function pgWork(ctx: { work: Map<string, { calls: number; ms: number; errors: nu
 }
 
 /** A stand-in for `pg` whose `query` covers the shapes the real driver accepts. */
-function fakePg(): { module: { Client: { prototype: Record<string, unknown> } }; calls: unknown[][] } {
+function fakePg(): {
+  module: { Client: { prototype: Record<string, unknown> }; Pool: { prototype: Record<string, unknown> } };
+  calls: unknown[][];
+} {
   const calls: unknown[][] = [];
   class Client {
     query(...args: unknown[]): unknown {
@@ -28,7 +31,20 @@ function fakePg(): { module: { Client: { prototype: Record<string, unknown> } };
       return Promise.resolve({ rows: [{ ok: 1 }] });
     }
   }
-  return { module: { Client: Client as unknown as { prototype: Record<string, unknown> } }, calls };
+  /** A pool that takes `waitMs` to hand over a client, the way a busy one does. */
+  class Pool {
+    waitMs = 25;
+    connect(): Promise<unknown> {
+      return new Promise((resolve) => setTimeout(() => resolve(new Client()), this.waitMs));
+    }
+  }
+  return {
+    module: {
+      Client: Client as unknown as { prototype: Record<string, unknown> },
+      Pool: Pool as unknown as { prototype: Record<string, unknown> },
+    },
+    calls,
+  };
 }
 
 function instrumented() {
@@ -98,5 +114,51 @@ describe("instrumentPg", () => {
     expect(instrumentPg({ log: quiet, moduleImpl: {} })).toBeUndefined();
     expect(instrumentPg({ log: quiet, moduleImpl: { Client: { prototype: {} } } })).toBeUndefined();
     expect(instrumentPg({ log: quiet, moduleImpl: { Client: { prototype: { query: 42 } } } })).toBeUndefined();
+  });
+});
+
+describe("waiting for a connection", () => {
+  it("counts the time a request waited for the pool against the same dependency as its queries", async () => {
+    const pg = fakePg();
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const Pool = pg.module.Pool as unknown as new () => { connect: () => Promise<unknown> };
+    const pool = new Pool();
+
+    const ctx = enterRequest();
+    const client = (await pool.connect()) as { query: (...a: unknown[]) => unknown };
+    await client.query("select 1");
+
+    // One entry, not two: the wait and the query belong to the same dependency.
+    expect(ctx.work?.size).toBe(1);
+    const work = ctx.work?.get("postgres");
+    expect(work?.calls).toBe(1);
+    expect(work?.waitMs).toBeGreaterThanOrEqual(20);
+  });
+
+  it("counts the wait even when the pool gives up, which is the case worth seeing", async () => {
+    const pg = fakePg();
+    (pg.module.Pool.prototype as Record<string, unknown>).connect = (): Promise<unknown> =>
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout exceeded")), 20));
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const Pool = pg.module.Pool as unknown as new () => { connect: () => Promise<unknown> };
+
+    const ctx = enterRequest();
+    await expect(new Pool().connect()).rejects.toThrow("timeout exceeded");
+    expect(ctx.work?.get("postgres")?.waitMs).toBeGreaterThanOrEqual(15);
+  });
+
+  it("does not count waiting outside a request", async () => {
+    const pg = fakePg();
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const Pool = pg.module.Pool as unknown as new () => { connect: () => Promise<unknown> };
+    await new Pool().connect(); // at startup, belonging to no endpoint
+  });
+
+  it("wraps the pool once, however many times it is instrumented", () => {
+    const pg = fakePg();
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const wrapped = pg.module.Pool.prototype.connect;
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    expect(pg.module.Pool.prototype.connect).toBe(wrapped);
   });
 });
