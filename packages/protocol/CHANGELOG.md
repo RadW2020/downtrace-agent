@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.4.0
+
+### Minor Changes
+
+- 662e8f5: Protocol 0.5.0: optional `waitMs` on each dependency, the time requests spent waiting to be able to talk to it rather than talking to it. A saturated connection pool shows up there and nowhere else. Agents on 0.4.x and earlier stay valid.
+
 ## 0.3.0
 
 ### Minor Changes

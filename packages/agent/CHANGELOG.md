@@ -1,5 +1,16 @@
 # @downtrace/agent
 
+## 0.4.0
+
+### Minor Changes
+
+- 27ddb88: The agent now measures how long a request waited for a database connection, and reports it against the same dependency as the queries that follow (protocol 0.5). A connection pool with nothing free is what turns one slow dependency into a whole service degrading, and it is invisible in the query's own duration.
+
+### Patch Changes
+
+- Updated dependencies [662e8f5]
+  - @downtrace/protocol@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
