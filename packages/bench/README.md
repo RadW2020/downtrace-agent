@@ -47,7 +47,9 @@ La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y 
 
 El presupuesto del invariante 3 es un número para el agente entero, así que cuando empiece a apretar la única pregunta útil será cuál pagar y cuál no, y eso no se responde con un total.
 
-Un marginal es la **diferencia entre dos mediciones independientes**, así que su incertidumbre es mayor que la de cada una: se combinan. La tabla lo dice en su columna `±` y marca si el marginal se resuelve o no. Donde dice que no, la máquina no ha medido ese observador y el número no significa nada.
+Cada paso compara **dos configuraciones del agente cara a cara**, no cada una contra el vacío: medir por separado y restar diferencia dos mediciones independientes y duplica la incertidumbre. La comparación es **pareada ronda a ronda**, porque las rondas se alternan en el tiempo y cada par vio la misma máquina; el intervalo son dos errores estándar de esas diferencias. Donde la tabla dice que no se resuelve, la máquina no ha medido ese observador y el número no significa nada. Y como se hacen varias comparaciones a la vez, la herramienta avisa si alguna sale resuelta con coste negativo: un observador no puede abaratar una aplicación, así que eso es el azar asomando, no un hallazgo.
+
+Medido en un portátil el 2026-09-06 con 6 rondas y 10 s: ninguno de los cinco costes se resuelve, con incertidumbres de ±0,9 a ±1,6 puntos. Es decir, hoy el coste de cada observador por separado está por debajo de lo que una máquina ordinaria puede medir; hace falta una máquina tranquila o muchas más rondas.
 
 No corre en CI: es una ejecución completa del benchmark por instrumento, y es una herramienta para decidir, no un guardarraíl.
 

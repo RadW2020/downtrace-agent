@@ -62,20 +62,33 @@ for (const step of steps) {
     agentEnv: { DOWNTRACE_INSTRUMENT: step.to },
     log: (line) => console.error(`[bench] ${step.name}: ${line}`),
   });
-  const cpu = report.metrics.find((m) => m.metric === "cpuPct");
-  const p99 = report.metrics.find((m) => m.metric === "p99Ms");
-  const delta = cpu?.delta ?? Number.NaN;
-  const noise = cpu?.noise ?? Number.NaN;
+  // Paired, not pooled: rounds alternate in time, so round i of one side and round i of the other saw the same
+  // machine. Differencing them first removes most of what the machine was doing, which comparing two medians
+  // does not. The uncertainty is then the standard error of those differences.
+  const cpuOf = (variant: string) => report.rounds.filter((r) => r.variant === variant).map((r) => r.usage.cpuPct);
+  const differences = cpuOf("agent").map((v, i) => v - (cpuOf("baseline")[i] ?? Number.NaN));
+  const { mean, stderr } = pairedDifference(differences);
   results.push({
     name: step.name,
-    cpu: delta,
-    cpuNoise: noise,
-    p99: p99?.delta ?? Number.NaN,
-    resolved: Math.abs(delta) > noise,
+    cpu: mean,
+    // Two standard errors: the interval a difference has to clear before it is worth calling a measurement.
+    cpuNoise: 2 * stderr,
+    p99: report.metrics.find((m) => m.metric === "p99Ms")?.delta ?? Number.NaN,
+    resolved: Math.abs(mean) > 2 * stderr,
   });
 }
 
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
+
+/** Mean of the per-round differences and the standard error of that mean. */
+function pairedDifference(differences: readonly number[]): { mean: number; stderr: number } {
+  const n = differences.length;
+  if (n === 0) return { mean: Number.NaN, stderr: Number.NaN };
+  const mean = differences.reduce((a, b) => a + b, 0) / n;
+  if (n < 2) return { mean, stderr: Number.POSITIVE_INFINITY };
+  const variance = differences.reduce((a, d) => a + (d - mean) ** 2, 0) / (n - 1);
+  return { mean, stderr: Math.sqrt(variance / n) };
+}
 
 const lines = [
   `### What each observer costs · ${rounds} rounds/side · ${rps} rps · ${measureSec}s measured`,
@@ -83,10 +96,12 @@ const lines = [
   "Each row is one head-to-head comparison: the agent with that observer against the same agent without it. The",
   "first row is the agent with nothing switched on, against no agent at all.",
   "",
-  "`resolved?` says whether the cost came out larger than the machine's own noise. Where it says no, this machine",
-  "could not measure that observer and the number should not be read as one.",
+  "CPU is compared **round by round**: rounds alternate in time, so each pair saw the same machine, and",
+  "differencing them first removes most of what the machine was doing. The interval is two standard errors of",
+  "those differences. Where `resolved?` says no, this machine could not measure that observer and the number",
+  "should not be read as one.",
   "",
-  "| Cost of | ΔCPU (pp) | noise | resolved? | Δp99 (ms) |",
+  "| Cost of | ΔCPU (pp) | ± 2 s.e. | resolved? | Δp99 (ms) |",
   "|---|---:|---:|:-:|---:|",
   ...results.map(
     (r) =>
@@ -100,6 +115,16 @@ if (unresolved > 0) {
   lines.push(
     `${unresolved} of ${results.length} could not be resolved here. More rounds or a quieter machine is the answer;`,
     "reading the numbers anyway is not.",
+    "",
+  );
+}
+// An interval that holds 19 times in 20 will fail once in 20, and this table makes several comparisons at once.
+const implausible = results.filter((r) => r.resolved && r.cpu < 0);
+if (implausible.length > 0) {
+  lines.push(
+    `Careful with ${implausible.map((r) => `**${r.name}**`).join(", ")}: resolved, but negative. An observer cannot`,
+    `make an application cheaper. With ${results.length} comparisons at this confidence, about one appearing resolved by`,
+    "chance is expected, and a negative cost is what that looks like. Treat it as noise, not as a finding.",
     "",
   );
 }
