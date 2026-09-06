@@ -1,7 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { currentContext, recordCall, recordCallIn, recordWait } from "../context.ts";
+import { currentContext, recordCall, recordCallIn, recordWait, recordWaitIn } from "../context.ts";
 import type { Logger } from "../log.ts";
 
 const MARK = Symbol.for("downtrace.pg.instrumented");
@@ -136,15 +136,16 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
       if (typeof args.at(-1) === "function") {
         // The callback form is how `pool.query()` works inside. The pool queues this callback and calls it later
         // from whoever released a connection, so without binding it the rest of the request would run under
-        // another request's context and its queries would be counted against that one. Binding restores the
-        // caller's context; the wait itself is left to the promise path below.
+        // another request's context and its queries would be counted against that one.
         const callback = args.at(-1) as (...cbArgs: unknown[]) => unknown;
-        const bound = AsyncResource.bind(callback);
-        const waited = function (this: unknown, ...cbArgs: unknown[]): unknown {
-          recordWait("postgres", targetOfClient(cbArgs[1]), performance.now() - started);
-          return bound.apply(this, cbArgs);
-        };
-        args[args.length - 1] = AsyncResource.bind(waited);
+        const ctx = currentContext();
+        if (!ctx) return original.apply(this, args); // nothing to attribute: leave the callback untouched
+        // One binding, not two: an AsyncResource per acquisition is the price of correct attribution, and
+        // `pool.query()` acquires a connection for every query, so paying it twice is measurable.
+        args[args.length - 1] = AsyncResource.bind(function (this: unknown, ...cbArgs: unknown[]): unknown {
+          recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+          return callback.apply(this, cbArgs);
+        });
         return original.apply(this, args);
       }
     } catch {
