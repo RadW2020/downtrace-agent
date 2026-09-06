@@ -121,10 +121,9 @@ export class Agent {
     if (this.started || this.disabled) return;
     this.started = true;
     const on = this.config.instrument;
-    if (on.has("pg")) {
-      const pg = instrumentPg({ log: this.log });
-      if (pg) this.log.debug(`instrumented pg ${pg}`);
-    }
+    // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
+    // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
+    if (on.has("pg")) instrumentPg({ log: this.log });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) this.stopHttp = instrumentHttp(this.log);
     if (on.has("redis")) this.stopRedis = instrumentRedis(this.log);

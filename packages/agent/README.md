@@ -1,8 +1,17 @@
 # @downtrace/agent
 
-**A flight recorder for your Node.js backend.** Downtrace watches how your application normally behaves and, when something gets slower or breaks, tells you what changed. This is the agent: it observes incoming HTTP requests, aggregates them locally per route and 10-second interval, and ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
+**A flight recorder for your Node.js backend.** Downtrace watches how your application normally behaves and, when something gets slower or breaks, tells you what changed. This is the agent: it observes your application from the inside, aggregates locally per route and 10-second interval, and ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
 
-v0 observes incoming HTTP only. Outgoing calls, database queries and the black box come next.
+It observes four things, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
+
+| Name | What it sees |
+|---|---|
+| `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection |
+| `redis` | Redis commands per request, by server |
+| `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
+
+It watches only the process it is loaded into. One agent, one process, one service.
 
 ## Install
 
@@ -27,7 +36,34 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 
-Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the agent prints one warning and does nothing else.
+Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the agent prints one warning and does nothing else. So you can add it to a deployment before you have a token: nothing changes until both exist.
+
+## If your build prunes dependencies it cannot see
+
+`--import` loads the agent from the command line, so **nothing in your code imports it**. Bundlers that decide what to ship by tracing imports — Next.js `output: "standalone"`, and anything else that copies "only what is used" — will leave it out. Your dependency is in `package.json`, it is in `node_modules` on your machine, and the container dies at boot:
+
+```
+Error: Cannot find package '@downtrace/agent'
+```
+
+### Next.js
+
+Use [`instrumentation.ts`](https://nextjs.org/docs/app/building-your-application/optimizing/instrumentation), which Next runs once before it serves anything. Three lines, no change to your Dockerfile, no `NODE_OPTIONS`, no change to your start command:
+
+```ts
+// instrumentation.ts, at the root of your project (or in src/)
+export async function register() {
+  await import("@downtrace/agent/register");
+}
+```
+
+Because your code imports it, Next traces it and ships it. Verified on Next 15 with `output: "standalone"`: the agent starts, finds your `pg` and reports queries per route.
+
+Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `nodenext` — the classic `node` setting cannot resolve the `/register` subpath. Next puts one of those in new projects; older ones may still be on `node`.
+
+### Anything else that traces
+
+Either import the agent from an entry point you own, as above, or make the bundler keep it. In Next that is `outputFileTracingIncludes`; other tools have an equivalent.
 
 ## What leaves your server
 

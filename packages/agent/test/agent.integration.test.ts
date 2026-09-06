@@ -190,4 +190,20 @@ describe("agent v0 (integration)", () => {
     expect(await agent.flushNow()).toBe(false);
     expect(sink.batches).toHaveLength(0);
   });
+
+  it("announces each observer once, so its own log can be trusted", async () => {
+    // The pg line used to appear twice: instrumentPg writes it, and the agent wrote it again from the returned
+    // version. Nothing was instrumented twice — the symbol guard sees to that — but the log said it was, and a
+    // log that lies sends whoever reads it looking for a problem that is not there.
+    const sink = await startSink();
+    const lines: string[] = [];
+    const agent = new Agent(config(sink.url, { instrument: new Set(["pg"]) }), {
+      log: { warn: (m) => lines.push(m), debug: (m) => lines.push(m) },
+    });
+    cleanups.push(() => agent.stop(), sink.close);
+    agent.start();
+
+    // Exactly one: zero would mean the observer never ran and the test proves nothing.
+    expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(1);
+  });
 });

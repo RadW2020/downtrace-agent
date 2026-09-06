@@ -245,3 +245,16 @@ describe("attribution under pool contention", () => {
     expect(results).toEqual([2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
   });
 });
+
+describe("what the agent says it did", () => {
+  it("says nothing more when asked to instrument the same driver again", () => {
+    const pg = fakePg();
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+
+    const lines: string[] = [];
+    const noisy = { warn: (m: string) => lines.push(m), debug: (m: string) => lines.push(m) };
+    instrumentPg({ log: noisy, moduleImpl: pg.module });
+
+    expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(0);
+  });
+});
