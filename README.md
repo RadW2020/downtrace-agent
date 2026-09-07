@@ -5,9 +5,9 @@
 [![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@downtrace/agent)](https://www.npmjs.com/package/@downtrace/agent)
 
-This repository is a **read-only mirror** of the public packages of Downtrace, synchronised from the private monorepo where development happens, together with the hosted backend and the project's documents. Every commit here carries the real subject of the change and every published version is tagged, so you can read what changed between two releases. The tests above run here, on this code.
+This repository is a **read-only mirror** of the public packages of Downtrace, synchronised from the private monorepo where development happens, together with the hosted backend and the project's documents. Every published version is tagged and every commit carries the subject of the change it brought over, so you can read what changed between two releases. The tests above run here, on this code, and the packages are published to npm from this repository so that npm can attest their provenance.
 
-Issues are welcome and answered here. Pull requests cannot be merged in place; see [CONTRIBUTING.md](CONTRIBUTING.md) for why, and how a patch gets in. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+[`docs/adr/`](docs/adr) holds the decisions behind this code: why the benchmark measures the way it does, why the agent patches the driver the way it does, and how the protocol is allowed to change. Issues are welcome and answered here. Pull requests cannot be merged in place; see [CONTRIBUTING.md](CONTRIBUTING.md) for why, and how a patch gets in. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 | Package | What it is |
 |---|---|

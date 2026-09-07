@@ -4,9 +4,17 @@
 
 Development happens in a private monorepo that also holds the hosted backend and the project's documents. Everything under `packages/` is public and is synchronised here on every change, so this repository is **read-only**: a pull request opened here cannot be merged as-is, it gets ported by hand.
 
-That is a deliberate trade-off, not neglect. The protocol schema generates the types for both the agent and the backend, and a single test runs the reference app, the agent and the backend together; keeping them in one repository is what makes those checks possible before anything is merged. The cost is that this repository shows the result rather than the discussion.
+That is a deliberate trade-off, not neglect. The protocol schema generates the types for both the agent and the backend, and a single test runs the reference app, the agent and the backend together; keeping them in one repository is what makes those checks possible before anything is merged.
 
-Each commit here carries the real subject of the change, and every published version is tagged, so you can read what changed between two releases.
+Each commit here carries the subject of the change it brought over, and every published version is tagged, so you can read what changed between two releases. Commits synchronised before September 2026 all read `sync from the monorepo`: the workflow wrote one marker into its commits and looked for a different one, so it never recognised its own previous sync and always fell back to the generic subject. That is fixed going forward, not retroactively.
+
+## Why the code looks the way it does
+
+`docs/adr/` carries the decision records for the code in this repository: what was decided, which alternatives lost, and what each decision costs. They cover the benchmark methodology and its statistics, how the agent observes the database driver, the protocol and the rule that governs how it may change.
+
+Two things to know before you open them. They are written in Spanish, which is the project's language for documents. And some cite tickets, pull requests or CI runs in the private repository, which you cannot open; the decision and its reasoning are complete without them.
+
+Decisions about the hosted backend are not published. Each record declares its own scope, so what you see here is the whole of what is public, not a summary of it.
 
 ## What is welcome
 
