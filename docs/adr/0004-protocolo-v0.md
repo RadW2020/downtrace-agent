@@ -1,6 +1,6 @@
 # ADR 0004 — Protocolo v0: agregados por intervalo en JSON, con esquema como fuente única
 
-Estado: aceptado · Fecha: 2026-09-04 · Alcance: público
+Estado: aceptado; su consecuencia sobre ajustar ambos lados en el mismo PR está **superada por el ADR 0008** · Fecha: 2026-09-04 · Alcance: público
 
 ## Contexto
 
@@ -25,7 +25,8 @@ El agente y el cloud viven en lenguajes distintos (TypeScript y Go) y el protoco
 
 ## Consecuencias
 
-- Cualquier cambio del protocolo es: editar el esquema, `make gen`, ajustar ambos lados en el mismo PR (ADR 0001).
+- Cualquier cambio del protocolo es: editar el esquema, `make gen`, ajustar ambos lados en el mismo PR (ADR 0001). — **Superado por el ADR 0008**: el cloud va primero, en su propio tiquet, y el agente en uno
+  posterior; nunca en el mismo PR ni en la misma publicación.
 - La precisión de percentiles en el cloud está limitada por el ancho de bucket (≈ 25–50 % por decada); suficiente para regresiones, insuficiente para SLOs finos. Aceptado.
 - El agente ve todos los servidores HTTP del proceso (p. ej. el proveedor simulado de la app de referencia aparece como rutas propias). Distinguir servidores es trabajo futuro.
 - El primer intervalo tras arrancar y el último antes de parar pueden perderse si el cloud no responde a tiempo; se acepta a cambio de no retener el proceso.
