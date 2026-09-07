@@ -53,6 +53,19 @@ export const CALLS_PER_REQUEST_BOUNDARIES_V0: readonly number[] = [${queryBounda
 export const CALLS_PER_REQUEST_BUCKETS_V0 = ${queryBoundaries.length + 1};
 `,
 );
+
+const ingestPath = schema["x-ingest-path"];
+if (typeof ingestPath !== "string" || !ingestPath.startsWith("/")) {
+  throw new Error("schema: x-ingest-path missing or invalid");
+}
+await writeFile(
+  `${outDir}paths.ts`,
+  `${header}
+/** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
+export const AGGREGATES_PATH = ${JSON.stringify(ingestPath)};
+`,
+);
+
 console.log(
-  `generated aggregates.ts, versions.ts (protocol ${current}) and boundaries.ts (${boundaries.length + 1} buckets)`,
+  `generated aggregates.ts, versions.ts (protocol ${current}), boundaries.ts (${boundaries.length + 1} buckets) and paths.ts`,
 );

@@ -1,8 +1,8 @@
 import schema from "../schema/v0/aggregates.schema.json" with { type: "json" };
 import { CALLS_PER_REQUEST_BOUNDARIES_V0, LATENCY_BOUNDARIES_V0 } from "./generated/boundaries.ts";
 
-/** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
-export const AGGREGATES_PATH = "/v0/aggregates";
+/** Path, relative to the ingest URL, that receives AggregatesBatch payloads. Generated from schema x-ingest-path. */
+export { AGGREGATES_PATH } from "./generated/paths.ts";
 
 /** The JSON Schema (draft 2020-12) for AggregatesBatch, for validators on either side. */
 export const AGGREGATES_SCHEMA_V0 = schema;

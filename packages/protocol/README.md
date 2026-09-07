@@ -18,7 +18,7 @@ Since **0.2.0** an endpoint may also carry `postgres`: how many queries each req
 
 **The package version is the protocol version.** `@downtrace/protocol@0.5.0` speaks protocol `0.5.0`, and CI refuses to publish a release where the two disagree, so you can read the contract off the version in your lockfile. A release that changes the package without touching the contract moves the patch segment only.
 
-Fields are only ever **added**, and always optional. Each addition bumps the minor version, and the batch's `protocol` field is an enum of every published minor, so a cloud that speaks 0.2 still accepts an agent that speaks 0.1. Removing or renaming a field, or moving a histogram's bucket bounds, would be a major version on a new path. Bucket bounds are declared in the schema itself (`x-latency-boundaries-ms`, `x-calls-per-request-boundaries`), and so are the versions themselves, so they are part of the generated contract rather than a constant someone has to keep in sync.
+Fields are only ever **added**, and always optional. Each addition bumps the minor version, and the batch's `protocol` field is an enum of every published minor, so a cloud that speaks 0.2 still accepts an agent that speaks 0.1. Removing or renaming a field, or moving a histogram's bucket bounds, would be a major version on a new path. Bucket bounds are declared in the schema itself (`x-latency-boundaries-ms`, `x-calls-per-request-boundaries`), and so are the versions themselves and the ingestion path (`x-ingest-path`), so they are part of the generated contract rather than a constant someone has to keep in sync.
 
 ## Source
 

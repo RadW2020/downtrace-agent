@@ -4,6 +4,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import {
   ACCEPTED_PROTOCOL_VERSIONS_V0,
+  AGGREGATES_PATH,
   AGGREGATES_SCHEMA_V0,
   CALLS_PER_REQUEST_BOUNDARIES_V0,
   CALLS_PER_REQUEST_BUCKETS_V0,
@@ -15,6 +16,7 @@ const fixtures = fileURLToPath(new URL("../schema/v0/fixtures/", import.meta.url
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
+ajv.addKeyword("x-ingest-path");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
@@ -24,6 +26,12 @@ async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
 }
 
 describe("aggregates schema v0", () => {
+  it("exports the ingest path defined in the schema", () => {
+    const path = (AGGREGATES_SCHEMA_V0 as { "x-ingest-path"?: string })["x-ingest-path"];
+    expect(path).toBeDefined();
+    expect(AGGREGATES_PATH).toBe(path);
+  });
+
   it("exports exactly the versions the schema accepts, newest last", () => {
     const accepted = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;
     // What the agent stamps on a batch and what a consumer checks against are generated from this enum. Published

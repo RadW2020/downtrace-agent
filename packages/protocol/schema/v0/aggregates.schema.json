@@ -3,6 +3,7 @@
   "$id": "https://downtrace.io/schema/v0/aggregates.schema.json",
   "title": "AggregatesBatch",
   "description": "A batch of per-interval, per-route aggregates sent by an agent to the cloud (POST /v0/aggregates).",
+  "x-ingest-path": "/v0/aggregates",
   "type": "object",
   "additionalProperties": false,
   "required": ["protocol", "agent", "instance", "deploy", "intervals"],

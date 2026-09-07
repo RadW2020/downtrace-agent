@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
+import { AGGREGATES_PATH, AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import type { Logger } from "../src/log.ts";
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
+ajv.addKeyword("x-ingest-path");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 /** In-process stand-in for the cloud: captures batches, answers with a configurable status. */
@@ -24,7 +25,7 @@ async function startSink(status = 202) {
       body += c.toString();
     });
     req.on("end", () => {
-      if (req.method === "POST" && req.url === "/v0/aggregates" && state.status < 400)
+      if (req.method === "POST" && req.url === AGGREGATES_PATH && state.status < 400)
         batches.push(JSON.parse(body) as AggregatesBatch);
       res.writeHead(state.status).end();
     });
