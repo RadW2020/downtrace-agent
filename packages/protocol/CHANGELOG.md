@@ -1,5 +1,15 @@
 # @downtrace/protocol
 
+## 0.5.0
+
+### Minor Changes
+
+- 3f87181: `PROTOCOL_VERSION` is now generated from the schema's `protocol` enum instead of being typed next to it, and the package exports `ACCEPTED_PROTOCOL_VERSIONS_V0`, the full list of published minors of v0 that the cloud still accepts.
+  
+  The version used to be written by hand in three places: the enum that actually decides what the cloud accepts, this package, and the cloud's Go side. Nothing compared them. The enum is now the only place it is written, both languages generate from it, and the drift check that already guards the types covers the versions too.
+  
+  This release also ties the package version to the protocol version: `@downtrace/protocol@0.5.0` speaks protocol `0.5.0`, and CI refuses a release where the two disagree, so the version in your lockfile tells you which contract you have. The README stops naming a schema annotation that does not exist.
+
 ## 0.4.0
 
 ### Minor Changes

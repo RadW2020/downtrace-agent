@@ -1,5 +1,17 @@
 # @downtrace/agent
 
+## 0.5.1
+
+### Patch Changes
+
+- df00701: The README now says what the agent observes — incoming and outgoing HTTP, Postgres with pool wait, Redis and runtime health — instead of claiming it only watches incoming HTTP, which stopped being true several versions ago.
+  
+  It also warns about the one thing that stops an application from starting. `--import` means nothing in your code imports the agent, so a bundler that ships "only what is used" leaves it out: Next.js with `output: "standalone"` dies at boot with `Cannot find package '@downtrace/agent'` while the dependency sits correctly in `package.json`. The fix for Next is a three-line `instrumentation.ts`, measured on Next 15: the agent starts, finds the application's `pg` and reports queries per route, with no change to the Dockerfile or the start command.
+  
+  And the agent no longer claims to have instrumented `pg` twice. It never did it twice — the guard was there — but the line was written in two places, and a log that lies costs more than no log.
+- Updated dependencies [3f87181]
+  - @downtrace/protocol@0.5.0
+
 ## 0.5.0
 
 ### Minor Changes
