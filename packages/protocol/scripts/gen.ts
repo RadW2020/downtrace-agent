@@ -18,6 +18,20 @@ const types = await compile(schema as Parameters<typeof compile>[0], "Aggregates
 });
 await writeFile(`${outDir}aggregates.ts`, types);
 
+const accepted = (schema.properties as Record<string, { enum?: unknown }>).protocol?.enum;
+if (!Array.isArray(accepted) || accepted.length === 0) throw new Error("schema: properties.protocol.enum missing");
+const current = accepted[accepted.length - 1];
+await writeFile(
+  `${outDir}versions.ts`,
+  `${header}
+/** Every published minor of v0, oldest first. The cloud never stops accepting one it published (ADR 0008). */
+export const ACCEPTED_PROTOCOL_VERSIONS_V0 = [${accepted.map((v) => JSON.stringify(v)).join(", ")}] as const;
+
+/** The newest published minor: what an up-to-date agent stamps on every batch. */
+export const PROTOCOL_VERSION = ${JSON.stringify(current)};
+`,
+);
+
 const defs = schema.$defs as Record<string, Record<string, unknown>>;
 const boundaries = defs.LatencyHistogram?.["x-latency-boundaries-ms"] as number[];
 if (!Array.isArray(boundaries)) throw new Error("schema: LatencyHistogram.x-latency-boundaries-ms missing");
@@ -39,4 +53,6 @@ export const CALLS_PER_REQUEST_BOUNDARIES_V0: readonly number[] = [${queryBounda
 export const CALLS_PER_REQUEST_BUCKETS_V0 = ${queryBoundaries.length + 1};
 `,
 );
-console.log(`generated aggregates.ts and boundaries.ts (${boundaries.length + 1} buckets)`);
+console.log(
+  `generated aggregates.ts, versions.ts (protocol ${current}) and boundaries.ts (${boundaries.length + 1} buckets)`,
+);

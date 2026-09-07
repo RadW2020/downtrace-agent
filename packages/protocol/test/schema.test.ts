@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import {
+  ACCEPTED_PROTOCOL_VERSIONS_V0,
   AGGREGATES_SCHEMA_V0,
   CALLS_PER_REQUEST_BOUNDARIES_V0,
   CALLS_PER_REQUEST_BUCKETS_V0,
@@ -23,13 +24,20 @@ async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
 }
 
 describe("aggregates schema v0", () => {
-  it("accepts the version the package exports, and every earlier published minor", () => {
+  it("exports exactly the versions the schema accepts, newest last", () => {
     const accepted = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;
-    expect(accepted).toContain(PROTOCOL_VERSION);
+    // What the agent stamps on a batch and what a consumer checks against are generated from this enum. Published
+    // as `dist/`, they are read without the schema at hand, so a copy that drifts from it would be believed.
+    expect([...ACCEPTED_PROTOCOL_VERSIONS_V0]).toEqual(accepted);
+    expect(PROTOCOL_VERSION).toBe(accepted[accepted.length - 1]);
+  });
+
+  it("never drops a minor it once published", () => {
     // Agents already installed keep working: the cloud never stops accepting a minor it once published (ADR 0008).
-    expect(accepted).toContain("0.1.0");
-    expect(accepted).toContain("0.2.0");
-    expect(accepted).toContain("0.3.0");
+    // Removing one from the enum is how a released agent starts getting 400s it cannot do anything about.
+    for (const published of ["0.1.0", "0.2.0", "0.3.0", "0.4.0"]) {
+      expect(ACCEPTED_PROTOCOL_VERSIONS_V0).toContain(published);
+    }
   });
 
   it("accepts every valid fixture", async () => {
