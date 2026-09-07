@@ -48,6 +48,7 @@ function client(base: string) {
     stats: async () =>
       (await fetch(`${base}/__admin/stats`)).json() as Promise<Record<string, Record<string, unknown>>>,
     resetStats: () => fetch(`${base}/__admin/stats/reset`, { method: "POST" }),
+    resetDb: () => fetch(`${base}/__admin/db/reset`, { method: "POST" }),
     setRegressions: (patch: unknown) =>
       fetch(`${base}/__admin/regressions`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(patch) }),
   };
@@ -176,6 +177,32 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     expect(body.eventLoopUtilization.utilization).toBeGreaterThanOrEqual(0);
     expect(body.eventLoopUtilization.utilization).toBeLessThanOrEqual(1);
     expect(body.uptimeMs).toBeGreaterThan(0);
+  });
+
+  // The overhead benchmark compares rounds with each other, so every round has to start on the same database
+  // (gh-140, ADR 0021). What must go is what a request writes; the catalogue has to survive, because the app
+  // cannot serve anything without it and `migrate()` only tops it up with ON CONFLICT DO NOTHING.
+  it("db/reset empties what requests write, keeps the catalogue and puts stock back", async () => {
+    const count = async (table: string) =>
+      Number((await ref.db.query<{ n: number }>(null, `SELECT count(*)::int AS n FROM ${table}`)).rows[0]?.n);
+    const stock = async () =>
+      Number((await ref.db.query<{ stock: number }>(null, "SELECT stock FROM products WHERE id = 1")).rows[0]?.stock);
+
+    expect((await api.checkout()).status).toBe(201);
+    expect(await count("orders")).toBeGreaterThan(0);
+    expect(await count("order_items")).toBeGreaterThan(0);
+    const stockAfterCheckout = await stock();
+
+    expect((await api.resetDb()).status).toBe(204);
+
+    for (const table of ["orders", "order_items", "payments", "order_events"]) {
+      expect(await count(table)).toBe(0);
+    }
+    expect(await count("users")).toBeGreaterThan(0);
+    expect(await count("products")).toBeGreaterThan(0);
+    expect(await stock()).toBeGreaterThan(stockAfterCheckout);
+    // And the app still works on the reset database, which is the point: the next round measures, it does not repair.
+    expect((await api.checkout()).status).toBe(201);
   });
 
   it("REGRESSIONS env enables regressions at startup", async () => {

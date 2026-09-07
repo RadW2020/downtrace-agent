@@ -52,6 +52,21 @@ export class Db {
     await this.pool.query(SEED);
   }
 
+  /**
+   * Empties the tables a request writes to and puts stock back, so a measurement can start from a known size.
+   * The catalogue (users, products, coupons) survives: the app needs it and `migrate()` only tops it up with
+   * ON CONFLICT DO NOTHING. Used by the overhead benchmark, which compares rounds and can only do that if every
+   * round sees the same database (ADR 0021).
+   */
+  async resetWrites(): Promise<void> {
+    // One call, so Postgres runs both in an implicit transaction: a reset that emptied the tables but did not put
+    // the stock back would leave the next round measuring something nobody chose. Same shape as `migrate()`.
+    await this.pool.query(`
+      TRUNCATE order_events, payments, order_items, orders RESTART IDENTITY;
+      UPDATE products SET stock = 1000000;
+    `);
+  }
+
   async close(): Promise<void> {
     for (const client of this.leaked) client.release(true);
     this.leaked.clear();

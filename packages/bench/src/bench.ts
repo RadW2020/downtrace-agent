@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { type AppHandle, startReferenceApp } from "./app-process.ts";
 import { runLoad } from "./load.ts";
-import { ProcessSampler } from "./process-sampler.ts";
+import { ProcessSampler, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import {
@@ -88,6 +88,10 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         throw err;
       }
       try {
+        // Every round starts on the same database. Without this, the write tables keep growing across rounds
+        // (~21600 orders in a full run) and the late rounds measure a bigger database than the early ones; since
+        // the agent's round always follows its baseline, the growth was charged to the agent (ADR 0021).
+        await resetDatabase(app.baseUrl);
         const warmup = await warm(app, config);
         if (!warmup.clean) {
           const w = warmupVerdict({

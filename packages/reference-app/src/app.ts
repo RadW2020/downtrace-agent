@@ -152,6 +152,12 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
       stats.reset();
       res.status(204).end();
     });
+    // Back to a known database size. The overhead benchmark calls this before every round: it compares rounds
+    // with each other, and rounds are only comparable if they start equal (ADR 0021).
+    admin.post("/db/reset", async (_req, res) => {
+      await db.resetWrites();
+      res.status(204).end();
+    });
     app.use("/__admin", admin);
   }
 

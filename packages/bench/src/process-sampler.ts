@@ -21,6 +21,16 @@ export async function snapshot(baseUrl: string): Promise<ProcessSnapshot> {
   return (await res.json()) as ProcessSnapshot;
 }
 
+/**
+ * Puts the app's database back to a known size. Called before every round: the benchmark's whole method is
+ * comparing rounds with each other, and rounds are only comparable if they start equal (ADR 0021). The reference
+ * app owns its schema and does the truncating, so this package keeps having no dependencies.
+ */
+export async function resetDatabase(baseUrl: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/__admin/db/reset`, { method: "POST", signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`/__admin/db/reset responded ${res.status}`);
+}
+
 /** Samples /__admin/process at the start, periodically (for peak RSS) and at the end of a window. */
 export class ProcessSampler {
   private first?: ProcessSnapshot;
