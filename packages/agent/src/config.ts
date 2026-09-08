@@ -9,6 +9,11 @@ export interface AgentConfig {
   intervalMs: number;
   /** Which observers are on. `DOWNTRACE_INSTRUMENT` takes `all`, `none`, or a list like `pg,http`. */
   instrument: ReadonlySet<Instrument>;
+  /**
+   * Whether the normalised query text travels with the profile. `DOWNTRACE_QUERY_TEXT=off` suppresses it and
+   * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
+   */
+  queryText: boolean;
 }
 
 export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
@@ -51,6 +56,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       debug: env.DOWNTRACE_DEBUG === "1" || env.DOWNTRACE_DEBUG === "true",
       intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
+      queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
     },
   };
 }

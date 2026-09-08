@@ -37,6 +37,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
+| `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
 
 Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else. So you can add it to a deployment before you have a token: nothing changes until both exist.
 
@@ -111,6 +112,21 @@ The instrumentation loads before your application (`node --import`), so it wraps
 no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query
 anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
 
+### What each route normally runs
+
+With `pg` on, the instrumentation also builds a **profile**: not only that a route made 4 queries, but which ones.
+Each query text is reduced to its shape — `SELECT id FROM products WHERE id = ?` — and hashed. The hash is the
+identity the cloud groups and compares by; the text is only the label you read. That is what lets Downtrace say
+*«this route went from 2 executions of this query to 53»* instead of *«this route makes more queries now»*.
+
+The profile goes out **once a minute**, separately from the 10-second aggregates, because what a route runs
+changes when your code changes, not every ten seconds.
+
+**No value from your database ever leaves your server.** Literals, parameters, quoted bodies and comments are
+replaced before anything is stored or sent, and that happens in your process, not ours. If you would still rather
+not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it and changes nothing else — the hash is
+the identity, so you keep the whole analysis and only lose the readable label.
+
 ## Guarantees
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
@@ -119,6 +135,8 @@ anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
+- At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.
+- Query texts are normalised once per distinct text and cached, so repeating the same query costs a map lookup, not a re-parse.
 - Measured overhead budget, enforced in CI: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB.
 
 ## Requirements

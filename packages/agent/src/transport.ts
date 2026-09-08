@@ -6,6 +6,7 @@ import {
   type InstanceInfo,
   type Interval,
   PROTOCOL_VERSION,
+  type Profile,
 } from "@downtrace/protocol";
 import type { Logger } from "./log.ts";
 
@@ -31,6 +32,7 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  */
 export class Sender {
   private queue: Interval[] = [];
+  private profiles: Profile[] = [];
   private inflight = false;
   private warnedAuth = false;
   sent = 0;
@@ -52,6 +54,18 @@ export class Sender {
     return this.queue.length;
   }
 
+  /**
+   * Queues a profile for the next batch. A batch carries at most one, so they go out oldest first and, like
+   * intervals, the oldest is dropped rather than letting an unreachable cloud grow this without bound.
+   */
+  enqueueProfile(profile: Profile): void {
+    this.profiles.push(profile);
+    while (this.profiles.length > this.maxQueued) {
+      this.profiles.shift();
+      this.dropped += 1;
+    }
+  }
+
   enqueue(interval: Interval): void {
     this.queue.push(interval);
     while (this.queue.length > this.maxQueued) {
@@ -65,6 +79,7 @@ export class Sender {
     if (this.inflight || this.queue.length === 0) return false;
     this.inflight = true;
     const intervals = this.queue.slice(0, this.maxQueued);
+    const profile = this.profiles[0];
     const batch: AggregatesBatch = {
       protocol: PROTOCOL_VERSION,
       agent: this.opts.agent,
@@ -72,6 +87,7 @@ export class Sender {
       deploy: this.opts.deploy,
       // 1..maxQueued intervals by construction; the generated type is a union of tuples.
       intervals: intervals as AggregatesBatch["intervals"],
+      ...(profile ? { profile } : {}),
     };
     try {
       const res = await this.fetchImpl(`${this.opts.url}${AGGREGATES_PATH}`, {
@@ -82,6 +98,8 @@ export class Sender {
       });
       if (res.ok) {
         this.queue = this.queue.filter((iv) => !intervals.includes(iv));
+        // Only on success: a profile whose batch never arrived stays queued and rides the next one.
+        if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
         this.sent += 1;
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         return true;

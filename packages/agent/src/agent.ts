@@ -5,10 +5,12 @@ import type { AgentInfo, DeployInfo, InstanceInfo } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import type { AgentConfig } from "./config.ts";
 import { enterRequest, type RequestContext } from "./context.ts";
+import { FingerprintCache } from "./fingerprint.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { ProfileAggregator } from "./profile.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
@@ -60,6 +62,9 @@ export class Agent {
   private readonly starts = new WeakMap<object, number>();
   private readonly contexts = new WeakMap<object, RequestContext>();
   private readonly runtime = new RuntimeSampler();
+  /** Both exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
+  private readonly fingerprints: FingerprintCache | undefined;
+  private readonly profile: ProfileAggregator | undefined;
   private instrumented = false;
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
@@ -87,6 +92,10 @@ export class Agent {
     };
     const deploy: DeployInfo = { version: config.version, environment: config.environment };
     this.recorder = deps.recorder ?? new IntervalAggregator();
+    if (config.instrument.has("pg")) {
+      this.fingerprints = new FingerprintCache();
+      this.profile = new ProfileAggregator({ sendText: config.queryText });
+    }
     this.sender =
       deps.sender ??
       new Sender({
@@ -123,7 +132,7 @@ export class Agent {
     const on = this.config.instrument;
     // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
-    if (on.has("pg")) instrumentPg({ log: this.log });
+    if (on.has("pg")) instrumentPg({ log: this.log, fingerprints: this.fingerprints });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) this.stopHttp = instrumentHttp(this.log);
     if (on.has("redis")) this.stopRedis = instrumentRedis(this.log);
@@ -162,6 +171,9 @@ export class Agent {
   /** Closes the current interval and sends everything queued. */
   async flushNow(timeoutMs?: number): Promise<boolean> {
     try {
+      // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
+      const profile = this.profile?.rotate();
+      if (profile) this.sender.enqueueProfile(profile);
       const interval = this.recorder.rotate();
       if (interval) {
         // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
@@ -193,7 +205,10 @@ export class Agent {
     this.runtime.requestFinished();
     const ctx = this.contexts.get(request);
     this.contexts.delete(request);
-    this.recorder.record(normalizeMethod(request.method), routeOf(request), response?.statusCode ?? 0, ms, ctx?.work);
+    const method = normalizeMethod(request.method);
+    const route = routeOf(request);
+    this.recorder.record(method, route, response?.statusCode ?? 0, ms, ctx?.work);
+    if (ctx?.operations) this.profile?.record(method, route, ctx.operations.values());
     this.recorded += 1;
   }
 

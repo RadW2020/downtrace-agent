@@ -63,3 +63,28 @@ describe("which observers to run", () => {
     expect([...parseInstruments("nonsense")]).toEqual([]);
   });
 });
+
+describe("DOWNTRACE_QUERY_TEXT", () => {
+  const base = { DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "http://c" };
+  const queryTextOf = (env: NodeJS.ProcessEnv): boolean => {
+    const result = configFromEnv(env);
+    if (!result.ok) throw new Error(result.reason);
+    return result.config.queryText;
+  };
+
+  it("sends the normalised text unless told not to", () => {
+    expect(queryTextOf(base)).toBe(true);
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "on" })).toBe(true);
+  });
+
+  it("suppresses it on `off`, however it is written", () => {
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "off" })).toBe(false);
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "OFF" })).toBe(false);
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: " off " })).toBe(false);
+  });
+
+  it("treats anything else as leaving it on, rather than guessing", () => {
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "no" })).toBe(true);
+    expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "" })).toBe(true);
+  });
+});

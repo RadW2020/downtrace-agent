@@ -1,7 +1,8 @@
-import { type Interval, PROTOCOL_VERSION } from "@downtrace/protocol";
+import { AGGREGATES_SCHEMA_V0, type Interval, PROTOCOL_VERSION, type Profile } from "@downtrace/protocol";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import type { Logger } from "../src/log.ts";
-import { Sender } from "../src/transport.ts";
+import { DEFAULT_MAX_QUEUED, Sender } from "../src/transport.ts";
 
 const interval = (start: number): Interval => ({ start, durationMs: 10_000, endpoints: [] });
 const quiet: Logger = { warn: () => {}, debug: () => {} };
@@ -68,5 +69,80 @@ describe("Sender", () => {
     const [a, b] = await Promise.all([s.flush(), s.flush()]);
     expect([a, b].sort()).toEqual([false, true]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("Sender, carrying the profile", () => {
+  const profile = (start: number): Profile => ({
+    start,
+    durationMs: 60_000,
+    endpoints: [
+      {
+        method: "GET",
+        route: "/products/:id",
+        operations: [
+          { kind: "query", hash: "abc123", text: "SELECT id FROM products WHERE id = ?", count: 3, totalMs: 4.5 },
+        ],
+      },
+    ],
+  });
+
+  /** The batch as the cloud would receive it, without casting through an optional chain. */
+  const bodyOf = (call: { body: unknown } | undefined): { profile?: Profile } =>
+    (call?.body ?? {}) as { profile?: Profile };
+
+  it("puts the profile on the batch", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueue(interval(1));
+    s.enqueueProfile(profile(1));
+    await s.flush();
+    expect(bodyOf(calls[0]).profile).toEqual(profile(1));
+  });
+
+  it("does not put a profile field on a batch that has none", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueue(interval(1));
+    await s.flush();
+    expect(calls[0]?.body).not.toHaveProperty("profile");
+  });
+
+  it("keeps a profile whose batch never arrived, and sends it with the next one", async () => {
+    const { s, calls } = sender([500, 202]);
+    s.enqueue(interval(1));
+    s.enqueueProfile(profile(1));
+    expect(await s.flush()).toBe(false);
+    expect(await s.flush()).toBe(true);
+    expect(bodyOf(calls[1]).profile?.start).toBe(1);
+  });
+
+  it("sends one profile per batch, oldest first", async () => {
+    const { s, calls } = sender([202, 202]);
+    s.enqueue(interval(1));
+    s.enqueueProfile(profile(1));
+    s.enqueueProfile(profile(2));
+    await s.flush();
+    s.enqueue(interval(2));
+    await s.flush();
+    expect(bodyOf(calls[0]).profile?.start).toBe(1);
+    expect(bodyOf(calls[1]).profile?.start).toBe(2);
+  });
+
+  it("drops the oldest profile rather than growing while the cloud is unreachable", () => {
+    const { s } = sender([]);
+    for (let i = 0; i < DEFAULT_MAX_QUEUED + 3; i++) s.enqueueProfile(profile(i));
+    expect(s.dropped).toBe(3);
+  });
+
+  it("sends a batch the protocol schema accepts", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueue(interval(1));
+    s.enqueueProfile(profile(1));
+    await s.flush();
+    const ajv = new Ajv2020({ allErrors: true, strict: true });
+    ajv.addKeyword("x-latency-boundaries-ms");
+    ajv.addKeyword("x-calls-per-request-boundaries");
+    ajv.addKeyword("x-ingest-path");
+    const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
+    expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
 });

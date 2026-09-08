@@ -1,8 +1,20 @@
 import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { currentContext, recordCall, recordCallIn, recordWait, recordWaitIn } from "../context.ts";
+import { currentContext, recordCall, recordCallIn, recordOperationIn, recordWait, recordWaitIn } from "../context.ts";
+import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
+
+/** `pg` takes the query as a string or as a config object; anything else is not a query text we can read. */
+function queryTextOf(args: readonly unknown[]): string | undefined {
+  const first = args[0];
+  if (typeof first === "string") return first;
+  if (first !== null && typeof first === "object") {
+    const text = (first as { text?: unknown }).text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
 
 const MARK = Symbol.for("downtrace.pg.instrumented");
 const WAIT_MARK = Symbol.for("downtrace.pg.pool.instrumented");
@@ -20,6 +32,11 @@ interface PgModule {
 
 export interface InstrumentPgDeps {
   log: Logger;
+  /**
+   * Where the query text becomes a fingerprint. Absent means no profile is being built, and then the text is
+   * never even looked at: the cost of normalising is not paid by an agent that would not send it.
+   */
+  fingerprints?: FingerprintCache | undefined;
   /** Resolution base; defaults to the application's entry point, then its working directory. */
   from?: string | undefined;
   /** Injected in tests instead of resolving the real module. */
@@ -59,6 +76,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   }
   if (proto[MARK] === true) return version;
 
+  const fingerprints = deps.fingerprints;
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
     const target = targetOfClient(this);
@@ -66,11 +84,24 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
     let done: ((failed?: boolean) => void) | undefined;
     try {
       const started = performance.now();
+      const sql = fingerprints ? queryTextOf(args) : undefined;
       let counted = false;
       done = (failed = false) => {
         if (counted) return;
         counted = true;
-        recordCall("postgres", target, performance.now() - started, failed);
+        const ms = performance.now() - started;
+        // This runs inside the application's own promise chain, so anything thrown here would surface as the
+        // query failing. Measuring is not worth breaking what is being measured (invariants 1 and 2).
+        try {
+          recordCall("postgres", target, ms, failed);
+          // Resolved here, not above, so a query outside a request costs nothing: no context, no fingerprint.
+          if (sql !== undefined && fingerprints) {
+            const ctx = currentContext();
+            if (ctx) recordOperationIn(ctx, "query", fingerprints.get(sql), ms, failed);
+          }
+        } catch (err) {
+          deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       };
       const last = args.at(-1);
       if (typeof last === "function") {
@@ -82,8 +113,18 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
         args[args.length - 1] = function (this: unknown, ...cbArgs: unknown[]): unknown {
           if (ctx && !counted) {
             counted = true;
-            // pg's callback convention: a non-null first argument is the error.
-            recordCallIn(ctx, "postgres", target, performance.now() - started, cbArgs[0] != null);
+            const ms = performance.now() - started;
+            // Same reason as above: this runs before the application's callback, and must not replace it.
+            try {
+              // pg's callback convention: a non-null first argument is the error.
+              const failed = cbArgs[0] != null;
+              recordCallIn(ctx, "postgres", target, ms, failed);
+              if (sql !== undefined && fingerprints) {
+                recordOperationIn(ctx, "query", fingerprints.get(sql), ms, failed);
+              }
+            } catch (err) {
+              deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
           return callback.apply(this, cbArgs);
         };

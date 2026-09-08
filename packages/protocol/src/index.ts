@@ -16,7 +16,10 @@ export type {
   InstanceInfo,
   Interval,
   LatencyHistogram,
+  Operation,
   PostgresStats,
+  Profile,
+  ProfileEndpoint,
   RuntimeHealth,
   StatusClasses,
 } from "./generated/aggregates.ts";

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { enterRequest } from "../src/context.ts";
+import { FingerprintCache } from "../src/fingerprint.ts";
 import { instrumentPg } from "../src/instrument/pg.ts";
 import type { Logger } from "../src/log.ts";
 
@@ -256,5 +257,83 @@ describe("what the agent says it did", () => {
     instrumentPg({ log: noisy, moduleImpl: pg.module });
 
     expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(0);
+  });
+});
+
+/** The same cast the tests above use, named once because the profile tests all need it. */
+const clientOf = (module: { Client: { prototype: Record<string, unknown> } }) =>
+  new (module.Client as unknown as new () => { query: (...a: unknown[]) => unknown })();
+
+describe("instrumentPg, building the profile", () => {
+  it("records what a query was, not just that there was one", async () => {
+    const pg = fakePg();
+    const fingerprints = new FingerprintCache();
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints });
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    await client.query("SELECT id FROM products WHERE id = $1", [7]);
+    await client.query("SELECT id FROM products WHERE id = $1", [9]);
+    const operations = [...(ctx.operations?.values() ?? [])];
+    expect(operations).toHaveLength(1);
+    expect(operations[0]?.text).toBe("SELECT id FROM products WHERE id = ?");
+    expect(operations[0]?.count).toBe(2);
+    expect(operations[0]?.kind).toBe("query");
+  });
+
+  it("counts a failed query as an error on its fingerprint", async () => {
+    const pg = fakePg();
+    const fingerprints = new FingerprintCache();
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints });
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    await (client.query("boom") as Promise<unknown>).catch(() => {});
+    const operations = [...(ctx.operations?.values() ?? [])];
+    expect(operations[0]?.errors).toBe(1);
+  });
+
+  it("normalises one query text once, however many times it runs", async () => {
+    const pg = fakePg();
+    const fingerprints = new FingerprintCache();
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints });
+    const client = clientOf(pg.module);
+    enterRequest();
+    for (let i = 0; i < 50; i++) await client.query("SELECT id FROM t WHERE id = $1", [i]);
+    expect(fingerprints.misses).toBe(1);
+  });
+
+  it("does not look at the query text when no profile is being built", async () => {
+    const pg = fakePg();
+    instrumentPg({ log: quiet, moduleImpl: pg.module });
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    await client.query("SELECT id FROM t WHERE id = $1", [1]);
+    expect(ctx.operations).toBeUndefined();
+    // The dependency counters are unaffected: the profile is an addition, not a replacement.
+    expect(pgWork(ctx).calls).toBe(1);
+  });
+
+  it("attributes nothing to a query made outside a request", async () => {
+    const pg = fakePg();
+    const fingerprints = new FingerprintCache();
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints });
+    const client = clientOf(pg.module);
+    await client.query("SELECT 1 FROM startup");
+    // Nothing threw and nothing was attributed: a query at startup belongs to no endpoint.
+    expect(fingerprints.size).toBe(0);
+  });
+
+  it("runs the query untouched when fingerprinting throws", async () => {
+    const pg = fakePg();
+    const exploding = {
+      get: () => {
+        throw new Error("normalisation broke");
+      },
+    } as unknown as FingerprintCache;
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints: exploding });
+    const client = clientOf(pg.module);
+    enterRequest();
+    // The application gets its rows: an agent bug must never change what the application's query does.
+    const rows = client.query("SELECT id FROM t WHERE id = $1", [1]) as Promise<unknown>;
+    await expect(rows).resolves.toEqual({ rows: [{ ok: 1 }] });
   });
 });

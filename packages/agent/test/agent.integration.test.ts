@@ -58,6 +58,7 @@ function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     url,
     environment: "test",
     version: "t1",
+    queryText: true,
     debug: false,
     intervalMs: 60_000,
     instrument: new Set(),
