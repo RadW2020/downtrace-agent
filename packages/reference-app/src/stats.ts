@@ -8,6 +8,12 @@ export interface RequestCounters {
   providerRetries: number;
   redisOps: number;
   poolWaitMs: number;
+  /**
+   * The longest single wait for a connection, and when it happened. The total says a round waited; only the worst
+   * one and its instant can be lined up with what the database was doing at that second (gh-177).
+   */
+  maxPoolWaitMs: number;
+  maxPoolWaitAt: number | undefined;
   errors: Record<string, number>;
 }
 
@@ -26,7 +32,30 @@ declare global {
 }
 
 export function newCounters(): RequestCounters {
-  return { sqlQueries: 0, providerCalls: 0, providerRetries: 0, redisOps: 0, poolWaitMs: 0, errors: {} };
+  return {
+    sqlQueries: 0,
+    providerCalls: 0,
+    providerRetries: 0,
+    redisOps: 0,
+    poolWaitMs: 0,
+    maxPoolWaitMs: 0,
+    maxPoolWaitAt: undefined,
+    errors: {},
+  };
+}
+
+/**
+ * Records one wait for a connection: it adds to the total and, if it is the worst so far, keeps its instant.
+ *
+ * `at` is passed rather than read here so a test can say when, and so the caller uses the same clock it timed
+ * the wait with.
+ */
+export function recordPoolWait(ctx: RequestCounters, ms: number, at: number): void {
+  ctx.poolWaitMs += ms;
+  if (ms > ctx.maxPoolWaitMs) {
+    ctx.maxPoolWaitMs = ms;
+    ctx.maxPoolWaitAt = at;
+  }
 }
 
 export function countError(ctx: RequestCounters | undefined, name: string): void {
@@ -47,6 +76,10 @@ export class Stats {
     e.providerRetries += c.providerRetries;
     e.redisOps += c.redisOps;
     e.poolWaitMs += c.poolWaitMs;
+    if (c.maxPoolWaitMs > e.maxPoolWaitMs) {
+      e.maxPoolWaitMs = c.maxPoolWaitMs;
+      e.maxPoolWaitAt = c.maxPoolWaitAt;
+    }
     for (const [name, n] of Object.entries(c.errors)) e.errors[name] = (e.errors[name] ?? 0) + n;
     this.endpoints.set(endpoint, e);
   }

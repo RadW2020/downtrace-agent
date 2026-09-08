@@ -26,25 +26,39 @@ describe("poolWaitSince", () => {
     const app = await startApp(() => ({
       status: 200,
       body: {
-        "GET /products": { poolWaitMs: 12.5, requests: 100 },
-        "POST /checkout": { poolWaitMs: 340.25, requests: 10 },
+        "GET /products": { poolWaitMs: 12.5, maxPoolWaitMs: 4, maxPoolWaitAt: 1000, requests: 100 },
+        "POST /checkout": { poolWaitMs: 340.25, maxPoolWaitMs: 91, maxPoolWaitAt: 2000, requests: 10 },
       },
     }));
-    expect(await poolWaitSince(app.url, false)).toBeCloseTo(352.75, 2);
+    expect((await poolWaitSince(app.url, false)).totalMs).toBeCloseTo(352.75, 2);
     expect(app.seen).toEqual(["GET /__admin/stats"]);
+  });
+
+  // Which route waited longest is not the question; when the database stopped answering is (gh-177).
+  it("keeps the single worst wait and its instant, not the worst route's total", async () => {
+    const app = await startApp(() => ({
+      status: 200,
+      body: {
+        "GET /products": { poolWaitMs: 900, maxPoolWaitMs: 4, maxPoolWaitAt: 1000 },
+        "POST /checkout": { poolWaitMs: 91, maxPoolWaitMs: 91, maxPoolWaitAt: 2000 },
+      },
+    }));
+    const wait = await poolWaitSince(app.url, false);
+    expect(wait.maxMs).toBe(91);
+    expect(wait.maxAt).toBe(2000);
   });
 
   // The warmup is where the app is cold on purpose; counting its waits would mix the start-up into the measurement.
   it("resets the counters when asked, and reports nothing then", async () => {
     const app = await startApp(() => ({ status: 204 }));
-    expect(await poolWaitSince(app.url, true)).toBe(0);
+    expect(await poolWaitSince(app.url, true)).toEqual({ totalMs: 0, maxMs: 0, maxAt: undefined });
     expect(app.seen).toEqual(["POST /__admin/stats/reset"]);
   });
 
   // A route that never waited has no counter at all, which is not the same as a broken response.
   it("treats a missing counter as no wait", async () => {
     const app = await startApp(() => ({ status: 200, body: { "GET /healthz": { requests: 3 } } }));
-    expect(await poolWaitSince(app.url, false)).toBe(0);
+    expect(await poolWaitSince(app.url, false)).toEqual({ totalMs: 0, maxMs: 0, maxAt: undefined });
   });
 
   it("throws instead of reporting zero when the app will not answer", async () => {

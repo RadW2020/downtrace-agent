@@ -29,16 +29,39 @@ export async function snapshot(baseUrl: string): Promise<ProcessSnapshot> {
  * A round that ran out of connections shows it here instead of only in a 5000 ms p99 that has to be read as a
  * symptom (gh-177).
  */
-export async function poolWaitSince(baseUrl: string, reset: boolean): Promise<number> {
+export interface PoolWait {
+  /** Summed across routes, over the window. */
+  totalMs: number;
+  /**
+   * The longest single wait and when it happened. A total over sixty seconds cannot be lined up with what the
+   * database was doing; one instant can, to the second (gh-177).
+   */
+  maxMs: number;
+  maxAt: number | undefined;
+}
+
+export async function poolWaitSince(baseUrl: string, reset: boolean): Promise<PoolWait> {
   if (reset) {
     const res = await fetch(`${baseUrl}/__admin/stats/reset`, { method: "POST", signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`/__admin/stats/reset responded ${res.status}`);
-    return 0;
+    return { totalMs: 0, maxMs: 0, maxAt: undefined };
   }
   const res = await fetch(`${baseUrl}/__admin/stats`, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`/__admin/stats responded ${res.status}`);
-  const stats = (await res.json()) as Record<string, { poolWaitMs?: number }>;
-  return Object.values(stats).reduce((total, e) => total + (e.poolWaitMs ?? 0), 0);
+  const stats = (await res.json()) as Record<
+    string,
+    { poolWaitMs?: number; maxPoolWaitMs?: number; maxPoolWaitAt?: number }
+  >;
+  const wait: PoolWait = { totalMs: 0, maxMs: 0, maxAt: undefined };
+  for (const endpoint of Object.values(stats)) {
+    wait.totalMs += endpoint.poolWaitMs ?? 0;
+    const worst = endpoint.maxPoolWaitMs ?? 0;
+    if (worst > wait.maxMs) {
+      wait.maxMs = worst;
+      wait.maxAt = endpoint.maxPoolWaitAt;
+    }
+  }
+  return wait;
 }
 
 /**

@@ -1,6 +1,6 @@
 import pg from "pg";
 import { PoolTimeoutError } from "./errors.ts";
-import type { RequestCounters } from "./stats.ts";
+import { type RequestCounters, recordPoolWait } from "./stats.ts";
 
 export interface DbOptions {
   connectionString: string;
@@ -38,7 +38,7 @@ export class Db {
       if (err instanceof Error && /timeout exceeded/i.test(err.message)) throw new PoolTimeoutError(err);
       throw err;
     } finally {
-      ctx.poolWaitMs += performance.now() - start;
+      recordPoolWait(ctx, performance.now() - start, Date.now());
     }
   }
 

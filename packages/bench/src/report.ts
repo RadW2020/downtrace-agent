@@ -1,6 +1,6 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import type { LoadReport } from "./load.ts";
-import type { ResourceUsage } from "./process-sampler.ts";
+import type { PoolWait, ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
 import type { MetricVerdict, Verdict } from "./verdict.ts";
 import type { WarmupResult } from "./warmup.ts";
@@ -19,7 +19,7 @@ export interface RoundResult {
    * routes. A round that ran out of connections shows it here instead of only as a 5000 ms p99 someone has to read
    * as a symptom (gh-177).
    */
-  poolWaitMs: number;
+  poolWait: PoolWait;
   /** First distinct error lines the app wrote to stderr during the round; only present when there were errors. */
   firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
@@ -69,11 +69,11 @@ export function toMarkdown(r: BenchReport): string {
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | pool wait ms | batches |",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | worst pool wait | batches |",
     "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
       (x, i) =>
-        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${Math.round(x.poolWaitMs)} | ${x.sink ? x.sink.batches : "—"} |`,
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${poolWaitCell(x.poolWait)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",
@@ -101,6 +101,16 @@ export async function appendStepSummary(markdown: string, env: NodeJS.ProcessEnv
 }
 
 /** Δ of an agent round against the baseline rounds' median, as the latency rule saw it. Blank for baseline rounds. */
+/**
+ * The worst single wait and the second it happened, so the round can be lined up with the database's own log.
+ * An em dash rather than "0 ms" when nothing waited: a zero with a timestamp would read as a measurement (gh-177).
+ */
+export function poolWaitCell(wait: PoolWait): string {
+  if (wait.maxMs <= 0 || wait.maxAt === undefined) return "—";
+  const at = new Date(wait.maxAt).toISOString().slice(11, 19);
+  return `${Math.round(wait.maxMs)} ms @ ${at} (${Math.round(wait.totalMs)} total)`;
+}
+
 function roundDelta(r: BenchReport, index: number): string {
   const round = r.rounds[index];
   if (!round || round.variant !== "agent") return "—";

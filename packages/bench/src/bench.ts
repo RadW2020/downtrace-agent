@@ -121,14 +121,14 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           seed: config.seed,
         });
         const usage = await sampler.stop();
-        const poolWaitMs = await poolWaitSince(app.baseUrl, false);
+        const poolWait = await poolWaitSince(app.baseUrl, false);
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
         // Both variants when both have one: with `baselineEnv` (bench-instruments) the baseline is another
         // agent configuration and also ships, so discarding its batches hid half of a paired comparison
         // that could be just as broken (gh-152). Without it the baseline has no sink and this stays undefined.
         const sinkStats = sink ? { ...sink.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
-        rounds.push({ round, variant, warmup, load, usage, poolWaitMs, sink: sinkStats, firstErrors });
+        rounds.push({ round, variant, warmup, load, usage, poolWait, sink: sinkStats, firstErrors });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";
         const appSaid = firstErrors ? ` · app: ${firstErrors.join(" | ")}` : "";
         log(
