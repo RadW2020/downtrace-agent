@@ -10,7 +10,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -58,6 +58,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
+        },
+        "observers": {
+          "$ref": "#/$defs/Observers",
+          "description": "Absent from an instrumentation older than protocol 0.7.0. Absent is not 'nothing is observed': it is 'this one did not say', and the two must not be shown alike."
         }
       }
     },
@@ -456,6 +460,31 @@
           "type": "integer",
           "minimum": 0,
           "description": "Only on the `(other)` bucket: how many distinct operations it merges, so a cap does not become a lie by omission."
+        }
+      }
+    },
+    "ObserverState": {
+      "title": "ObserverState",
+      "enum": ["on", "off", "unavailable"],
+      "description": "Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14)."
+    },
+    "Observers": {
+      "title": "Observers",
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the instrumentation is watching, by switch. The keys are the switches of `DOWNTRACE_INSTRUMENT`, so this says `pg` where a dependency says `postgres`: one is the switch and the other is the thing observed.",
+      "properties": {
+        "pg": {
+          "$ref": "#/$defs/ObserverState"
+        },
+        "http": {
+          "$ref": "#/$defs/ObserverState"
+        },
+        "redis": {
+          "$ref": "#/$defs/ObserverState"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ObserverState"
         }
       }
     }
