@@ -1,5 +1,15 @@
 # @downtrace/protocol
 
+## 0.6.0
+
+### Minor Changes
+
+- d61306f: Protocol 0.6.0: a batch may carry a `profile` — what each route normally does, sent on its own cadence — with `operations` per endpoint. An operation is a `hash` (the identity, which is what the cloud groups by) plus an optional normalised `text` (the label a person reads), so suppressing the text keeps the analysis whole. Additive and optional: agents speaking 0.1 to 0.5 stay valid.
+
+### Patch Changes
+
+- ef6a542: `AGGREGATES_PATH` is now generated from the schema's `x-ingest-path` annotation instead of being written next to it.
+
 ## 0.5.0
 
 ### Minor Changes

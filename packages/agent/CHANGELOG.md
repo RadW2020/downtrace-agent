@@ -1,5 +1,14 @@
 # @downtrace/agent
 
+## 0.5.2
+
+### Patch Changes
+
+- 55f89d1: The README and the package's own warnings say **instrumentation** instead of "the agent". Two things in Downtrace could be called an agent — this library, and a coding agent that queries and operates the product — and a message someone reads while debugging is the worst place for that ambiguity. The npm name is unchanged on purpose.
+- Updated dependencies [ef6a542]
+- Updated dependencies [d61306f]
+  - @downtrace/protocol@0.6.0
+
 ## 0.5.1
 
 ### Patch Changes
