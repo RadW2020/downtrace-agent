@@ -13,5 +13,5 @@ const result = configFromEnv();
 if (result.ok) {
   createAgent(result.config, { log: createLogger(result.config.debug), handleSignals: true }).start();
 } else {
-  createLogger(false).warn(`agent disabled: ${result.reason}`);
+  createLogger(false).warn(`instrumentation disabled: ${result.reason}`);
 }

@@ -17,7 +17,7 @@ describe("register entry point", () => {
       process.stderr.write = orig;
     }
     expect(lines.filter((l) => l.includes("[downtrace]"))).toHaveLength(1);
-    expect(lines[0]).toMatch(/agent disabled: DOWNTRACE_TOKEN and DOWNTRACE_URL are not set/);
+    expect(lines[0]).toMatch(/instrumentation disabled: DOWNTRACE_TOKEN and DOWNTRACE_URL are not set/);
     expect(Object.keys(globalThis).sort()).toEqual(before);
   });
 });

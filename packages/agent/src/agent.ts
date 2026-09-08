@@ -211,7 +211,9 @@ export class Agent {
     this.log.debug(`internal error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     if (this.internalErrors >= MAX_INTERNAL_ERRORS && !this.disabled) {
       this.disabled = true;
-      this.log.warn(`agent disabled after ${this.internalErrors} internal errors; your application is unaffected`);
+      this.log.warn(
+        `instrumentation disabled after ${this.internalErrors} internal errors; your application is unaffected`,
+      );
       void this.stop();
     }
   }
