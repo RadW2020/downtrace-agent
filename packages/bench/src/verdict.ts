@@ -186,9 +186,13 @@ export interface RoundDelivery {
 }
 
 /**
- * An agent round that delivered nothing was not a measurement of the agent shipping: it was a measurement of an
- * agent posting into the void. The overhead of aggregating, serializing and sending is exactly what the budget is
- * about, so a run where none of that arrived cannot produce a verdict about it (gh-134).
+ * A round that had a sink and delivered nothing to it was not a measurement of an agent shipping: it was a
+ * measurement of an agent posting into the void. The overhead of aggregating, serializing and sending is exactly
+ * what the budget is about, so a run where none of that arrived cannot produce a verdict about it (gh-134).
+ *
+ * Any round with a sink, not only the agent's: with `baselineEnv` the baseline is another agent configuration and
+ * ships too, and a paired comparison where one side delivered nothing is as broken as one where the other did
+ * (gh-152). A round without a sink says nothing about delivery and is left alone.
  *
  * Only "delivered nothing at all" counts. How many batches a round should produce depends on the interval and the
  * length of the round, and guessing a minimum here would turn a timing detail into a red.
@@ -198,11 +202,11 @@ export function applyUndeliveredBatches(
   reason: string | undefined,
   rounds: readonly RoundDelivery[],
 ): { verdict: Verdict; reason?: string } {
-  const silent = rounds.filter((r) => r.variant === "agent" && r.batches !== undefined && r.batches === 0);
+  const silent = rounds.filter((r) => r.batches === 0);
   // Nothing to say: keep the verdict exactly as it was, key and all (exactOptionalPropertyTypes).
   if (silent.length === 0) return reason === undefined ? { verdict } : { verdict, reason };
   const which = silent.map((r) => `${r.variant}#${r.round}`).join(", ");
-  const said = `agent rounds delivered no batches to the sink (${which}): nothing was measured about shipping`;
+  const said = `rounds delivered no batches to the sink (${which}): nothing was measured about shipping`;
   return { verdict: "fail", reason: reason ? `${reason} · ${said}` : said };
 }
 

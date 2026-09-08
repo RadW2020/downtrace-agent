@@ -299,18 +299,28 @@ describe("applyUndeliveredBatches", () => {
     });
   });
 
-  // A baseline round has no sink at all, so `batches` is undefined and says nothing about delivery.
+  // A round with no sink has `batches` undefined and says nothing about delivery. In the normal benchmark that is
+  // every baseline round.
   it("says nothing about rounds that had no sink", () => {
     expect(applyUndeliveredBatches("pass", undefined, [round("baseline", 1), round("baseline", 2)])).toEqual({
       verdict: "pass",
     });
   });
 
+  // With `baselineEnv` (bench-instruments) the baseline is another agent configuration and ships too. A paired
+  // comparison where that side delivered nothing is as broken as one where the other did (gh-152).
+  it("fails when the baseline had a sink and delivered nothing either", () => {
+    const got = applyUndeliveredBatches("pass", undefined, [round("baseline", 1, 0), round("agent", 1, 5)]);
+    expect(got.verdict).toBe("fail");
+    expect(got.reason).toContain("baseline#1");
+    expect(got.reason).not.toContain("agent#1");
+  });
+
   it("adds its reason to one that was already there instead of hiding it", () => {
     const got = applyUndeliveredBatches("fail", "overhead budget exceeded", [round("agent", 2, 0)]);
     expect(got.verdict).toBe("fail");
     expect(got.reason).toBe(
-      "overhead budget exceeded · agent rounds delivered no batches to the sink (agent#2): nothing was measured about shipping",
+      "overhead budget exceeded · rounds delivered no batches to the sink (agent#2): nothing was measured about shipping",
     );
   });
 

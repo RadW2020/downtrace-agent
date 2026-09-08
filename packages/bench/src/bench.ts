@@ -119,7 +119,10 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         });
         const usage = await sampler.stop();
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
-        const sinkStats = variant === "agent" && sink ? { ...sink.stats } : undefined;
+        // Both variants when both have one: with `baselineEnv` (bench-instruments) the baseline is another
+        // agent configuration and also ships, so discarding its batches hid half of a paired comparison
+        // that could be just as broken (gh-152). Without it the baseline has no sink and this stays undefined.
+        const sinkStats = sink ? { ...sink.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
         rounds.push({ round, variant, warmup, load, usage, sink: sinkStats, firstErrors });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";
