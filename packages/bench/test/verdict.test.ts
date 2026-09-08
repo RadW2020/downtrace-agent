@@ -4,6 +4,7 @@ import { pooledPercentile, splitHalfNoise } from "../src/stats.ts";
 import {
   type Aborted,
   applyRoundErrors,
+  applyUndeliveredBatches,
   combineWithAbort,
   evaluate,
   type RoundMetrics,
@@ -271,5 +272,50 @@ describe("combineWithAbort", () => {
   it("with nothing failing in the measured rounds, the abort decides", () => {
     expect(combineWithAbort({ verdict: "pass" }, abortedBaseline)).toEqual(abortedBaseline);
     expect(combineWithAbort({ verdict: "inconclusive" }, abortedAgent)).toEqual(abortedAgent);
+  });
+});
+
+describe("applyUndeliveredBatches", () => {
+  const round = (variant: "baseline" | "agent", n: number, batches?: number) => ({
+    variant,
+    round: n,
+    batches,
+  });
+
+  it("fails when an agent round delivered nothing, naming the round", () => {
+    const got = applyUndeliveredBatches("pass", undefined, [round("baseline", 1), round("agent", 1, 0)]);
+    expect(got.verdict).toBe("fail");
+    expect(got.reason).toContain("agent#1");
+    expect(got.reason).toContain("no batches");
+  });
+
+  it("keeps the verdict and the reason untouched when every agent round delivered", () => {
+    expect(applyUndeliveredBatches("pass", undefined, [round("baseline", 1), round("agent", 1, 3)])).toEqual({
+      verdict: "pass",
+    });
+    expect(applyUndeliveredBatches("inconclusive", "machine noise", [round("agent", 1, 1)])).toEqual({
+      verdict: "inconclusive",
+      reason: "machine noise",
+    });
+  });
+
+  // A baseline round has no sink at all, so `batches` is undefined and says nothing about delivery.
+  it("says nothing about rounds that had no sink", () => {
+    expect(applyUndeliveredBatches("pass", undefined, [round("baseline", 1), round("baseline", 2)])).toEqual({
+      verdict: "pass",
+    });
+  });
+
+  it("adds its reason to one that was already there instead of hiding it", () => {
+    const got = applyUndeliveredBatches("fail", "overhead budget exceeded", [round("agent", 2, 0)]);
+    expect(got.verdict).toBe("fail");
+    expect(got.reason).toBe(
+      "overhead budget exceeded · agent rounds delivered no batches to the sink (agent#2): nothing was measured about shipping",
+    );
+  });
+
+  // How many batches a round produces depends on the interval and the round's length; only zero is a broken setup.
+  it("does not judge how many batches arrived, only that some did", () => {
+    expect(applyUndeliveredBatches("pass", undefined, [round("agent", 1, 1)]).verdict).toBe("pass");
   });
 });

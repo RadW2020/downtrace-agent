@@ -44,6 +44,10 @@ importers:
         version: 5.2.1
 
   packages/bench:
+    dependencies:
+      '@downtrace/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@downtrace/reference-app':
         specifier: workspace:*

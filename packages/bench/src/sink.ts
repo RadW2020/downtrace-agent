@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { AGGREGATES_PATH } from "@downtrace/protocol";
 
 export interface SinkStats {
   batches: number;
@@ -11,9 +12,10 @@ export interface SinkStats {
 }
 
 /**
- * Stand-in for the cloud during the benchmark: accepts POST /v0/aggregates
- * with a bearer token, answers 202 and counts what it received, so the report
- * can prove the agent was live and how much it shipped.
+ * Stand-in for the cloud during the benchmark: accepts the contract's ingest path with a bearer token, answers 202
+ * and counts what it received, so the report can prove the agent was live and how much it shipped. The path comes
+ * from @downtrace/protocol, where it is defined once (gh-127): a copy here would be a second place to change, and
+ * if the two drifted the agent would post into a 404 and the benchmark would measure that instead.
  */
 export class Sink {
   readonly stats: SinkStats = { batches: 0, intervals: 0, endpoints: 0, requests: 0, rejected: 0 };
@@ -43,7 +45,7 @@ export class Sink {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
-      if (req.method !== "POST" || req.url !== "/v0/aggregates") {
+      if (req.method !== "POST" || req.url !== AGGREGATES_PATH) {
         res.writeHead(404).end();
         return;
       }

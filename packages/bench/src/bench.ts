@@ -7,6 +7,7 @@ import { Sink } from "./sink.ts";
 import {
   type Aborted,
   applyRoundErrors,
+  applyUndeliveredBatches,
   combineWithAbort,
   describeStatuses,
   evaluate,
@@ -144,7 +145,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
       firstErrors: r.firstErrors,
     })),
   );
-  const checked = combineWithAbort(measured, aborted);
+  // A run where the agent never delivered a batch measured an agent posting into the void, not an agent shipping.
+  const delivered = applyUndeliveredBatches(
+    measured.verdict,
+    measured.reason,
+    rounds.map((r) => ({ variant: r.variant, round: r.round, batches: r.sink?.batches })),
+  );
+  const checked = combineWithAbort(delivered, aborted);
   return {
     generatedAt: new Date().toISOString(),
     node: process.version,

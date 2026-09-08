@@ -17,5 +17,8 @@
   },
   "devDependencies": {
     "@downtrace/reference-app": "workspace:*"
+  },
+  "dependencies": {
+    "@downtrace/protocol": "workspace:*"
   }
 }
