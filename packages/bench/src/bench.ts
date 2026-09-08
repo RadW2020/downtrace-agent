@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { type AppHandle, startReferenceApp } from "./app-process.ts";
 import { runLoad } from "./load.ts";
-import { ProcessSampler, resetDatabase } from "./process-sampler.ts";
+import { ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import {
@@ -109,6 +109,9 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         }
         // The measured round reports its own errors: a cold start during warmup must not fill the cap.
         app.resetErrors();
+        // The app's own counters start at zero with the measured window, so the warmup's cold start stays out of
+        // the pool wait this round reports (gh-177).
+        await poolWaitSince(app.baseUrl, true);
         const sampler = new ProcessSampler(app.baseUrl);
         await sampler.start();
         const load = await runLoad({
@@ -118,13 +121,14 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           seed: config.seed,
         });
         const usage = await sampler.stop();
+        const poolWaitMs = await poolWaitSince(app.baseUrl, false);
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
         // Both variants when both have one: with `baselineEnv` (bench-instruments) the baseline is another
         // agent configuration and also ships, so discarding its batches hid half of a paired comparison
         // that could be just as broken (gh-152). Without it the baseline has no sink and this stays undefined.
         const sinkStats = sink ? { ...sink.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
-        rounds.push({ round, variant, warmup, load, usage, sink: sinkStats, firstErrors });
+        rounds.push({ round, variant, warmup, load, usage, poolWaitMs, sink: sinkStats, firstErrors });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";
         const appSaid = firstErrors ? ` · app: ${firstErrors.join(" | ")}` : "";
         log(

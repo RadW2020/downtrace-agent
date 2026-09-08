@@ -14,6 +14,12 @@ export interface RoundResult {
   warmup: WarmupResult;
   load: LoadReport;
   usage: ResourceUsage;
+  /**
+   * Milliseconds requests spent waiting for a database connection during the measured window, summed across
+   * routes. A round that ran out of connections shows it here instead of only as a 5000 ms p99 someone has to read
+   * as a symptom (gh-177).
+   */
+  poolWaitMs: number;
   /** First distinct error lines the app wrote to stderr during the round; only present when there were errors. */
   firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
@@ -63,11 +69,11 @@ export function toMarkdown(r: BenchReport): string {
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | batches |",
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | pool wait ms | batches |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
       (x, i) =>
-        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.sink ? x.sink.batches : "—"} |`,
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${Math.round(x.poolWaitMs)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",

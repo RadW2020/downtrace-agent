@@ -22,6 +22,26 @@ export async function snapshot(baseUrl: string): Promise<ProcessSnapshot> {
 }
 
 /**
+ * How long requests spent waiting for a database connection during the window, summed across routes.
+ *
+ * The app already counts it per request; this reads it from the same admin surface the sampler uses, resetting at
+ * the start of the window so the warmup — where the app is cold on purpose — does not leak into the measurement.
+ * A round that ran out of connections shows it here instead of only in a 5000 ms p99 that has to be read as a
+ * symptom (gh-177).
+ */
+export async function poolWaitSince(baseUrl: string, reset: boolean): Promise<number> {
+  if (reset) {
+    const res = await fetch(`${baseUrl}/__admin/stats/reset`, { method: "POST", signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`/__admin/stats/reset responded ${res.status}`);
+    return 0;
+  }
+  const res = await fetch(`${baseUrl}/__admin/stats`, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`/__admin/stats responded ${res.status}`);
+  const stats = (await res.json()) as Record<string, { poolWaitMs?: number }>;
+  return Object.values(stats).reduce((total, e) => total + (e.poolWaitMs ?? 0), 0);
+}
+
+/**
  * Puts the app's database back to a known size. Called before every round: the benchmark's whole method is
  * comparing rounds with each other, and rounds are only comparable if they start equal (ADR 0021). The reference
  * app owns its schema and does the truncating, so this package keeps having no dependencies.
