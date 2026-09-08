@@ -1,6 +1,6 @@
 # ADR 0009 — Cómo el agente observa el driver de base de datos
 
-Estado: aceptado · Fecha: 2026-09-05 · Alcance: público
+Estado: aceptado; su consecuencia sobre que el bench comprueba el presupuesto en cada ejecución de CI está **superada por el ADR 0032** · Fecha: 2026-09-05 · Alcance: público
 
 ## Contexto
 
@@ -31,4 +31,7 @@ Se probaron tres mecanismos sobre Node 26 antes de decidir (las pruebas están e
 - El orden importa: el agente debe cargarse antes que la aplicación. Ya es el modo de uso documentado (`node --import @downtrace/agent/register`), y sin él el agente tampoco vería las requests.
 - Una aplicación que cargue `pg` por una ruta que el agente no resuelva (varias copias de `pg` en el árbol, un bundle) no queda instrumentada: el agente lo dice en modo depuración y sigue funcionando sin la composición.
 - Añadir MySQL, Redis o HTTP saliente sigue este mismo patrón; cada driver nuevo es un módulo bajo `src/instrument/`.
-- El coste por request entra en el presupuesto del invariante 3, que el bench comprueba en cada ejecución de CI.
+- El coste por request entra en el presupuesto del invariante 3. **Esta consecuencia está superada por el ADR
+  0032**: el benchmark salió del pipeline el 2026-09-08 y ya no comprueba nada en cada ejecución de CI; se
+  lanza a mano con `make bench`. La decisión de este ADR no cambia; lo que dejó de ser cierto es quién la
+  vigila.
