@@ -1,6 +1,6 @@
 # ADR 0034 — El contenido observado vive bajo su propia clave
 
-Estado: aceptado · Fecha: 2026-09-08 · Alcance: público
+Estado: aceptado; su elección de clave —`observed`— está **superada por el ADR 0036**, que la renombra a `fromService` porque `observed` ya significaba «lo medido» en el detalle de un incidente; el resto de la decisión se mantiene · Fecha: 2026-09-08 · Alcance: público
 
 ## Contexto
 
