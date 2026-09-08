@@ -31,6 +31,25 @@ La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y 
 
 `load` (`pnpm --filter @downtrace/bench run load …`): `--url` (`http://127.0.0.1:4000`), `--rps` (200), `--duration` (10), `--seed` (42) y `--json` para el informe completo en vez de la tabla. Sale con 1 si alguna request falló.
 
+## Cuándo vale su número
+
+**El benchmark no corre en CI** (ADR 0032). Se lanza a mano, y su número solo vale si se lanza bien:
+
+- **La máquina para él solo.** Es una medida comparativa: el baseline y la variante con agente tienen que ver la
+  misma máquina. Cualquier otra cosa que consuma CPU durante los veinte minutos —otro build, un contenedor
+  pesado, otra pestaña compilando— se reparte entre las rondas de forma desigual y sale como si fuera el agente.
+  Así se descubrió: midiendo en una VM donde corría el resto de CI, las siete peores esperas de conexión de una
+  tirada cayeron dentro de un job del runner vecino (gh-200).
+- **En la arquitectura donde se despliega.** El ADR 0020 midió que las cifras de x86 nunca verificaron el
+  presupuesto: su ruido era de 3,998 ms contra un presupuesto de 1 ms. Un verde cómodo y falso.
+- **Leyendo el informe, no solo el veredicto.** La tabla por ronda dice la CPU ajena que vio cada una y la peor
+  espera de conexión con su hora. Si esas dos columnas se mueven entre las dos mitades de un par, ese par no es
+  una comparación, y el veredicto lo dirá.
+
+Y una limitación que conviene saber de antemano: el p99 de la propia aplicación de referencia es de unos 24 ms y
+se mueve varios milisegundos entre rondas, así que la línea de 1 ms del invariante 3 está por debajo de lo que
+este montaje resuelve. La CPU, con 3 puntos de presupuesto, sí es medible.
+
 ## Cómo mide
 
 - **Bucle abierto**: las requests salen a tasa fija con independencia de lo que tarde el servidor, y la latencia se mide desde el instante *programado* de envío. Un servidor que se retrasa aparece como cola, no se esconde tras un cliente más lento.
