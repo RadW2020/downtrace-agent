@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { runBench } from "./bench.ts";
+import { EXACT_LIMIT, gate, permutationP, roundsToResolve, smallestP } from "./significance.ts";
 import { round } from "./stats.ts";
 
 /**
@@ -14,6 +15,9 @@ import { round } from "./stats.ts";
  * observer's cost. The first row is the only one measured against no agent at all.
  *
  * It is not part of CI: it is one full benchmark per step, and it is a tool for a decision, not a gate.
+ *
+ * Whether a row is a measurement or the machine having a moment is decided in `significance.ts`, which answers
+ * the two things this run gets wrong if left to a fixed interval: few rounds, and several comparisons at once.
  */
 const { values } = parseArgs({
   allowPositionals: true,
@@ -26,7 +30,6 @@ const { values } = parseArgs({
 });
 
 const num = (v: string | undefined, fallback: number): number => (v === undefined ? fallback : Number(v));
-const rounds = num(values.rounds, 5);
 const measureSec = num(values.measure, 12);
 const rps = num(values.rps, 200);
 const seed = num(values.seed, 1);
@@ -40,12 +43,31 @@ const steps = [
   { name: "redis", from: "runtime,pg,http", to: "runtime,pg,http,redis" },
 ];
 
+// The default is the fewest rounds at which any row could clear the gate. Fewer is a run that cannot conclude.
+const rounds = num(values.rounds, roundsToResolve(steps.length));
+
 interface Step {
   name: string;
   cpu: number;
   cpuNoise: number;
   p99: number;
+  p: number;
+  exact: boolean;
   resolved: boolean;
+  /** Kept so a later doubt is answered by rereading this report, not by measuring again. */
+  differences: readonly number[];
+}
+
+// Said before the machine is spent, not after: with too few rounds the smallest reachable p is above the gate,
+// so no result could clear it however clean the machine, and the whole run would prove nothing.
+const alpha = gate(1, steps.length).alpha;
+if (smallestP(rounds) >= alpha) {
+  const needed = roundsToResolve(steps.length);
+  console.error(
+    `[bench] ${rounds} rounds/side cannot resolve ${steps.length} comparisons: the smallest reachable p is ` +
+      `${round(smallestP(rounds), 4)} and the gate is ${round(alpha, 4)}. Use --rounds ${needed} or more.`,
+  );
+  process.exit(1);
 }
 
 const results: Step[] = [];
@@ -68,13 +90,17 @@ for (const step of steps) {
   const cpuOf = (variant: string) => report.rounds.filter((r) => r.variant === variant).map((r) => r.usage.cpuPct);
   const differences = cpuOf("agent").map((v, i) => v - (cpuOf("baseline")[i] ?? Number.NaN));
   const { mean, stderr } = pairedDifference(differences);
+  const significance = permutationP(differences, { seed });
   results.push({
     name: step.name,
     cpu: mean,
-    // Two standard errors: the interval a difference has to clear before it is worth calling a measurement.
+    // Two standard errors, kept as a plain description of the spread. It is not what decides the row.
     cpuNoise: 2 * stderr,
     p99: report.metrics.find((m) => m.metric === "p99Ms")?.delta ?? Number.NaN,
-    resolved: Math.abs(mean) > 2 * stderr,
+    p: significance.p,
+    exact: significance.exact,
+    resolved: gate(significance.p, steps.length).resolved,
+    differences,
   });
 }
 
@@ -90,6 +116,7 @@ function pairedDifference(differences: readonly number[]): { mean: number; stder
   return { mean, stderr: Math.sqrt(variance / n) };
 }
 
+const sampled = results.some((r) => !r.exact);
 const lines = [
   `### What each observer costs · ${rounds} rounds/side · ${rps} rps · ${measureSec}s measured`,
   "",
@@ -97,15 +124,18 @@ const lines = [
   "first row is the agent with nothing switched on, against no agent at all.",
   "",
   "CPU is compared **round by round**: rounds alternate in time, so each pair saw the same machine, and",
-  "differencing them first removes most of what the machine was doing. The interval is two standard errors of",
-  "those differences. Where `resolved?` says no, this machine could not measure that observer and the number",
-  "should not be read as one.",
+  "differencing them first removes most of what the machine was doing. Whether a row is a measurement is decided",
+  "by a permutation test over the signs of those differences — no assumption about their shape — at a level of",
+  `${round(alpha, 4)}, which is 0.05 shared among the ${steps.length} comparisons this run makes. Where`,
+  "`resolved?` says no, this machine could not measure that observer and the number should not be read as one.",
+  ...(sampled ? ["", `With more than ${EXACT_LIMIT} rounds the p values are sampled, not enumerated.`] : []),
   "",
-  "| Cost of | ΔCPU (pp) | ± 2 s.e. | resolved? | Δp99 (ms) |",
-  "|---|---:|---:|:-:|---:|",
+  "| Cost of | ΔCPU (pp) | ± 2 s.e. | p | resolved? | Δp99 (ms) |",
+  "|---|---:|---:|---:|:-:|---:|",
   ...results.map(
     (r) =>
-      `| ${r.name} | ${signed(round(r.cpu, 3))} | ${round(r.cpuNoise, 3)} | ${r.resolved ? "yes" : "no"} | ${signed(round(r.p99, 3))} |`,
+      `| ${r.name} | ${signed(round(r.cpu, 3))} | ${round(r.cpuNoise, 3)} | ${round(r.p, 4)} | ` +
+      `${r.resolved ? "yes" : "no"} | ${signed(round(r.p99, 3))} |`,
   ),
   "",
 ];
@@ -118,15 +148,11 @@ if (unresolved > 0) {
     "",
   );
 }
-// An interval that holds 19 times in 20 will fail once in 20, and this table makes several comparisons at once.
-const implausible = results.filter((r) => r.resolved && r.cpu < 0);
-if (implausible.length > 0) {
-  lines.push(
-    `Careful with ${implausible.map((r) => `**${r.name}**`).join(", ")}: resolved, but negative. An observer cannot`,
-    `make an application cheaper. With ${results.length} comparisons at this confidence, about one appearing resolved by`,
-    "chance is expected, and a negative cost is what that looks like. Treat it as noise, not as a finding.",
-    "",
-  );
-}
+
+// The whole point of keeping these: the next doubt about a number in the table above is settled by reading, and
+// an hour of benchmark is not spent twice on the same question.
+lines.push("#### The per-round differences behind each row (pp)", "");
+for (const r of results) lines.push(`- **${r.name}**: ${r.differences.map((d) => signed(round(d, 3))).join(", ")}`);
+lines.push("");
 
 console.log(lines.join("\n"));
