@@ -1,6 +1,6 @@
 # ADR 0003 — Metodología del benchmark de overhead del agente
 
-Estado: aceptado; su parte estadística (mediana de p99 por ronda, ruido máx−mín) y el agente falso están superados por el ADR 0007, y dar por comparables las rondas alternas sin fijar el estado de la base de datos lo supera el ADR 0021 · Fecha: 2026-09-03 · Alcance: público
+Estado: aceptado; su parte estadística (mediana de p99 por ronda, ruido máx−mín) y el agente falso están superados por el ADR 0007, dar por comparables las rondas alternas sin fijar el estado de la base de datos lo supera el ADR 0021, y la lectura de `packages/reference-app/.env` por el harness la supera el ADR 0023 · Fecha: 2026-09-03 · Alcance: público
 
 ## Contexto
 
@@ -30,4 +30,5 @@ El invariante 3 (< 1 ms en p99, < 3 puntos de CPU, < 64 MiB) es la promesa centr
 - Cada cambio en el agente pasa por `make bench` en CI (job `bench`), con informe en el resumen del job y `bench-report.json` como artefacto.
 - Un `inconclusive` repetido en CI es información: la máquina no resuelve 1 ms en p99 con la carga actual. La respuesta es subir muestras (rps o duración) o mover el benchmark a una máquina dedicada, no relajar el presupuesto.
 - La app de referencia gana `GET /__admin/process`; sigue sin depender del agente (se inyecta por ruta absoluta con `node --import`).
-- El harness arranca la app como proceso hijo leyendo `packages/reference-app/.env` si existe, con las variables del entorno por encima.
+- El harness arranca la app como proceso hijo leyendo `packages/reference-app/.env` si existe, con las variables del entorno por encima. — **Superado por el ADR 0023**: el harness exige `DATABASE_URL` y `REDIS_URL` por nombre
+  y no lee ningún fichero, porque dos números medidos desde arranques distintos no se pueden restar.

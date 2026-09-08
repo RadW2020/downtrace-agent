@@ -3,7 +3,6 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REF_APP_MAIN = fileURLToPath(new URL("../../reference-app/src/main.ts", import.meta.url));
-const REF_APP_ENV_FILE = fileURLToPath(new URL("../../reference-app/.env", import.meta.url));
 
 export interface AppHandle {
   pid: number;
@@ -61,9 +60,26 @@ export interface StartOptions {
  * Starts packages/reference-app/src/main.ts in a child Node process on random
  * ports and waits for its "listening" line. The reference app never depends on
  * the agent: whatever is measured is injected here, by absolute path.
+ *
+ * It used to start the app with --env-file-if-exists=packages/reference-app/.env, a gitignored file: present on
+ * the operator's machine, absent in CI, skipped in silence. The benchmark's whole value is that two numbers can be
+ * subtracted, and two numbers measured from different starting conditions cannot (ADR 0023). What the app needs is
+ * required by name instead.
  */
 export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
-  const args = [`--env-file-if-exists=${REF_APP_ENV_FILE}`];
+  for (const key of ["DATABASE_URL", "REDIS_URL"] as const) {
+    // Rejected, not thrown: this function's signature promises a Promise, and a caller using .catch() would crash
+    // instead of catching if it threw synchronously.
+    if (!process.env[key]) {
+      return Promise.reject(
+        new Error(
+          `${key} is not set: the reference app would fall back to its own default and the benchmark would ` +
+            `measure services nobody chose. Export it, or run \`make dev\` (see packages/bench/README.md).`,
+        ),
+      );
+    }
+  }
+  const args: string[] = [];
   if (opts.importPath) args.push("--import", pathToFileURL(opts.importPath).href);
   args.push(REF_APP_MAIN);
 

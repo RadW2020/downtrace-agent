@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ERROR_LINES, summarizeErrorLine } from "../src/app-process.ts";
+import { MAX_ERROR_LINES, startReferenceApp, summarizeErrorLine } from "../src/app-process.ts";
 
 describe("summarizeErrorLine", () => {
   it("turns the reference app's JSON error line into one readable line", () => {
@@ -47,5 +47,31 @@ describe("summarizeErrorLine", () => {
 
   it("caps the lines kept per round at a small number", () => {
     expect(MAX_ERROR_LINES).toBe(5);
+  });
+});
+
+describe("startReferenceApp", () => {
+  // The harness used to start the app with --env-file-if-exists on a gitignored file: present on one machine,
+  // absent in CI, skipped in silence. And the app has defaults, so nothing complained — it just measured a
+  // database nobody chose (gh-142, ADR 0023). Missing configuration has to stop the measurement, not colour it.
+  it("refuses to start the app without the services it must measure against", async () => {
+    const saved = { db: process.env.DATABASE_URL, redis: process.env.REDIS_URL };
+    try {
+      process.env.DATABASE_URL = "postgres://x/y";
+      delete process.env.REDIS_URL;
+      await expect(startReferenceApp()).rejects.toThrow("REDIS_URL is not set");
+
+      delete process.env.DATABASE_URL;
+      process.env.REDIS_URL = "redis://x";
+      await expect(startReferenceApp()).rejects.toThrow("DATABASE_URL is not set");
+    } finally {
+      for (const [key, value] of [
+        ["DATABASE_URL", saved.db],
+        ["REDIS_URL", saved.redis],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

@@ -10,7 +10,7 @@ make bench BENCH_ARGS="--warmup 3 --warmup-max 30 --measure 12"
 pnpm --filter @downtrace/bench run load --url http://127.0.0.1:4000 --rps 100 --duration 10 --seed 1
 ```
 
-Necesita Postgres y Redis (`make dev` o `DATABASE_URL`/`REDIS_URL`); la app de referencia la arranca el propio harness en procesos hijos con puertos aleatorios.
+Necesita `DATABASE_URL` y `REDIS_URL` **exportadas**: el harness las exige por nombre y no lee ningún fichero de entorno, porque dos números medidos desde arranques distintos no se pueden restar (ADR 0023). Si tu Postgres no está en el puerto de siempre: `set -a; . packages/reference-app/.env; set +a` antes de `make bench`, o `make dev`. La app de referencia la arranca el propio harness en procesos hijos con puertos aleatorios.
 
 ### Opciones
 
