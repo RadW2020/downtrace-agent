@@ -10,6 +10,11 @@ export interface AgentConfig {
   /** Which observers are on. `DOWNTRACE_INSTRUMENT` takes `all`, `none`, or a list like `pg,http`. */
   instrument: ReadonlySet<Instrument>;
   /**
+   * Where to write every batch exactly as it would be sent, or nothing. `stderr` or a path. With it set, the
+   * token and the URL become optional: the point is to be able to look before trusting anyone (gh-181).
+   */
+  inspect: string | undefined;
+  /**
    * Whether the normalised query text travels with the profile. `DOWNTRACE_QUERY_TEXT=off` suppresses it and
    * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
    */
@@ -40,10 +45,18 @@ export const VERSION_ENV_VARS = [
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResult {
   const token = env.DOWNTRACE_TOKEN?.trim() ?? "";
   const rawUrl = env.DOWNTRACE_URL?.trim() ?? "";
-  if (token === "" && rawUrl === "") return { ok: false, reason: "DOWNTRACE_TOKEN and DOWNTRACE_URL are not set" };
-  if (token === "") return { ok: false, reason: "DOWNTRACE_TOKEN is not set" };
-  if (rawUrl === "") return { ok: false, reason: "DOWNTRACE_URL is not set" };
-  if (!/^https?:\/\//.test(rawUrl)) return { ok: false, reason: "DOWNTRACE_URL must start with http:// or https://" };
+  const inspect = env.DOWNTRACE_INSPECT?.trim();
+  // Inspecting without a cloud is the path that matters: install, set one variable, run the application, read the
+  // file — before handing anything to anyone. Half a cloud is still a mistake worth naming, inspection or not.
+  const inspectOnly = inspect !== undefined && inspect !== "" && token === "" && rawUrl === "";
+  if (!inspectOnly) {
+    if (token === "" && rawUrl === "") return { ok: false, reason: "DOWNTRACE_TOKEN and DOWNTRACE_URL are not set" };
+    if (token === "") return { ok: false, reason: "DOWNTRACE_TOKEN is not set" };
+    if (rawUrl === "") return { ok: false, reason: "DOWNTRACE_URL is not set" };
+    if (!/^https?:\/\//.test(rawUrl)) {
+      return { ok: false, reason: "DOWNTRACE_URL must start with http:// or https://" };
+    }
+  }
 
   const interval = Number(env.DOWNTRACE_INTERVAL_MS);
   return {
@@ -57,6 +70,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
+      inspect: inspect === "" ? undefined : inspect,
     },
   };
 }

@@ -8,6 +8,7 @@ import {
   PROTOCOL_VERSION,
   type Profile,
 } from "@downtrace/protocol";
+import type { Inspector } from "./inspect.ts";
 import type { Logger } from "./log.ts";
 
 export interface SenderOptions {
@@ -21,6 +22,8 @@ export interface SenderOptions {
   maxQueued?: number | undefined;
   timeoutMs?: number | undefined;
   fetchImpl?: typeof fetch | undefined;
+  /** Writes every batch exactly as it would be sent. Absent means the inspection mode is off (gh-181). */
+  inspector?: Inspector | undefined;
 }
 
 export const DEFAULT_MAX_QUEUED = 6;
@@ -89,11 +92,22 @@ export class Sender {
       intervals: intervals as AggregatesBatch["intervals"],
       ...(profile ? { profile } : {}),
     };
+    const body = JSON.stringify(batch);
+    // Written before sending, and written the same whether the send succeeds or not: what the inspection mode
+    // shows is what this instrumentation produced, which is the question it exists to answer (gh-181).
+    await this.opts.inspector?.write(body);
+    // No cloud configured: inspecting is the whole job, and there is nothing to fail at.
+    if (this.opts.url === "" || this.opts.token === "") {
+      this.queue = this.queue.filter((iv) => !intervals.includes(iv));
+      if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
+      this.inflight = false;
+      return true;
+    }
     try {
       const res = await this.fetchImpl(`${this.opts.url}${AGGREGATES_PATH}`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.opts.token}` },
-        body: JSON.stringify(batch),
+        body,
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (res.ok) {

@@ -38,6 +38,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
+| `DOWNTRACE_INSPECT` | no | `stderr` or a file path: writes every batch exactly as it would be sent. With it set, `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` become optional |
 
 Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else. So you can add it to a deployment before you have a token: nothing changes until both exist.
 
@@ -127,6 +128,36 @@ replaced before anything is stored or sent, and that happens in your process, no
 not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it and changes nothing else — the hash is
 the identity, so you keep the whole analysis and only lose the readable label.
 
+## See exactly what would leave your server
+
+You do not have to take our word for it, and you do not need an account:
+
+```sh
+DOWNTRACE_INSPECT=./downtrace-batches.jsonl node --import @downtrace/agent/register app.js
+```
+
+That is the whole setup. No token, no URL, nothing sent anywhere. Your application runs instrumented, and every
+batch it *would* have shipped is appended to that file — the **exact bytes**, one JSON line each. Drive some real
+traffic through it and read what comes out:
+
+```sh
+# every route template it discovered
+jq -r '.intervals[].endpoints[].route' downtrace-batches.jsonl | sort -u
+
+# every query fingerprint, as it would travel
+jq -r '.profile.endpoints[]?.operations[]? | "\(.hash)  \(.text // "(no text)")"' downtrace-batches.jsonl
+
+# and the question that actually matters: is anything of yours in there?
+grep -i 'algo-que-no-deberia-salir' downtrace-batches.jsonl
+```
+
+It works with a cloud too. Set `DOWNTRACE_INSPECT` alongside your token and URL and it writes **and** sends, so a
+running deployment can be audited without turning it off, and what you read is what actually went out.
+
+Two things worth knowing: **the file grows and nothing rotates it** — it is yours, and so is deciding what to do
+with it — and it may contain the normalised text of your queries, which is the point, so give it the same care
+you would give an application log.
+
 ## Guarantees
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
@@ -137,7 +168,8 @@ the identity, so you keep the whole analysis and only lose the readable label.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
 - At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.
 - Query texts are normalised once per distinct text and cached, so repeating the same query costs a map lookup, not a re-parse.
-- Measured overhead budget, enforced in CI: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB.
+- Measured overhead budget: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB. Checked with `make bench` on a quiet machine, not on every change.
+- Nothing has to be taken on trust: `DOWNTRACE_INSPECT` writes the exact batch, and needs no account.
 
 ## Requirements
 

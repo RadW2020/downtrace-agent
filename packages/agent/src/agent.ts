@@ -6,6 +6,7 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import type { AgentConfig } from "./config.ts";
 import { enterRequest, type RequestContext } from "./context.ts";
 import { FingerprintCache } from "./fingerprint.ts";
+import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
@@ -106,6 +107,7 @@ export class Agent {
         deploy,
         log: this.log,
         fetchImpl: deps.fetchImpl,
+        inspector: createInspector(config.inspect, this.log),
       });
     this.handleSignals = deps.handleSignals ?? false;
     this.onSignal = {
