@@ -44,8 +44,12 @@ describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
       `[bench] empty agent verdict: ${report.verdict}`,
       report.metrics.map((m) => `${m.metric} Δ${m.delta} noise ${m.noise}`).join(" · "),
     );
-    // A verdict was reached from measured rounds, rather than the run being abandoned mid-way.
+    // A verdict was reached from measured rounds, rather than the run being abandoned mid-way. There may well be
+    // a reason attached, and demanding none never squared with allowing `inconclusive`, which by construction
+    // carries one: this runs on a CI machine with other jobs on it, and since gh-200 a pair whose two halves saw
+    // different neighbours is reported as not comparable. What must not appear is a warm-up abort — that would
+    // mean the harness never measured anything, which is the one thing this test is here to check.
     expect(["pass", "fail", "inconclusive"]).toContain(report.verdict);
-    expect(report.reason).toBeUndefined();
+    expect(report.reason ?? "").not.toContain("could not warm up");
   });
 });

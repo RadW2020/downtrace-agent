@@ -218,6 +218,56 @@ export function applyUndeliveredBatches(
   return { verdict: "fail", reason: reason ? `${reason} · ${said}` : said };
 }
 
+/** What one round saw of the machine outside this benchmark. */
+export interface RoundNeighbour {
+  round: number;
+  variant: "baseline" | "agent";
+  /** CPU used by everything that is not this benchmark, as a percentage of one core. Absent where unreadable. */
+  otherCpuPct: number | undefined;
+}
+
+/**
+ * How far apart two halves of a pair may be in neighbour CPU before they stop being a comparison.
+ *
+ * The rounds alternate precisely so that each pair sees the same machine. Twenty points of a core is more than
+ * any of this benchmark's own effects and less than what one CI job on the neighbouring runner costs, which is
+ * the difference the rule has to tell apart (gh-200).
+ */
+const NEIGHBOUR_TOLERANCE_PCT = 20;
+
+/**
+ * Downgrades a verdict to `inconclusive` when a pair's two halves did not see the same machine.
+ *
+ * Never upgrades and never downgrades a `fail`: a guardrail a busy neighbour can switch off is not a guardrail.
+ * And a pair where the machine could not be read is left alone — not knowing is not the same as detecting.
+ */
+export function applyNeighbourCpu(
+  verdict: Verdict,
+  reason: string | undefined,
+  rounds: readonly RoundNeighbour[],
+): { verdict: Verdict; reason?: string } {
+  const keep = reason === undefined ? { verdict } : { verdict, reason };
+  if (verdict === "fail") return keep;
+  const byRound = new Map<number, Partial<Record<"baseline" | "agent", number>>>();
+  for (const r of rounds) {
+    if (r.otherCpuPct === undefined) continue;
+    const pair = byRound.get(r.round) ?? {};
+    pair[r.variant] = r.otherCpuPct;
+    byRound.set(r.round, pair);
+  }
+  const uneven: number[] = [];
+  for (const [round, pair] of [...byRound].sort(([a], [b]) => a - b)) {
+    const { baseline, agent } = pair;
+    if (baseline === undefined || agent === undefined) continue;
+    if (Math.abs(agent - baseline) > NEIGHBOUR_TOLERANCE_PCT) uneven.push(round);
+  }
+  if (uneven.length === 0) return keep;
+  const said =
+    `rounds ${uneven.join(", ")} did not see the same machine in both halves: something else on this host used ` +
+    `the CPU during one of them, so the pair is not a comparison`;
+  return { verdict: "inconclusive", reason: reason ? `${reason} · ${said}` : said };
+}
+
 /** A round the benchmark could not measure at all, with the verdict it forces. */
 export interface Aborted {
   verdict: Verdict;

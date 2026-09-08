@@ -20,6 +20,8 @@ export interface RoundResult {
    * as a symptom (gh-177).
    */
   poolWait: PoolWait;
+  /** CPU used by everything that is not this benchmark, as a percentage of one core. Absent where unreadable. */
+  otherCpuPct: number | undefined;
   /** First distinct error lines the app wrote to stderr during the round; only present when there were errors. */
   firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
@@ -72,11 +74,11 @@ export function toMarkdown(r: BenchReport): string {
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | worst pool wait | batches |",
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | other CPU % | worst pool wait | batches |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
       (x, i) =>
-        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${poolWaitCell(x.poolWait)} | ${x.sink ? x.sink.batches : "—"} |`,
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.otherCpuPct === undefined ? "?" : x.otherCpuPct.toFixed(1)} | ${poolWaitCell(x.poolWait)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",

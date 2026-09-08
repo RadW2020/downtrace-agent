@@ -3,6 +3,7 @@ import { mulberry32 } from "../src/prng.ts";
 import { pooledPercentile, splitHalfNoise } from "../src/stats.ts";
 import {
   type Aborted,
+  applyNeighbourCpu,
   applyRoundErrors,
   applyUndeliveredBatches,
   combineWithAbort,
@@ -371,5 +372,61 @@ describe("the margin over the budget is what has to be resolvable", () => {
     const verdict = cpuOf([24, 25], [28, 29]);
     expect((verdict?.delta ?? 0) - 3).toBeCloseTo(verdict?.noise ?? -1, 6);
     expect(verdict?.status).toBe("inconclusive");
+  });
+});
+
+/**
+ * The rounds alternate so that each pair sees the same machine. On a shared box that assumption breaks silently:
+ * the benchmark's collapses lined up one-to-one with another CI runner's jobs on the same VM (gh-200).
+ */
+describe("a pair that did not see the same machine", () => {
+  const pair = (round: number, variant: "baseline" | "agent", otherCpuPct: number | undefined) => ({
+    round,
+    variant,
+    otherCpuPct,
+  });
+
+  it("leaves a run alone when both halves saw the same neighbours", () => {
+    const out = applyNeighbourCpu("pass", undefined, [
+      pair(1, "baseline", 12),
+      pair(1, "agent", 14),
+      pair(2, "baseline", 11),
+      pair(2, "agent", 10),
+    ]);
+    expect(out.verdict).toBe("pass");
+    expect(out.reason).toBeUndefined();
+  });
+
+  // Round 9 of the run that found this: the agent's half ran while `e2e` and `node` were on the neighbour.
+  it("cannot conclude when the agent's half had the machine taken from it", () => {
+    const out = applyNeighbourCpu("pass", undefined, [pair(9, "baseline", 10), pair(9, "agent", 180)]);
+    expect(out.verdict).toBe("inconclusive");
+    expect(out.reason).toContain("9");
+  });
+
+  // The other direction matters more, not less: contaminating the baseline flatters the agent.
+  it("cannot conclude when it was the baseline's half instead", () => {
+    const out = applyNeighbourCpu("pass", undefined, [pair(7, "baseline", 190), pair(7, "agent", 12)]);
+    expect(out.verdict).toBe("inconclusive");
+    expect(out.reason).toContain("7");
+  });
+
+  it("does not turn a failure into an inconclusive", () => {
+    // A guardrail that a busy neighbour can switch off is not a guardrail.
+    const out = applyNeighbourCpu("fail", "over budget", [pair(1, "baseline", 10), pair(1, "agent", 180)]);
+    expect(out.verdict).toBe("fail");
+    expect(out.reason).toContain("over budget");
+  });
+
+  it("says nothing when the machine could not be read", () => {
+    // Not knowing is not detecting: on a platform with no /proc/stat the verdict stands as measured.
+    const out = applyNeighbourCpu("pass", undefined, [pair(1, "baseline", undefined), pair(1, "agent", undefined)]);
+    expect(out.verdict).toBe("pass");
+    expect(out.reason).toBeUndefined();
+  });
+
+  it("says nothing when only one half could be read", () => {
+    const out = applyNeighbourCpu("pass", undefined, [pair(1, "baseline", 10), pair(1, "agent", undefined)]);
+    expect(out.verdict).toBe("pass");
   });
 });

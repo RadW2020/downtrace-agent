@@ -34,9 +34,13 @@ describe.skipIf(!DATABASE_URL)("bench warmup gate (integration)", () => {
       expect(r.firstErrors).toBeUndefined();
     }
     // No assertion on the overhead verdict: one round of 2 s is 200 samples per variant, where the p99 rests on two
-    // of them and cannot resolve a 1 ms budget. What this test covers is the gate, so `reason` is the assertion —
-    // undefined means the bench measured both rounds instead of aborting on warmup.
-    expect(report.reason).toBeUndefined();
+    // of them and cannot resolve a 1 ms budget. What this test covers is the gate, so the assertion is that the
+    // bench measured both rounds instead of aborting on warmup.
+    //
+    // That used to be spelled `reason === undefined`, which worked only while nothing else could set one. Since
+    // gh-200 a pair whose two halves saw different neighbours is reported as not comparable, and on a CI machine
+    // with other jobs on it that is the normal answer — and a true one. What must not appear is the abort.
+    expect(report.reason ?? "").not.toContain("could not warm up");
   });
 
   it("baseline that never gets clean: inconclusive, with what the app said", { timeout: 60_000 }, async () => {

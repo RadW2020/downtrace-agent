@@ -1,11 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { type AppHandle, startReferenceApp } from "./app-process.ts";
 import { runLoad } from "./load.ts";
+import { otherCpuPct, readCpuTime } from "./machine.ts";
 import { ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import {
   type Aborted,
+  applyNeighbourCpu,
   applyRoundErrors,
   applyUndeliveredBatches,
   combineWithAbort,
@@ -114,6 +116,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         await poolWaitSince(app.baseUrl, true);
         const sampler = new ProcessSampler(app.baseUrl);
         await sampler.start();
+        // What the rest of the machine is doing, read around the same window: a comparison only means something
+        // if both halves of a pair saw the same machine (gh-200).
+        const machineStart = await readCpuTime();
+        // The load generator and the sink run in *this* process, not the app's, so their CPU has to come off the
+        // machine's total as well or it would be reported as a neighbour (gh-200).
+        const selfStart = process.cpuUsage();
+        const wallStart = performance.now();
         const load = await runLoad({
           baseUrl: app.baseUrl,
           rps: config.rps,
@@ -121,6 +130,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           seed: config.seed,
         });
         const usage = await sampler.stop();
+        const wallMs = performance.now() - wallStart;
+        const self = process.cpuUsage(selfStart);
+        const machineEnd = await readCpuTime();
+        // The app's share plus this process's own, as a percentage of one core over the same window.
+        const ours = usage.cpuPct + ((self.user + self.system) / 1000 / wallMs) * 100;
+        const other =
+          machineStart && machineEnd ? otherCpuPct({ start: machineStart, end: machineEnd }, ours, wallMs) : undefined;
         const poolWait = await poolWaitSince(app.baseUrl, false);
         await app.stop(); // SIGTERM: the agent flushes its last interval before the sink closes
         // Both variants when both have one: with `baselineEnv` (bench-instruments) the baseline is another
@@ -128,7 +144,17 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         // that could be just as broken (gh-152). Without it the baseline has no sink and this stays undefined.
         const sinkStats = sink ? { ...sink.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
-        rounds.push({ round, variant, warmup, load, usage, poolWait, sink: sinkStats, firstErrors });
+        rounds.push({
+          round,
+          variant,
+          warmup,
+          load,
+          usage,
+          poolWait,
+          otherCpuPct: other,
+          sink: sinkStats,
+          firstErrors,
+        });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";
         const appSaid = firstErrors ? ` · app: ${firstErrors.join(" | ")}` : "";
         log(
@@ -158,7 +184,14 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     measured.reason,
     rounds.map((r) => ({ variant: r.variant, round: r.round, batches: r.sink?.batches })),
   );
-  const checked = combineWithAbort(delivered, aborted);
+  // Last of the round-level rules, because it can only soften: a pair whose halves saw different machines is
+  // not a comparison, but a failure the measured rounds already earned still stands (gh-200).
+  const shared = applyNeighbourCpu(
+    delivered.verdict,
+    delivered.reason,
+    rounds.map((r) => ({ round: r.round, variant: r.variant, otherCpuPct: r.otherCpuPct })),
+  );
+  const checked = combineWithAbort(shared, aborted);
   return {
     generatedAt: new Date().toISOString(),
     node: process.version,
