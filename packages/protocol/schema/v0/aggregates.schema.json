@@ -10,7 +10,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -29,6 +29,9 @@
       "items": {
         "$ref": "#/$defs/Interval"
       }
+    },
+    "profile": {
+      "$ref": "#/$defs/Profile"
     }
   },
   "$defs": {
@@ -363,6 +366,96 @@
           "type": "number",
           "minimum": 0,
           "description": "Time requests spent waiting to be able to talk to this dependency, on top of the time spent talking to it: a saturated connection pool shows up here and nowhere else. Optional; agents that cannot see it omit it."
+        }
+      }
+    },
+    "Profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What each route normally does, sent once a minute rather than with every interval: a profile changes when the code changes, and at the aggregates' cadence it would not fit in the project's row budget (ADR 0017).",
+      "required": ["start", "durationMs", "endpoints"],
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Profile window start, Unix epoch milliseconds."
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "endpoints": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/ProfileEndpoint"
+          }
+        }
+      }
+    },
+    "ProfileEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "route", "operations"],
+      "properties": {
+        "method": {
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "OTHER"]
+        },
+        "route": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Normalised route template, e.g. /products/:id, or (other)."
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/Operation"
+          }
+        }
+      }
+    },
+    "Operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One thing this route does, identified by a hash and labelled by an optional normalised text. The hash is the identity, so suppressing the text keeps the analysis whole (ADR 0017, invariant 5).",
+      "required": ["kind", "hash", "count", "totalMs"],
+      "properties": {
+        "kind": {
+          "enum": ["query", "error"],
+          "description": "What kind of operation this is."
+        },
+        "hash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Stable identity of the operation, or `(other)` for the bucket that holds the rest."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Normalised text, e.g. `SELECT id FROM products WHERE id = ?`. Optional: a user who would rather not send it keeps the whole analysis, only without the label."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Executions across every request on this route."
+        },
+        "totalMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sum of their durations, in milliseconds."
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Executions that failed."
+        },
+        "distinct": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Only on the `(other)` bucket: how many distinct operations it merges, so a cap does not become a lie by omission."
         }
       }
     }

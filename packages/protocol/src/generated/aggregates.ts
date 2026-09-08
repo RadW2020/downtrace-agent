@@ -7,7 +7,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -22,6 +22,7 @@ export interface AggregatesBatch {
     | [Interval, Interval, Interval, Interval]
     | [Interval, Interval, Interval, Interval, Interval]
     | [Interval, Interval, Interval, Interval, Interval, Interval];
+  profile?: Profile;
 }
 export interface AgentInfo {
   name: string;
@@ -246,4 +247,62 @@ export interface RuntimeHealth {
    * Peak concurrent in-flight requests during the interval.
    */
   inFlightMax: number;
+}
+/**
+ * What each route normally does, sent once a minute rather than with every interval: a profile changes when the code changes, and at the aggregates' cadence it would not fit in the project's row budget (ADR 0017).
+ */
+export interface Profile {
+  /**
+   * Profile window start, Unix epoch milliseconds.
+   */
+  start: number;
+  durationMs: number;
+  /**
+   * @maxItems 4096
+   */
+  endpoints: ProfileEndpoint[];
+}
+export interface ProfileEndpoint {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "OTHER";
+  /**
+   * Normalised route template, e.g. /products/:id, or (other).
+   */
+  route: string;
+  /**
+   * @maxItems 64
+   */
+  operations: Operation[];
+}
+/**
+ * One thing this route does, identified by a hash and labelled by an optional normalised text. The hash is the identity, so suppressing the text keeps the analysis whole (ADR 0017, invariant 5).
+ */
+export interface Operation {
+  /**
+   * What kind of operation this is.
+   */
+  kind: "query" | "error";
+  /**
+   * Stable identity of the operation, or `(other)` for the bucket that holds the rest.
+   */
+  hash: string;
+  /**
+   * Normalised text, e.g. `SELECT id FROM products WHERE id = ?`. Optional: a user who would rather not send it keeps the whole analysis, only without the label.
+   */
+  text?: string;
+  /**
+   * Executions across every request on this route.
+   */
+  count: number;
+  /**
+   * Sum of their durations, in milliseconds.
+   */
+  totalMs: number;
+  /**
+   * Executions that failed.
+   */
+  errors?: number;
+  /**
+   * Only on the `(other)` bucket: how many distinct operations it merges, so a cap does not become a lie by omission.
+   */
+  distinct?: number;
 }
