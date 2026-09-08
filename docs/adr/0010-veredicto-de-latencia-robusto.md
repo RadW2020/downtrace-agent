@@ -1,6 +1,6 @@
 # ADR 0010 — Veredicto de latencia: ruido entre rondas y corroboración
 
-Estado: aceptado · Fecha: 2026-09-05 · Alcance: público
+Estado: aceptado; su condición de `fail` está **superada por el ADR 0030** (lo que ha de superar al ruido es el margen sobre el presupuesto, no Δ); la regla de corroboración se mantiene · Fecha: 2026-09-05 · Alcance: público
 
 ## Contexto
 

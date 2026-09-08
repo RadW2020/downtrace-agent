@@ -1,6 +1,6 @@
 # ADR 0007 — Estadística del benchmark: p99 sobre muestras agrupadas y ruido por mitades
 
-Estado: aceptado; la estimación del ruido y la condición de `fail` en latencia están superadas por el ADR 0010 · Fecha: 2026-09-04 · Supera la parte estadística del ADR 0003 (rondas alternas, medianas y veredicto se mantienen) · Alcance: público
+Estado: aceptado; la estimación del ruido y la condición de `fail` en latencia están superadas por el ADR 0010, y la condición de `fail` en general por el **ADR 0030** (lo que ha de superar al ruido es el margen sobre el presupuesto, no Δ) · Fecha: 2026-09-04 · Supera la parte estadística del ADR 0003 (rondas alternas, medianas y veredicto se mantienen) · Alcance: público
 
 ## Contexto
 

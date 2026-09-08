@@ -58,7 +58,8 @@ export function latencyStatus(input: LatencyRuleInput): LatencyRuleResult {
 
   const base = { delta, noise, noiseSource, roundDeltas, corroborating, rounds } as const;
   if (delta <= input.budget) return { ...base, status: "ok" };
-  if (delta <= noise) return { ...base, status: "inconclusive" };
+  // The excess over the budget is what has to clear the noise, not the delta itself (ADR 0030).
+  if (delta - input.budget <= noise) return { ...base, status: "inconclusive" };
   if (rounds > 0 && corroborating < majority) {
     return {
       ...base,

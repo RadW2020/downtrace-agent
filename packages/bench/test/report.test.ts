@@ -65,6 +65,7 @@ const report: BenchReport = {
       baselineMedian: 6,
       agentMedian: 6.4,
       delta: 0.4,
+      excess: -0.6,
       noise: 0,
       budget: 1,
       status: "ok",
@@ -76,6 +77,7 @@ const report: BenchReport = {
       baselineMedian: 12.3,
       agentMedian: 12.5,
       delta: 0.2,
+      excess: -2.8,
       noise: 0,
       budget: 3,
       status: "ok",
@@ -87,6 +89,7 @@ const report: BenchReport = {
       baselineMedian: 80.2,
       agentMedian: 81,
       delta: 0.8,
+      excess: -63.2,
       noise: 0,
       budget: 64,
       status: "ok",
@@ -99,7 +102,7 @@ describe("report", () => {
   it("renders a markdown table with one row per metric and per round", () => {
     const md = toMarkdown(report);
     expect(md).toContain("**PASS**");
-    expect(md).toContain("| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | 0 | ≤ 1 | ✅ ok |");
+    expect(md).toContain("| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | — | 0 | ≤ 1 | ✅ ok |");
     expect(md).toContain("| cpuPct (pp, median of rounds) |");
     expect(md).toContain("| 1 | baseline | 1 | 2 | 4 | 6 | — | 9 | 0 | 99.5 | 12.3 | 80.2 | 0.41 | — | — |");
     expect(md).toContain("| 1 | agent | 4 | 2 | 4 | 6.4 | — | 9 | 0 | 99.4 | 12.5 | 81.0 | 0.42 | — | 2 |");

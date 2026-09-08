@@ -16,6 +16,8 @@ export interface MetricVerdict {
   baselineMedian: number;
   agentMedian: number;
   delta: number;
+  /** How far over the budget the delta is; negative when it is under. What the verdict rests on (ADR 0030). */
+  excess: number;
   noise: number;
   /** Which estimate the noise came from; only meaningful for the pooled latency metric. */
   noiseSource?: "split-half" | "round-spread" | undefined;
@@ -42,8 +44,12 @@ export interface LatencyPools {
  * delta  = median(agent) − median(baseline)
  * noise  = max(baseline) − min(baseline): how much the machine itself moves between identical runs
  * ok            delta ≤ budget
- * fail          delta > budget and delta > noise   (the excess is distinguishable from noise)
- * inconclusive  delta > budget but delta ≤ noise   (this machine cannot resolve the budget)
+ * fail          delta − budget > noise   (the excess over the budget is distinguishable from noise)
+ * inconclusive  delta > budget but the excess is within the noise (this machine cannot resolve the budget)
+ *
+ * It is the **excess** that has to clear the noise, not delta (ADR 0030). Comparing delta with the noise asks
+ * whether the overhead exists, which nobody is asking and which is always true for a metric whose delta dwarfs
+ * its noise: CPU sat at ~3 pp against a noise under 1, so that comparison could only ever say "fail".
  */
 export function evaluate(
   baseline: RoundMetrics[],
@@ -85,8 +91,8 @@ export function evaluate(
       noise = Math.max(...b) - Math.min(...b);
     }
     const delta = agentMedian - baselineMedian;
-    const status: MetricStatus =
-      rule?.status ?? (delta <= budget[metric] ? "ok" : delta > noise ? "fail" : "inconclusive");
+    const excess = delta - budget[metric];
+    const status: MetricStatus = rule?.status ?? (excess <= 0 ? "ok" : excess > noise ? "fail" : "inconclusive");
     return {
       metric,
       unit: UNITS[metric],
@@ -95,6 +101,8 @@ export function evaluate(
       baselineMedian: round(baselineMedian, 3),
       agentMedian: round(agentMedian, 3),
       delta: round(delta, 3),
+      /** How far over the budget it is. This is the number the verdict rests on (ADR 0030). */
+      excess: round(excess, 3),
       noise: round(noise, 3),
       noiseSource: rule?.noiseSource,
       budget: budget[metric],

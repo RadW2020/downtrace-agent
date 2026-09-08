@@ -94,3 +94,32 @@ describe("the runs that motivated the rule", () => {
     expect(r.corroborating).toBe(5);
   });
 });
+
+// Same correction as for CPU (gh-196, ADR 0030): what has to clear the noise is the excess over the budget.
+describe("latency, when the excess is what matters", () => {
+  it("does not call a failure when the excess is inside the noise", () => {
+    const result = latencyStatus({
+      pooledBaseline: 24,
+      pooledAgent: 25.2,
+      splitHalfNoise: 0.9,
+      baselineRounds: [24, 24.1, 23.9],
+      agentRounds: [25.2, 25.3, 25.1],
+      budget: 1,
+    });
+    // Delta 1.2 over a budget of 1: the excess is 0.2 against 0.9 of noise.
+    expect(result.delta).toBeCloseTo(1.2, 3);
+    expect(result.status).toBe("inconclusive");
+  });
+
+  it("still calls a failure when the excess clears the noise and the rounds corroborate", () => {
+    const result = latencyStatus({
+      pooledBaseline: 24,
+      pooledAgent: 29,
+      splitHalfNoise: 0.5,
+      baselineRounds: [24, 24.1, 23.9],
+      agentRounds: [29, 29.1, 28.9],
+      budget: 1,
+    });
+    expect(result.status).toBe("fail");
+  });
+});

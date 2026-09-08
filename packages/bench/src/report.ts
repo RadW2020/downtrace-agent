@@ -60,11 +60,14 @@ export function toMarkdown(r: BenchReport): string {
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,
     ...(r.reason ? ["", `**${r.reason}**`] : []),
     "",
-    "| Metric | Baseline | Agent | Δ | Noise | Budget | |",
-    "|---|---:|---:|---:|---:|---:|:-:|",
+    // The margin is in the table because it is the number the verdict rests on: a Δ that dwarfs the noise says
+    // nothing about whether the budget is crossed, and reading Δ against the noise is what got that wrong before
+    // (ADR 0030).
+    "| Metric | Baseline | Agent | Δ | Over budget | Noise | Budget | |",
+    "|---|---:|---:|---:|---:|---:|---:|:-:|",
     ...r.metrics.map(
       (m) =>
-        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.noise}${m.noiseSource ? ` (${m.noiseSource})` : ""} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status}${m.reason ? ` — ${m.reason}` : ""} |`,
+        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.excess > 0 ? `+${m.excess}` : "—"} | ${m.noise}${m.noiseSource ? ` (${m.noiseSource})` : ""} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status}${m.reason ? ` — ${m.reason}` : ""} |`,
     ),
     "",
     "<details><summary>Rounds</summary>",

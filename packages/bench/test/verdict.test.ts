@@ -329,3 +329,47 @@ describe("applyUndeliveredBatches", () => {
     expect(applyUndeliveredBatches("pass", undefined, [round("agent", 1, 1)]).verdict).toBe("pass");
   });
 });
+
+/**
+ * The budget asks "is it over?", and that is answered by comparing the noise with the margin over the budget —
+ * not with Δ. Comparing Δ with the noise answers "does the overhead exist?", which nobody was asking, and it is
+ * always yes for a metric whose Δ is much larger than its noise (gh-196).
+ */
+describe("the margin over the budget is what has to be resolvable", () => {
+  const rounds = (values: number[]): RoundMetrics[] => values.map((cpuPct) => ({ p99Ms: 0, cpuPct, rssMb: 0 }));
+  const cpuOf = (baseline: number[], agent: number[]) =>
+    evaluate(rounds(baseline), rounds(agent), { p99Ms: 1, cpuPct: 3, rssMb: 64 }).metrics.find(
+      (m) => m.metric === "cpuPct",
+    );
+
+  // The run that found this: Δ 3.026 over a budget of 3, with 0.840 of noise. The machine cannot tell 3.026
+  // from 2.9, so calling it a failure claims something the measurement does not support.
+  it("does not call a failure when the excess is smaller than the noise", () => {
+    const verdict = cpuOf([24.0, 24.42, 24.238], [27.0, 27.5, 27.264]);
+    expect(verdict?.delta).toBeCloseTo(3.026, 3);
+    expect(verdict?.noise).toBeCloseTo(0.42, 3);
+    expect(verdict?.status).toBe("inconclusive");
+  });
+
+  it("still calls a failure when the excess is bigger than the noise", () => {
+    // A guardrail that cannot fail is decoration: 3 pp over the budget against 0.42 of noise is resolved.
+    const verdict = cpuOf([24.0, 24.42, 24.238], [30.0, 30.5, 30.264]);
+    expect(verdict?.status).toBe("fail");
+  });
+
+  it("says ok below the budget however noisy the machine", () => {
+    // Not being over does not need resolving: the question only arises once the budget is crossed.
+    const verdict = cpuOf([10, 30, 20], [11, 31, 21]);
+    expect(verdict?.delta).toBeLessThan(3);
+    expect(verdict?.noise).toBe(20);
+    expect(verdict?.status).toBe("ok");
+  });
+
+  it("does not call a failure on a tie", () => {
+    // Excess exactly equal to the noise: a tie is not evidence, and the budget is not crossed by agreement.
+    // baseline median 24.5, noise 1; agent median 28.5 → delta 4, excess exactly 1.
+    const verdict = cpuOf([24, 25], [28, 29]);
+    expect((verdict?.delta ?? 0) - 3).toBeCloseTo(verdict?.noise ?? -1, 6);
+    expect(verdict?.status).toBe("inconclusive");
+  });
+});
