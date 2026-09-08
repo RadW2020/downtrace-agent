@@ -146,3 +146,155 @@ describe("Sender, carrying the profile", () => {
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
 });
+
+/**
+ * A batch the cloud rejects as invalid will be rejected the same way tomorrow. Retrying it wasted a queue slot —
+ * displacing batches that were fine — and `failed` could not tell "the cloud is down" from "I am producing
+ * something it does not accept", which are two problems with opposite fixes (gh-205).
+ */
+describe("Sender, when the batch itself is the problem", () => {
+  const rejecting = (status: number) => sender([status, 202]);
+
+  for (const status of [400, 413, 422]) {
+    it(`drops the batch on ${status} instead of retrying it forever`, async () => {
+      const { s, calls } = rejecting(status);
+      s.enqueue(interval(1));
+      expect(await s.flush()).toBe(false);
+      expect(s.pending).toBe(0);
+      expect(s.rejected).toBe(1);
+      // Nothing left to send: a second flush must not put it back on the wire.
+      expect(await s.flush()).toBe(false);
+      expect(calls).toHaveLength(1);
+    });
+  }
+
+  // The reason the ticket exists: an invalid batch must not displace the good ones.
+  it("does not let a rejected batch keep a slot from a valid one", async () => {
+    const { s, calls } = sender([400, 202]);
+    s.enqueue(interval(1));
+    await s.flush();
+    s.enqueue(interval(2));
+    expect(await s.flush()).toBe(true);
+    const sent = calls[1]?.body as { intervals: { start: number }[] };
+    expect(sent.intervals.map((iv) => iv.start)).toEqual([2]);
+  });
+
+  it("says it once, not on every interval", async () => {
+    const said: string[] = [];
+    const { s } = sender([400, 400], { warn: (m) => said.push(m), debug: () => {} });
+    s.enqueue(interval(1));
+    await s.flush();
+    s.enqueue(interval(2));
+    await s.flush();
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("400");
+  });
+
+  // Credentials are the opposite case: wrong today, right once the operator fixes them, and then those six
+  // intervals are worth having.
+  it("keeps the batch on 401, because a fixed token makes it valuable again", async () => {
+    const { s } = sender([401]);
+    s.enqueue(interval(1));
+    await s.flush();
+    expect(s.pending).toBe(1);
+    expect(s.rejected).toBe(0);
+  });
+
+  it("keeps the batch on 500, as before", async () => {
+    const { s } = sender([500]);
+    s.enqueue(interval(1));
+    await s.flush();
+    expect(s.pending).toBe(1);
+    expect(s.rejected).toBe(0);
+  });
+});
+
+describe("Sender, when the cloud asks for time", () => {
+  const limited = (retryAfter: string | undefined, then: number[] = [202]) => {
+    const responses: Array<number | Error> = [429, ...then];
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      const next = responses.shift() ?? 202;
+      if (next instanceof Error) throw next;
+      const headers = retryAfter !== undefined && next === 429 ? { "retry-after": retryAfter } : undefined;
+      return new Response(null, { status: next, ...(headers ? { headers } : {}) });
+    }) as unknown as typeof fetch;
+    let now = 1_000_000;
+    const s = new Sender({
+      url: "http://cloud.test",
+      token: "tok",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v24" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl,
+      now: () => now,
+    });
+    return { s, calls, advance: (ms: number) => (now += ms) };
+  };
+
+  it("waits the seconds it was asked for, and not less", async () => {
+    const { s, calls, advance } = limited("30");
+    s.enqueue(interval(1));
+    await s.flush();
+    expect(calls).toHaveLength(1);
+
+    advance(29_000);
+    expect(await s.flush()).toBe(false);
+    expect(calls, "asked again before the time was up").toHaveLength(1);
+
+    advance(2_000);
+    expect(await s.flush()).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  // The cloud's largest legitimate value is the seconds until the next UTC day, when the daily budget is spent.
+  // The cap is there so a nonsense value cannot silence the instrumentation for ever, not to disobey the cloud.
+  it("obeys a whole day, and caps anything beyond it", async () => {
+    const { s, calls, advance } = limited("1000000");
+    s.enqueue(interval(1));
+    await s.flush();
+
+    advance(24 * 60 * 60 * 1000 - 1000);
+    expect(await s.flush()).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    advance(2000);
+    await s.flush();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("takes an HTTP date, which the standard allows", async () => {
+    const { s, calls, advance } = limited(new Date(1_000_000 + 45_000).toUTCString());
+    s.enqueue(interval(1));
+    await s.flush();
+    advance(44_000);
+    await s.flush();
+    expect(calls).toHaveLength(1);
+    advance(2_000);
+    await s.flush();
+    expect(calls).toHaveLength(2);
+  });
+
+  for (const bad of [undefined, "", "soon", "-5"]) {
+    it(`ignores an unusable Retry-After (${JSON.stringify(bad)}) and behaves like any 429`, async () => {
+      const { s, calls } = limited(bad);
+      s.enqueue(interval(1));
+      await s.flush();
+      // No wait to respect: the next flush goes out, and the batch was kept because 429 is not the batch's fault.
+      expect(await s.flush()).toBe(true);
+      expect(calls).toHaveLength(2);
+    });
+  }
+
+  it("keeps aggregating while it waits: not being able to send is no reason to stop measuring", async () => {
+    const { s, advance } = limited("60");
+    s.enqueue(interval(1));
+    await s.flush();
+    for (let i = 2; i <= 4; i++) s.enqueue(interval(i));
+    expect(s.pending).toBe(4);
+    advance(61_000);
+    expect(await s.flush()).toBe(true);
+  });
+});

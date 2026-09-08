@@ -164,6 +164,7 @@ you would give an application log.
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query`: it passes arguments, results and errors
   through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
+- Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
 - At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.

@@ -39,6 +39,8 @@ export interface AgentStats {
   sent: number;
   failed: number;
   dropped: number;
+  /** Batches the cloud refused as invalid. A fault of ours, not of the network (gh-205). */
+  rejected: number;
   pending: number;
 }
 
@@ -124,6 +126,7 @@ export class Agent {
       sent: this.sender.sent,
       failed: this.sender.failed,
       dropped: this.sender.dropped,
+      rejected: this.sender.rejected,
       pending: this.sender.pending,
     };
   }
