@@ -1,9 +1,10 @@
 import { createReferenceApp, type ReferenceApp } from "@downtrace/reference-app";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runLoad } from "../src/load.ts";
+import { requireInCI } from "./helpers.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) console.warn("[bench] DATABASE_URL not set: skipping integration tests");
+requireInCI("DATABASE_URL", DATABASE_URL);
 
 describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
   let ref: ReferenceApp;

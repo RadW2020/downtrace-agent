@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_PATH, runBench } from "../src/bench.ts";
-import { must } from "./helpers.ts";
+import { must, requireInCI } from "./helpers.ts";
 
 const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) console.warn("[bench] DATABASE_URL not set: skipping integration tests");
+requireInCI("DATABASE_URL", DATABASE_URL);
 
 const log = (line: string): void => console.info(`[bench] ${line}`);
 

@@ -4,7 +4,18 @@ import { createReferenceApp, type ReferenceApp, type ReferenceAppOptions } from 
 const DATABASE_URL = process.env.DATABASE_URL;
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
+// Skipping without a database is right on a development machine and wrong in CI: a skipped test does not go red,
+// it goes green, so the job would pass without running any of these and nothing would say so (gh-143).
+// DOWNTRACE_REQUIRE_DB is set by the `test:integration` script and means this run was asked for these tests —
+// `vitest run` with no filter loads this file too, and the `node` job has no database on purpose. Deliberately a
+// local copy of what `packages/bench` has: two packages should not depend on each other for a test policy.
 if (!DATABASE_URL) {
+  if (process.env.DOWNTRACE_REQUIRE_DB && process.env.GITHUB_ACTIONS) {
+    throw new Error(
+      "DATABASE_URL is not set, and in CI a test that cannot run is a failure: this job would have passed without " +
+        "running its integration tests",
+    );
+  }
   console.warn(
     "[reference-app] DATABASE_URL not set: skipping integration tests (run `make dev` or export DATABASE_URL/REDIS_URL)",
   );

@@ -11,7 +11,7 @@
     "load": "node src/load-cli.ts",
     "bench": "node src/bench-cli.ts",
     "test": "vitest run",
-    "test:integration": "vitest run integration",
+    "test:integration": "DOWNTRACE_REQUIRE_DB=1 vitest run integration",
     "typecheck": "tsc -p tsconfig.json",
     "instruments": "node src/instruments-cli.ts"
   },
