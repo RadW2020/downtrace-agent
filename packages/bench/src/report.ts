@@ -22,6 +22,9 @@ export interface RoundResult {
   poolWait: PoolWait;
   /** CPU used by everything that is not this benchmark, as a percentage of one core. Absent where unreadable. */
   otherCpuPct: number | undefined;
+  /** Milliseconds the database spent writing checkpoints during the window, and how many ran. */
+  checkpointWriteMs: number | undefined;
+  checkpointCount: number | undefined;
   /** First distinct error lines the app wrote to stderr during the round; only present when there were errors. */
   firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
@@ -74,11 +77,11 @@ export function toMarkdown(r: BenchReport): string {
     "",
     "<details><summary>Rounds</summary>",
     "",
-    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | other CPU % | worst pool wait | batches |",
+    "| Round | Variant | warmup s | p50 | p95 | p99 | Δ p99 | max | errors | rps | CPU % | RSS max MiB | ELU | other CPU % | checkpoints | worst pool wait | batches |",
     "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...r.rounds.map(
       (x, i) =>
-        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.otherCpuPct === undefined ? "?" : x.otherCpuPct.toFixed(1)} | ${poolWaitCell(x.poolWait)} | ${x.sink ? x.sink.batches : "—"} |`,
+        `| ${x.round} | ${x.variant} | ${x.warmup.seconds} | ${x.load.overall.p50} | ${x.load.overall.p95} | ${x.load.overall.p99} | ${roundDelta(r, i)} | ${x.load.overall.max} | ${x.load.errors} | ${x.load.achievedRps} | ${x.usage.cpuPct.toFixed(1)} | ${x.usage.rssMaxMb.toFixed(1)} | ${x.usage.elu.toFixed(2)} | ${x.otherCpuPct === undefined ? "?" : x.otherCpuPct.toFixed(1)} | ${checkpointCell(x)} | ${poolWaitCell(x.poolWait)} | ${x.sink ? x.sink.batches : "—"} |`,
     ),
     "",
     "</details>",
@@ -114,6 +117,19 @@ export function poolWaitCell(wait: PoolWait): string {
   if (wait.maxMs <= 0 || wait.maxAt === undefined) return "—";
   const at = new Date(wait.maxAt).toISOString().slice(11, 19);
   return `${Math.round(wait.maxMs)} ms @ ${at} (${Math.round(wait.totalMs)} total)`;
+}
+
+/**
+ * What the database wrote during the round. A question mark where the counters could not be read, because not
+ * knowing is not a quiet database (gh-194).
+ */
+export function checkpointCell(r: {
+  checkpointCount: number | undefined;
+  checkpointWriteMs: number | undefined;
+}): string {
+  if (r.checkpointCount === undefined || r.checkpointWriteMs === undefined) return "?";
+  if (r.checkpointCount === 0) return "none";
+  return `${r.checkpointCount} · ${(r.checkpointWriteMs / 1000).toFixed(1)} s writing`;
 }
 
 function roundDelta(r: BenchReport, index: number): string {

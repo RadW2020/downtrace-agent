@@ -148,6 +148,16 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
         uptimeMs: Math.round(process.uptime() * 1000),
       });
     });
+    // What Postgres has been doing about checkpoints. The benchmark reads it around each round: it cannot
+    // reconfigure a database it does not own, so it reports what it measured against instead (gh-194).
+    admin.get("/db/checkpoints", async (_req, res) => {
+      const checkpoints = await db.checkpoints();
+      if (!checkpoints) {
+        res.status(200).json({ available: false });
+        return;
+      }
+      res.json({ available: true, ...checkpoints });
+    });
     admin.post("/stats/reset", (_req, res) => {
       stats.reset();
       res.status(204).end();

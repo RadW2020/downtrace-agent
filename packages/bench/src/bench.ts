@@ -2,11 +2,12 @@ import { fileURLToPath } from "node:url";
 import { type AppHandle, startReferenceApp } from "./app-process.ts";
 import { runLoad } from "./load.ts";
 import { otherCpuPct, readCpuTime } from "./machine.ts";
-import { ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
+import { checkpointsSince, ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import {
   type Aborted,
+  applyCheckpointStorms,
   applyNeighbourCpu,
   applyRoundErrors,
   applyUndeliveredBatches,
@@ -119,6 +120,8 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         // What the rest of the machine is doing, read around the same window: a comparison only means something
         // if both halves of a pair saw the same machine (gh-200).
         const machineStart = await readCpuTime();
+        // What the database does about checkpoints is a neighbour too, and it lives inside Postgres (gh-194).
+        const checkpointsStart = await checkpointsSince(app.baseUrl);
         // The load generator and the sink run in *this* process, not the app's, so their CPU has to come off the
         // machine's total as well or it would be reported as a neighbour (gh-200).
         const selfStart = process.cpuUsage();
@@ -133,6 +136,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         const wallMs = performance.now() - wallStart;
         const self = process.cpuUsage(selfStart);
         const machineEnd = await readCpuTime();
+        const checkpointsEnd = await checkpointsSince(app.baseUrl);
+        const checkpointWriteMs =
+          checkpointsStart && checkpointsEnd ? checkpointsEnd.writeMs - checkpointsStart.writeMs : undefined;
+        const checkpointCount =
+          checkpointsStart && checkpointsEnd
+            ? checkpointsEnd.timed + checkpointsEnd.requested - (checkpointsStart.timed + checkpointsStart.requested)
+            : undefined;
         // The app's share plus this process's own, as a percentage of one core over the same window.
         const ours = usage.cpuPct + ((self.user + self.system) / 1000 / wallMs) * 100;
         const other =
@@ -152,6 +162,8 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           usage,
           poolWait,
           otherCpuPct: other,
+          checkpointWriteMs,
+          checkpointCount,
           sink: sinkStats,
           firstErrors,
         });
@@ -191,7 +203,13 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     delivered.reason,
     rounds.map((r) => ({ round: r.round, variant: r.variant, otherCpuPct: r.otherCpuPct })),
   );
-  const checked = combineWithAbort(shared, aborted);
+  // Same shape and same reason as the neighbour rule, for a neighbour that turned out to live inside Postgres.
+  const settled = applyCheckpointStorms(
+    shared.verdict,
+    shared.reason,
+    rounds.map((r) => ({ round: r.round, variant: r.variant, checkpointWriteMs: r.checkpointWriteMs })),
+  );
+  const checked = combineWithAbort(settled, aborted);
   return {
     generatedAt: new Date().toISOString(),
     node: process.version,

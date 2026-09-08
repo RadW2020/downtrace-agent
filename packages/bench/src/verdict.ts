@@ -268,6 +268,54 @@ export function applyNeighbourCpu(
   return { verdict: "inconclusive", reason: reason ? `${reason} · ${said}` : said };
 }
 
+/** How long the database spent writing checkpoints during one round. */
+export interface RoundCheckpoints {
+  round: number;
+  variant: "baseline" | "agent";
+  /** Milliseconds of checkpoint writing during the window. Absent where the counters could not be read. */
+  checkpointWriteMs: number | undefined;
+}
+
+/**
+ * How far apart two halves of a pair may be in checkpoint writing before they stop being a comparison.
+ *
+ * One second. A real run saw twenty-six seconds of writing inside a sixty-second window, which crosses this
+ * without discussion, while the background trickle of a database doing its job does not (gh-194).
+ */
+const CHECKPOINT_TOLERANCE_MS = 1000;
+
+/**
+ * Downgrades a verdict to `inconclusive` when the database wrote hard during one half of a pair and not the
+ * other. Same rule and same reason as `applyNeighbourCpu`: the rounds alternate so that each pair sees the same
+ * machine, and a write storm in one half breaks that. Never upgrades, and never softens a `fail`.
+ */
+export function applyCheckpointStorms(
+  verdict: Verdict,
+  reason: string | undefined,
+  rounds: readonly RoundCheckpoints[],
+): { verdict: Verdict; reason?: string } {
+  const keep = reason === undefined ? { verdict } : { verdict, reason };
+  if (verdict === "fail") return keep;
+  const byRound = new Map<number, Partial<Record<"baseline" | "agent", number>>>();
+  for (const r of rounds) {
+    if (r.checkpointWriteMs === undefined) continue;
+    const pair = byRound.get(r.round) ?? {};
+    pair[r.variant] = r.checkpointWriteMs;
+    byRound.set(r.round, pair);
+  }
+  const uneven: number[] = [];
+  for (const [round, pair] of [...byRound].sort(([a], [b]) => a - b)) {
+    const { baseline, agent } = pair;
+    if (baseline === undefined || agent === undefined) continue;
+    if (Math.abs(agent - baseline) > CHECKPOINT_TOLERANCE_MS) uneven.push(round);
+  }
+  if (uneven.length === 0) return keep;
+  const said =
+    `rounds ${uneven.join(", ")} saw the database write checkpoints in one half and not the other, so the pair ` +
+    "is not a comparison";
+  return { verdict: "inconclusive", reason: reason ? `${reason} · ${said}` : said };
+}
+
 /** A round the benchmark could not measure at all, with the verdict it forces. */
 export interface Aborted {
   verdict: Verdict;

@@ -40,6 +40,7 @@ La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y 
   pesado, otra pestaña compilando— se reparte entre las rondas de forma desigual y sale como si fuera el agente.
   Así se descubrió: midiendo en una VM donde corría el resto de CI, las siete peores esperas de conexión de una
   tirada cayeron dentro de un job del runner vecino (gh-200).
+- **Contra un Postgres que no escriba a ráfagas.** El benchmark no es dueño de la base de datos —mide contra el `DATABASE_URL` que se le dé (ADR 0023)— y Postgres decide por su cuenta cuándo bajar páginas a disco: una tirada real lo vio escribir **26 segundos seguidos** dentro de una ventana de sesenta. El `docker-compose.yml` del repositorio ya reparte esa escritura (`checkpoint_completion_target=0.9`, `checkpoint_timeout=15min`, `max_wal_size=2GB`); si mides contra otro, ponle algo equivalente. Y mires contra el que mires, **la tabla dice cuántos checkpoints hubo en cada ronda y cuánto escribieron**, y un par cuyas mitades vieron cosas muy distintas sale `inconclusive`.
 - **En la arquitectura donde se despliega.** El ADR 0020 midió que las cifras de x86 nunca verificaron el
   presupuesto: su ruido era de 3,998 ms contra un presupuesto de 1 ms. Un verde cómodo y falso.
 - **Leyendo el informe, no solo el veredicto.** La tabla por ronda dice la CPU ajena que vio cada una y la peor

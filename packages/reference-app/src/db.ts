@@ -9,6 +9,14 @@ export interface DbOptions {
 }
 
 /** pg.Pool wrapper that counts queries and pool wait per request and supports deliberate leaks. */
+/** Postgres's own checkpoint counters, cumulative since it started. */
+export interface Checkpoints {
+  timed: number;
+  requested: number;
+  writeMs: number;
+  syncMs: number;
+}
+
 export class Db {
   readonly pool: pg.Pool;
   private readonly leaked = new Set<pg.PoolClient>();
@@ -58,6 +66,29 @@ export class Db {
    * ON CONFLICT DO NOTHING. Used by the overhead benchmark, which compares rounds and can only do that if every
    * round sees the same database (ADR 0021).
    */
+  /**
+   * What the database itself has been doing about checkpoints, since the server started.
+   *
+   * A checkpoint is Postgres deciding, on its own schedule, to write dirty pages to disk — and in a real run it
+   * did so for twenty-six seconds straight, inside a benchmark that measures in windows of sixty. The benchmark
+   * cannot reconfigure a database it does not own, so it reads this instead and says what it measured against
+   * (gh-194, ADR 0031).
+   *
+   * Undefined where the counters are not there: another engine, or no permission. Not knowing is not zero.
+   */
+  async checkpoints(): Promise<Checkpoints | undefined> {
+    try {
+      const { rows } = await this.pool.query<Checkpoints>(
+        'SELECT num_timed::int AS timed, num_requested::int AS requested, write_time AS "writeMs", ' +
+          'sync_time AS "syncMs" FROM pg_stat_checkpointer',
+      );
+      return rows[0];
+    } catch {
+      // A benchmark helper must never take the application down, and a missing view is an answer, not a fault.
+      return undefined;
+    }
+  }
+
   async resetWrites(): Promise<void> {
     // One call, so Postgres runs both in an implicit transaction: a reset that emptied the tables but did not put
     // the stock back would leave the next round measuring something nobody chose. Same shape as `migrate()`.

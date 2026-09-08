@@ -7,6 +7,17 @@ services:
       POSTGRES_DB: downtrace
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    # This is the database the overhead benchmark measures against locally, and Postgres decides on its own when
+    # to write dirty pages: a real run saw it write for twenty-six seconds straight inside a sixty-second window
+    # (gh-194). The writing still has to happen — deferring it only makes it come out at once later — so it is
+    # spread rather than switched off: `checkpoint_completion_target` near 1 trickles it across the interval, and
+    # a roomy `max_wal_size` keeps a volume-triggered checkpoint from landing mid-round.
+    command: >-
+      postgres
+      -c checkpoint_completion_target=0.9
+      -c checkpoint_timeout=15min
+      -c max_wal_size=2GB
+      -c log_checkpoints=on
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U downtrace -d downtrace"]
       interval: 2s

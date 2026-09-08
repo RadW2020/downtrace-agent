@@ -117,3 +117,37 @@ export class ProcessSampler {
     };
   }
 }
+
+/** Postgres's own checkpoint counters, cumulative since it started. */
+export interface CheckpointWork {
+  timed: number;
+  requested: number;
+  writeMs: number;
+  syncMs: number;
+}
+
+/**
+ * What the database has been doing about checkpoints, read through the app's admin surface.
+ *
+ * The benchmark does not own that database — it measures against whatever `DATABASE_URL` points at (ADR 0023) —
+ * so it cannot tell it when to write. What it can do is read the counters around each round and say what it
+ * measured against, the way it already does with the neighbouring CPU (gh-194, ADR 0031).
+ *
+ * Undefined when the counters are not there or the app will not answer. Not knowing is not a quiet database, and
+ * a diagnostic read must never take a round down.
+ */
+export async function checkpointsSince(baseUrl: string): Promise<CheckpointWork | undefined> {
+  try {
+    const res = await fetch(`${baseUrl}/__admin/db/checkpoints`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return undefined;
+    const body = (await res.json()) as { available?: boolean } & Partial<CheckpointWork>;
+    if (body.available !== true) return undefined;
+    const { timed, requested, writeMs, syncMs } = body;
+    if (timed === undefined || requested === undefined || writeMs === undefined || syncMs === undefined) {
+      return undefined;
+    }
+    return { timed, requested, writeMs, syncMs };
+  } catch {
+    return undefined;
+  }
+}
