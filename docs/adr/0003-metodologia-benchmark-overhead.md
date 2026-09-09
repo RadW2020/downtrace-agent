@@ -1,6 +1,6 @@
 # ADR 0003 — Metodología del benchmark de overhead del agente
 
-Estado: aceptado; su parte estadística (mediana de p99 por ronda, ruido máx−mín) y el agente falso están superados por el ADR 0007, dar por comparables las rondas alternas sin fijar el estado de la base de datos lo supera el ADR 0021, y la lectura de `packages/reference-app/.env` por el harness la supera el ADR 0023 · Fecha: 2026-09-03 · Alcance: público
+Estado: aceptado; su parte estadística (mediana de p99 por ronda, ruido máx−mín) y el agente falso están superados por el ADR 0007, dar por comparables las rondas alternas sin fijar el estado de la base de datos lo supera el ADR 0021, la lectura de `packages/reference-app/.env` por el harness la supera el ADR 0023, y **que cada cambio del agente pase por `make bench` en CI está superado por el ADR 0032**, que lo sacó del pipeline · Fecha: 2026-09-03 · Alcance: público
 
 ## Contexto
 
