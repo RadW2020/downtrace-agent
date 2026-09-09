@@ -20,6 +20,8 @@ Since **0.2.0** an endpoint may also carry `postgres`: how many queries each req
 
 Since **0.6.0** a batch may also carry `profile`: what each route normally does, on its own cadence rather than with every interval. Each operation is a `hash` — the identity, which is what groups them — plus an optional normalised `text`, so a sender who would rather not ship the text of their queries keeps the whole analysis and loses only the label. Queries and error signatures share one shape, so the next kind needs no new field.
 
+Since **0.7.0** `agent` may also carry `observers`: which of `pg`, `http`, `redis` and `runtime` are `on`, `off` or `unavailable`. The third state is the point — a service nobody is watching must not look like a service with nothing to watch — and **absent is a fourth answer**, meaning the sender did not say, which is not the same as watching nothing.
+
 Fields are only ever **added**, and always optional. Each addition bumps the minor version, and the batch's `protocol` field is an enum of every published minor, so a cloud that speaks 0.2 still accepts an agent that speaks 0.1. Removing or renaming a field, or moving a histogram's bucket bounds, would be a major version on a new path. Bucket bounds are declared in the schema itself (`x-latency-boundaries-ms`, `x-calls-per-request-boundaries`), and so are the versions themselves and the ingestion path (`x-ingest-path`), so they are part of the generated contract rather than a constant someone has to keep in sync.
 
 ## Source
