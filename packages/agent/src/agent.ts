@@ -3,8 +3,9 @@ import diagnostics_channel from "node:diagnostics_channel";
 import { hostname } from "node:os";
 import type { AgentInfo, DeployInfo, InstanceInfo } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
+import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
-import { enterRequest, type RequestContext } from "./context.ts";
+import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
 import { FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
@@ -24,6 +25,8 @@ const SHUTDOWN_FLUSH_MS = 1_000;
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 
 export interface AgentDeps {
+  /** The coarse register, so a test can drive its clock. */
+  coarse?: CoarseRegister;
   recorder?: Recorder | undefined;
   sender?: Sender | undefined;
   log?: Logger | undefined;
@@ -60,6 +63,8 @@ export class Agent {
   readonly instance: InstanceInfo;
   private readonly log: Logger;
   private readonly recorder: Recorder;
+  /** The coarse half of the black box: the last few minutes, second by second. */
+  private readonly coarse: CoarseRegister;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
@@ -95,6 +100,10 @@ export class Agent {
     };
     const deploy: DeployInfo = { version: config.version, environment: config.environment };
     this.recorder = deps.recorder ?? new IntervalAggregator();
+    // The coarse half of the black box. Always on: `product.md` says the instrumentation **maintains** it, and
+    // it is cheap enough to — five additions per request into a preallocated row. Nothing leaves the process
+    // with it until captures exist.
+    this.coarse = deps.coarse ?? new CoarseRegister();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
       this.profile = new ProfileAggregator({ sendText: config.queryText });
@@ -213,6 +222,7 @@ export class Agent {
     const method = normalizeMethod(request.method);
     const route = routeOf(request);
     this.recorder.record(method, route, response?.statusCode ?? 0, ms, ctx?.work);
+    this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     if (ctx?.operations) this.profile?.record(method, route, ctx.operations.values());
     this.recorded += 1;
   }
@@ -253,6 +263,14 @@ export class Agent {
     };
     flush.then(resume, resume);
   }
+}
+
+/** How many calls a request made across every dependency. Zero when nothing was instrumented. */
+function callsOf(work: Map<string, DependencyWork> | undefined): number {
+  if (!work) return 0;
+  let calls = 0;
+  for (const w of work.values()) calls += w.calls;
+  return calls;
 }
 
 export function createAgent(config: AgentConfig, deps: AgentDeps = {}): Agent {
