@@ -30,15 +30,21 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 
 | Variable | Required | What it is |
 |---|---|---|
-| `DOWNTRACE_TOKEN` | yes | The project's ingest token |
+| `DOWNTRACE_TOKEN` | yes | The ingest token for this project **and environment** |
 | `DOWNTRACE_URL` | yes | Base URL of the cloud, `http://` or `https://`; trailing slashes are ignored |
-| `DOWNTRACE_ENV` | no | Environment; falls back to `NODE_ENV`, then `production` |
+| `DOWNTRACE_ENV` | no | Environment; falls back to `NODE_ENV`, then `production`. See the note below: a token that belongs to an environment is what decides where the data lands |
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
 | `DOWNTRACE_INSPECT` | no | `stderr` or a file path: writes every batch exactly as it would be sent. With it set, `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` become optional |
+
+An ingest token belongs to one environment, and **that** is the environment everything sent with it is stored as,
+whatever `DOWNTRACE_ENV` says. If the two disagree, the data still lands — going blind over a mislabelled deploy
+would be worse than the wrong label — and the project's page shows the instance as declaring something else, which
+is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the
+batch declare.
 
 Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else. So you can add it to a deployment before you have a token: nothing changes until both exist.
 
