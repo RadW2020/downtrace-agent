@@ -51,5 +51,7 @@ Las llamadas al proveedor ocurren dentro de la transacción a propósito: es una
 - `GET /__admin/process` — `cpu` (`process.cpuUsage()`), `memory` (`process.memoryUsage()`), `eventLoopUtilization`, `uptimeMs`; lo muestrea el benchmark de overhead.
 - `GET /__admin/stats` — por endpoint: requests, status por clase, `sqlQueries`, `providerCalls`, `providerRetries`, `redisOps`, `poolWaitMs`, `errors` por tipo, `totalDurationMs`.
 - `POST /__admin/stats/reset`.
+- `GET /__admin/db/checkpoints` — qué ha estado haciendo Postgres con sus checkpoints: `available: false` cuando la base no lo cuenta, y si no, los contadores. El banco lo lee alrededor de cada ronda porque no puede reconfigurar una base que no es suya, así que informa contra qué midió (gh-194).
+- `POST /__admin/db/reset` — deja la base en su tamaño de partida. El banco lo llama antes de cada ronda: compara rondas entre sí, y solo son comparables si empiezan iguales (ADR 0021).
 
 El tráfico a `/__admin/*` no se contabiliza. Con `ADMIN_ENABLED=0` estas rutas no existen (404).
