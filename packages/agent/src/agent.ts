@@ -6,6 +6,7 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
+import { FineRegister } from "./fine.ts";
 import { FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
@@ -27,6 +28,8 @@ const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 export interface AgentDeps {
   /** The coarse register, so a test can drive its clock. */
   coarse?: CoarseRegister;
+  /** The fine register, so a test can size its rings down to a few entries. */
+  fine?: FineRegister;
   recorder?: Recorder | undefined;
   sender?: Sender | undefined;
   log?: Logger | undefined;
@@ -65,6 +68,8 @@ export class Agent {
   private readonly recorder: Recorder;
   /** The coarse half of the black box: the last few minutes, second by second. */
   private readonly coarse: CoarseRegister;
+  /** The fine half: the last tens of seconds, request by request and operation by operation. */
+  private readonly fine: FineRegister;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
@@ -104,6 +109,7 @@ export class Agent {
     // it is cheap enough to — five additions per request into a preallocated row. Nothing leaves the process
     // with it until captures exist.
     this.coarse = deps.coarse ?? new CoarseRegister();
+    this.fine = deps.fine ?? new FineRegister();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
       this.profile = new ProfileAggregator({ sendText: config.queryText });
@@ -204,10 +210,13 @@ export class Agent {
   private requestStarted(message: unknown): void {
     const request = (message as { request?: object }).request;
     if (!request) return;
-    this.starts.set(request, performance.now());
+    const startedAt = performance.now();
+    this.starts.set(request, startedAt);
     this.runtime.requestStarted();
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
-    if (this.instrumented) this.contexts.set(request, enterRequest());
+    // The fine register goes in with it: an operation is written where it happens, and reaching for a global
+    // from there would be state this repository does not keep.
+    if (this.instrumented) this.contexts.set(request, enterRequest(this.fine, startedAt));
   }
 
   private responseFinished(message: unknown): void {
@@ -223,6 +232,17 @@ export class Agent {
     const route = routeOf(request);
     this.recorder.record(method, route, response?.statusCode ?? 0, ms, ctx?.work);
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
+    // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
+    // is still true. What it has none of is detail, and an empty list says that already.
+    this.fine.request(
+      method,
+      route,
+      response?.statusCode ?? 0,
+      startedAt ?? 0,
+      ms,
+      ctx?.fineFrom ?? this.fine.openRequest(),
+      ctx?.fineOps ?? 0,
+    );
     if (ctx?.operations) this.profile?.record(method, route, ctx.operations.values());
     this.recorded += 1;
   }

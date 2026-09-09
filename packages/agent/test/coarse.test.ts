@@ -1,7 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
-import { CoarseRegister, DEFAULT_ROUTES, DEFAULT_SECONDS, MAX_BYTES } from "../src/coarse.ts";
+import { COARSE_MAX_BYTES, CoarseRegister, DEFAULT_ROUTES, DEFAULT_SECONDS } from "../src/coarse.ts";
 import { OTHER_ROUTE } from "../src/routes.ts";
 
 /** A logger that says nothing: this test is about the register, not about what the agent prints. */
@@ -171,7 +171,7 @@ describe("the coarse register", () => {
     for (let i = 0; i < DEFAULT_ROUTES * 2; i += 1) r.record("GET", `/route-${i}`, 200, 1, 0);
 
     expect(r.snapshot().coverage.routes).toBeLessThanOrEqual(DEFAULT_ROUTES + 1);
-    expect(r.bytes()).toBeLessThanOrEqual(MAX_BYTES);
+    expect(r.bytes()).toBeLessThanOrEqual(COARSE_MAX_BYTES);
     // And the budget is not passing because the register is tiny: it really holds five minutes of every row.
     expect(DEFAULT_SECONDS).toBeGreaterThanOrEqual(300);
     expect(r.bytes()).toBeGreaterThan(1024 * 1024);

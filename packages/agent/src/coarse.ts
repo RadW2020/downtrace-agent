@@ -31,7 +31,7 @@ export const DEFAULT_ROUTES = 128;
  * CPU halves are what `make bench` measures; the memory half is arithmetic, and this is where it is asserted —
  * `bytes()` computes what is really allocated and a test holds it under this.
  */
-export const MAX_BYTES = 2 * 1024 * 1024;
+export const COARSE_MAX_BYTES = 2 * 1024 * 1024;
 
 /** What one second of one route holds. Sums and a maximum: a histogram per second per route would multiply the
  * memory by its buckets to answer a question the interval already answers. */

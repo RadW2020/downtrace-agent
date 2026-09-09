@@ -97,7 +97,15 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
           // Resolved here, not above, so a query outside a request costs nothing: no context, no fingerprint.
           if (sql !== undefined && fingerprints) {
             const ctx = currentContext();
-            if (ctx) recordOperationIn(ctx, "query", fingerprints.get(sql), ms, failed);
+            if (ctx) {
+              recordOperationIn(ctx, {
+                kind: "query",
+                fingerprint: fingerprints.get(sql),
+                startedAt: started,
+                endedAt: started + ms,
+                failed,
+              });
+            }
           }
         } catch (err) {
           deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -120,7 +128,13 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
               const failed = cbArgs[0] != null;
               recordCallIn(ctx, "postgres", target, ms, failed);
               if (sql !== undefined && fingerprints) {
-                recordOperationIn(ctx, "query", fingerprints.get(sql), ms, failed);
+                recordOperationIn(ctx, {
+                  kind: "query",
+                  fingerprint: fingerprints.get(sql),
+                  startedAt: started,
+                  endedAt: started + ms,
+                  failed,
+                });
               }
             } catch (err) {
               deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
