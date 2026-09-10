@@ -1,0 +1,86 @@
+{
+  "protocol": "0.6.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [
+    {
+      "start": 1756900000000,
+      "durationMs": 10000,
+      "endpoints": [
+        {
+          "method": "POST",
+          "route": "/checkout",
+          "count": 3,
+          "errors": 0,
+          "status": {
+            "success": 3,
+            "redirect": 0,
+            "clientError": 0,
+            "serverError": 0
+          },
+          "latency": {
+            "counts": [
+              0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "sum": 2.4,
+            "max": 0.9
+          }
+        }
+      ]
+    }
+  ],
+  "profile": {
+    "start": 1756900000000,
+    "durationMs": 60000,
+    "endpoints": [
+      {
+        "method": "POST",
+        "route": "/checkout",
+        "operations": [
+          {
+            "kind": "query",
+            "hash": "b7c1d0f2a3e45861",
+            "count": 1440,
+            "totalMs": 812.4,
+            "errors": 0,
+            "class": "select"
+          },
+          {
+            "kind": "query",
+            "hash": "9a02ff31b4c7d5e0",
+            "count": 720,
+            "totalMs": 190.1
+          },
+          {
+            "kind": "error",
+            "hash": "c4d5e6f708192a3b",
+            "text": "PoolTimeoutError",
+            "count": 3,
+            "totalMs": 15003.2,
+            "errors": 3
+          },
+          {
+            "kind": "query",
+            "hash": "(other)",
+            "count": 96,
+            "totalMs": 41.7,
+            "distinct": 7
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -59,6 +59,11 @@ describe("aggregates schema v0", () => {
   it("rejects every invalid fixture for the expected reason", async () => {
     const invalid = new Map(await load("invalid"));
     expect(invalid.size).toBeGreaterThanOrEqual(3);
+    // Every one of them, and not only the ones named below. The name of this test said «every» and it only
+    // ever checked the list, so a new invalid fixture was never checked at all (gh-344).
+    for (const [name, doc] of invalid) {
+      expect(validate(doc), `${name} was accepted and should not be`).toBe(false);
+    }
     const reason = (name: string) => {
       expect(validate(invalid.get(name)), name).toBe(false);
       return ajv.errorsText(validate.errors);
@@ -71,6 +76,9 @@ describe("aggregates schema v0", () => {
     // that is not Node has no event loop (gh-285). What is invalid now is a reading with nothing in it.
     expect(reason("runtime-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
     expect(reason("dependency-unknown-kind.json")).toMatch(/kind must be equal to one of the allowed values/);
+    // A class and a text are two answers to one question: «hash y clase» is what travels when the text
+    // could not be produced safely (`product.md:113`, gh-344).
+    expect(reason("operation-with-class-and-text.json")).toMatch(/must NOT be valid/);
   });
 });
 
