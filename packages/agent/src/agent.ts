@@ -13,6 +13,7 @@ import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { OverheadMeter, Sheddable, type SheddableLevel } from "./overhead.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
@@ -23,6 +24,14 @@ const REQUEST_START = "http.server.request.start";
 const RESPONSE_FINISH = "http.server.response.finish";
 const MAX_INTERNAL_ERRORS = 10;
 const SHUTDOWN_FLUSH_MS = 1_000;
+/**
+ * When the two registers together get this close to their budgets, the detail goes first.
+ *
+ * `product.md:241`: «si se acerca a su presupuesto de memoria, reduce la ventana de detalle y lo registra
+ * como pérdida de cobertura». Three of the sixty-four mebibytes invariant 3 allows, which is what the two
+ * registers reserve between them (ADR 0067, 0068); this trips at four fifths of it.
+ */
+const MEMORY_HIGH_WATER_BYTES = Math.floor(3 * 1024 * 1024 * 0.8);
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 
 export interface AgentDeps {
@@ -30,6 +39,8 @@ export interface AgentDeps {
   coarse?: CoarseRegister;
   /** The fine register, so a test can size its rings down to a few entries. */
   fine?: FineRegister;
+  /** The overhead meter, so a test can sample every call and drive its clock. */
+  overhead?: OverheadMeter;
   recorder?: Recorder | undefined;
   sender?: Sender | undefined;
   log?: Logger | undefined;
@@ -42,6 +53,14 @@ export interface AgentStats {
   recorded: number;
   internalErrors: number;
   disabled: boolean;
+  /**
+   * What the instrumentation has given up because it was costing too much, and why. `product.md:241` asks
+   * for both: «se autolimita» and «lo registra como pérdida de cobertura» (gh-271).
+   */
+  shed: SheddableLevel;
+  shedReason: string;
+  /** Estimated milliseconds of hook time per request. An estimate, sampled, and named as one. */
+  overheadPerRequestMs: number;
   sent: number;
   failed: number;
   dropped: number;
@@ -75,6 +94,8 @@ export class Agent {
   private readonly starts = new WeakMap<object, number>();
   private readonly contexts = new WeakMap<object, RequestContext>();
   private readonly runtime = new RuntimeSampler();
+  /** What the instrumentation costs, measured while it runs, and what it gives up when it costs too much. */
+  private readonly overhead: OverheadMeter;
   /** Both exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
   private readonly fingerprints: FingerprintCache | undefined;
   private readonly profile: ProfileAggregator | undefined;
@@ -110,6 +131,7 @@ export class Agent {
     // with it until captures exist.
     this.coarse = deps.coarse ?? new CoarseRegister();
     this.fine = deps.fine ?? new FineRegister();
+    this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
       this.profile = new ProfileAggregator({ sendText: config.queryText });
@@ -134,10 +156,14 @@ export class Agent {
   }
 
   get stats(): AgentStats {
+    const overhead = this.overhead.state();
     return {
       recorded: this.recorded,
       internalErrors: this.internalErrors,
       disabled: this.disabled,
+      shed: overhead.shed,
+      shedReason: overhead.reason,
+      overheadPerRequestMs: overhead.perRequestMs,
       sent: this.sender.sent,
       failed: this.sender.failed,
       dropped: this.sender.dropped,
@@ -216,7 +242,10 @@ export class Agent {
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
     // from there would be state this repository does not keep.
-    if (this.instrumented) this.contexts.set(request, enterRequest(this.fine, startedAt));
+    // The fine register is passed only while it is being kept: shedding it has to stop the writes, not just
+    // the reads, or the expensive half goes on costing what it costs.
+    const fine = this.overhead.keeping(Sheddable.Fine) ? this.fine : undefined;
+    if (this.instrumented) this.contexts.set(request, enterRequest(fine, startedAt));
   }
 
   private responseFinished(message: unknown): void {
@@ -234,25 +263,46 @@ export class Agent {
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
     // is still true. What it has none of is detail, and an empty list says that already.
-    this.fine.request(
-      method,
-      route,
-      response?.statusCode ?? 0,
-      startedAt ?? 0,
-      ms,
-      ctx?.fineFrom ?? this.fine.openRequest(),
-      ctx?.fineOps ?? 0,
-    );
-    if (ctx?.operations) this.profile?.record(method, route, ctx.operations.values());
+    if (this.overhead.keeping(Sheddable.Fine)) {
+      this.fine.request(
+        method,
+        route,
+        response?.statusCode ?? 0,
+        startedAt ?? 0,
+        ms,
+        ctx?.fineFrom ?? this.fine.openRequest(),
+        ctx?.fineOps ?? 0,
+      );
+    }
+    if (ctx?.operations && this.overhead.keeping(Sheddable.Profile)) {
+      this.profile?.record(method, route, ctx.operations.values());
+    }
     this.recorded += 1;
+    // Closed here and not in the hook wrapper: what invariant 3 bounds is the cost **per request**, and this
+    // is where a request ends.
+    this.overhead.requestFinished();
+    // The registers are preallocated, so this is arithmetic rather than a measurement (ADR 0067): near the
+    // budget, the detail goes before anything else does.
+    if (this.fine.bytes() + this.coarse.bytes() > MEMORY_HIGH_WATER_BYTES) this.overhead.shedForMemory();
   }
 
   /** Every hook runs through here: an agent bug must never reach the application. */
+  /**
+   * Every hook runs through here, which is why the measurement lives here too: one place to touch, and the
+   * only one that sees all of them.
+   *
+   * The cost when this invocation is not being timed is an increment and a comparison. Timing every one
+   * would be two `performance.now()` per hook, which is exactly the spend invariant 3 bounds — measuring
+   * the overhead cannot be the overhead (ADR 0080, gh-271).
+   */
   private guard(fn: () => void): void {
+    const started = this.overhead.enter();
     try {
       fn();
     } catch (err) {
       this.internalError(err);
+    } finally {
+      this.overhead.leave(started);
     }
   }
 
