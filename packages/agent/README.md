@@ -75,6 +75,28 @@ Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `n
 
 Either import the instrumentation from an entry point you own, as above, or make the bundler keep it. In Next that is `outputFileTracingIncludes`; other tools have an equivalent.
 
+## If your application calls `process.exit()`
+
+`process.exit()` is immediate. It does not wait for a promise in flight and it does not fire `beforeExit`,
+so an application that calls it the moment its servers close cuts off whatever the instrumentation was
+about to send: the interval in hand, the profile of the window, the evidence of a capture. Two lines fix it:
+
+```js
+import { shutdown } from "@downtrace/agent";
+
+process.once("SIGTERM", async () => {
+  await server.close();
+  await shutdown();
+  process.exit(0);
+});
+```
+
+`shutdown()` is safe to call when the instrumentation is off, safe to call twice, and never throws — an
+application on its way out has nothing to do with an error from its telemetry.
+
+You do not need it if you let the process end on its own: closing your servers and letting the event loop
+empty is what runs `beforeExit`, and the instrumentation flushes there.
+
 ## What leaves your server
 
 Only structural metadata: method, **route template** (`/products/:id`, never the actual URL), status, counts and a fixed-bucket latency histogram per route and interval, plus the process identity (random id, hostname, pid) and the deploy (version, environment). No bodies, no headers, no query strings. The exact contract is the JSON Schema in [`@downtrace/protocol`](https://www.npmjs.com/package/@downtrace/protocol).

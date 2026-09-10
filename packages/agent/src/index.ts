@@ -22,6 +22,7 @@ export {
   type FineSnapshot,
 } from "./fine.ts";
 export { createLogger, type Logger } from "./log.ts";
+export { shutdown } from "./registered.ts";
 export { heuristicTemplate, type Method, normalizeMethod, OTHER_ROUTE, routeOf } from "./routes.ts";
 export { DEFAULT_MAX_QUEUED, Sender, type SenderOptions } from "./transport.ts";
 export { AGENT_VERSION } from "./version.ts";
