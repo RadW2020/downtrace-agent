@@ -18,6 +18,19 @@ import { type Fingerprint, hash64 } from "./fingerprint.ts";
 
 /** Longer than this and the signature is truncated. Values are already gone by then. */
 const MAX_TEXT = 512;
+
+/**
+ * How much of a sanitised message has to still be words for it to be worth sending.
+ *
+ * `product.md:113`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
+ * un mensaje de error que no encaja en los formatos conocidos viaja solo como tipo y firma, sin texto».
+ *
+ * There is no catalogue of «known formats» to check against, and there does not need to be one: the signal is
+ * how much sense survives the sanitising. A message that comes out mostly `?` tells a reader nothing and only
+ * risks whatever the patterns did not catch. Half is generous **towards omitting**, which is the criterion the
+ * product states (gh-343).
+ */
+const MIN_MEANING = 0.5;
 /** How many frames of the stack make the signature. Enough to tell two call sites apart, few enough to read. */
 const FRAMES = 3;
 
@@ -126,12 +139,34 @@ function messageOf(err: unknown): string {
  */
 export function errorFingerprint(err: unknown): Fingerprint {
   const type = typeOf(err);
-  const message = sanitizeMessage(messageOf(err));
+  const sanitised = sanitizeMessage(messageOf(err));
+  const message = meaningful(sanitised) ? sanitised : "";
   const where = stackSignature(err instanceof Error ? err.stack : undefined);
-  let text = message === "" ? type : `${type}: ${message}`;
+  let text = type;
+  if (message !== "") {
+    text = `${type}: ${message}`;
+  } else if (sanitised !== "") {
+    // Omitted rather than sent, and said out loud: a text that is missing without a reason is the kind of
+    // silence this product does not practise (invariant 14).
+    text = `${type}: (message omitted: nothing recognisable survived sanitising)`;
+  }
   if (where !== "") text = `${text} · ${where}`;
   if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT - 1)}…`;
   return { text, hash: hash64(text) };
+}
+
+/**
+ * Whether a sanitised message still says something.
+ *
+ * Counted in words and not in characters: `?` is one character and the word it replaced was ten, so counting
+ * characters would call a message meaningful precisely when it lost the most.
+ */
+export function meaningful(sanitised: string): boolean {
+  if (sanitised === "") return false;
+  const words = sanitised.split(/\s+/).filter((w) => w !== "");
+  if (words.length === 0) return false;
+  const kept = words.filter((w) => w.replace(/[^A-Za-z]/g, "").length > 0).length;
+  return kept / words.length >= MIN_MEANING;
 }
 
 /** How many distinct errors one process is expected to throw. Beyond this the cache stops growing. */

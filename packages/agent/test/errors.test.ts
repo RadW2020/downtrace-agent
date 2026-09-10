@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ErrorFingerprintCache, errorFingerprint, sanitizeMessage, stackSignature } from "../src/errors.ts";
+import { ErrorFingerprintCache, errorFingerprint, meaningful, sanitizeMessage, stackSignature } from "../src/errors.ts";
 
 /**
  * `product.md:77`: «Errores y excepciones: **tipo, mensaje saneado, firma del stack**». The instrumentation
@@ -116,6 +116,53 @@ describe("the signature", () => {
     const { text } = errorFingerprint({ userId: 4821, email: "ana@cliente.com" });
     expect(text).not.toContain("4821");
     expect(text).not.toContain("cliente.com");
+  });
+});
+
+/**
+ * `product.md:113`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
+ * un mensaje de error que no encaja en los formatos conocidos viaja solo como tipo y firma, sin texto».
+ *
+ * It is the only line of the document that says how the product behaves when it is not sure, and until
+ * gh-343 it behaved the other way: it sent whatever survived (ADR 0084).
+ */
+describe("a message that says nothing after sanitising", () => {
+  function signed(message: string) {
+    const err = new Error(message);
+    err.stack = `Error: ${message}\n    at run (/app/src/orders.js:42:1)`;
+    return errorFingerprint(err);
+  }
+
+  it("does not travel", () => {
+    const { text } = signed("4821 9137 5b6d1f0e-2c3a-4d5e-8f90-1a2b3c4d5e6f");
+    expect(text).not.toContain("?");
+    expect(text).toContain("omitted");
+  });
+
+  it("still carries the type and the signature, which is what the product asks for", () => {
+    const { text } = signed("4821 9137 0x5b6d");
+    expect(text).toContain("Error");
+    expect(text).toContain("run@orders.js:42");
+  });
+
+  it("leaves a message that still means something alone", () => {
+    expect(signed("user 4821 not found").text).toContain("user ? not found");
+    expect(signed("connection terminated unexpectedly").text).toContain("connection terminated");
+  });
+
+  it("says why it is missing rather than leaving a hole", () => {
+    expect(signed("4821 9137 4444").text).toContain("nothing recognisable survived");
+  });
+
+  it("still groups two omitted messages from the same place", () => {
+    expect(signed("4821 9137").hash).toBe(signed("1111 2222").hash);
+  });
+
+  it("counts words and not characters", () => {
+    // `?` is one character and the word it replaced was ten: counting characters would call a message
+    // meaningful exactly when it lost the most.
+    expect(meaningful("? ? ?")).toBe(false);
+    expect(meaningful("could not connect to ?")).toBe(true);
   });
 });
 
