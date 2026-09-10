@@ -1,7 +1,10 @@
+import type { CaptureEvidence } from "@downtrace/protocol";
 import {
   AGGREGATES_PATH,
   type AgentInfo,
   type AggregatesBatch,
+  type CaptureProgress,
+  captureEvidencePath,
   type DeployInfo,
   type InstanceInfo,
   type Interval,
@@ -28,7 +31,51 @@ export interface SenderOptions {
   inspector?: Inspector | undefined;
 }
 
+/**
+ * A capture the cloud is asking this instrumentation to make, as it came back in the answer.
+ *
+ * Read from the response body, so every field is `unknown` until checked: what arrives here has been over a
+ * network and is nobody's promise. Only the fields this side acts on are kept.
+ */
+export interface PendingCapture {
+  id: string;
+  windowSeconds: number;
+  expiresAt: number;
+  environment?: string;
+  method?: string;
+  route?: string;
+}
+
+/** The orders in one answer, or none: a body that cannot be read is no orders, never an error (gh-379). */
+export function capturesIn(body: string): PendingCapture[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  const list = (parsed as { captures?: unknown } | null)?.captures;
+  if (!Array.isArray(list)) return [];
+  const out: PendingCapture[] = [];
+  for (const item of list) {
+    if (typeof item !== "object" || item === null) continue;
+    const c = item as Record<string, unknown>;
+    // `as` at the boundary and nowhere else: id, window and expiry are what this side acts on, and an order
+    // missing any of them is one it cannot obey.
+    if (typeof c.id !== "string" || c.id === "") continue;
+    if (typeof c.windowSeconds !== "number" || typeof c.expiresAt !== "number") continue;
+    const pending: PendingCapture = { id: c.id, windowSeconds: c.windowSeconds, expiresAt: c.expiresAt };
+    if (typeof c.environment === "string") pending.environment = c.environment;
+    if (typeof c.method === "string") pending.method = c.method;
+    if (typeof c.route === "string") pending.route = c.route;
+    out.push(pending);
+  }
+  return out;
+}
+
 export const DEFAULT_MAX_QUEUED = 6;
+/** As many capture reports as the answer may carry orders. Bounded on both sides of the same channel. */
+const MAX_CAPTURE_REPORTS = 16;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 /**
@@ -58,6 +105,8 @@ const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 export class Sender {
   private queue: Interval[] = [];
   private profiles: Profile[] = [];
+  /** Capture starts waiting to ride the next batch. Cleared when it lands, so nothing is said twice. */
+  private captureReports: CaptureProgress[] = [];
   private inflight = false;
   private warnedAuth = false;
   sent = 0;
@@ -90,6 +139,11 @@ export class Sender {
    * Queues a profile for the next batch. A batch carries at most one, so they go out oldest first and, like
    * intervals, the oldest is dropped rather than letting an unreachable cloud grow this without bound.
    */
+  /** What the next batch says about the captures under way (ADR 0098). Replaces, never accumulates. */
+  enqueueCaptures(reports: CaptureProgress[]): void {
+    this.captureReports = reports.slice(0, MAX_CAPTURE_REPORTS);
+  }
+
   enqueueProfile(profile: Profile): void {
     this.profiles.push(profile);
     while (this.profiles.length > this.maxQueued) {
@@ -107,12 +161,65 @@ export class Sender {
   }
 
   /** Sends everything queued in one batch. Resolves true when the cloud accepted it. */
+  /** Called with the captures the cloud asked for, when there are any. Set by the agent. */
+  onCaptures: ((pending: PendingCapture[]) => void) | undefined;
+
+  /** Called with the capture starts a batch actually delivered, so they are not delivered twice. */
+  onReported: ((ids: string[]) => void) | undefined;
+
+  /** Reads the answer's orders. Never throws into the flush: the batch already landed. */
+  private async handOverCaptures(res: Response): Promise<void> {
+    try {
+      const pending = capturesIn(await res.text());
+      if (pending.length > 0) this.onCaptures?.(pending);
+    } catch (err) {
+      this.opts.log.debug(`could not read the answer: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Sends one capture's evidence, on its own path and with its own size (ADR 0073).
+   *
+   * Never queued and never retried. A capture's evidence is worth something inside its window and nothing
+   * after it, and the cloud settles the race between instances by itself: the first evidence ends the
+   * capture and the rest get a `409`, which is not a failure here — it is another process having been
+   * quicker (gh-379).
+   *
+   * Returns whether the cloud took it, for the log and for the tests. Nothing upstream depends on it.
+   */
+  async sendEvidence(id: string, evidence: CaptureEvidence, timeoutMs = this.timeoutMs): Promise<boolean> {
+    if (this.opts.url === "" || this.opts.token === "") return false;
+    try {
+      const res = await this.fetchImpl(`${this.opts.url}${captureEvidencePath(id)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${this.opts.token}` },
+        body: JSON.stringify(evidence),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.ok) {
+        this.opts.log.debug(`evidence for ${id} accepted`);
+        return true;
+      }
+      if (res.status === 409) {
+        this.opts.log.debug(`evidence for ${id} was not needed: another instance got there first`);
+        return false;
+      }
+      this.opts.log.debug(`evidence for ${id} refused with ${res.status}`);
+      return false;
+    } catch (err) {
+      this.opts.log.debug(`evidence for ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
   async flush(timeoutMs = this.timeoutMs): Promise<boolean> {
-    // Something to say is an interval **or** a profile. The queue is intervals, and asking only about it
-    // meant a profile with no interval to ride on never left — at shutdown, always, and in any window that
-    // closed with no traffic. The ADR 0017 says the profile hangs off the batch and not off an interval; its
-    // delivery did not (gh-375).
-    if (this.inflight || (this.queue.length === 0 && this.profiles.length === 0)) return false;
+    // Something to say is an interval, a profile **or** a capture report. Asking only about the interval
+    // queue meant a profile with no interval to ride on never left — at shutdown, always (gh-375) — and the
+    // same trap caught the capture reports the moment they existed: a capture watching a route with no
+    // traffic would have gone unreported for as long as the quiet lasted (gh-379).
+    if (this.inflight || (this.queue.length === 0 && this.profiles.length === 0 && this.captureReports.length === 0)) {
+      return false;
+    }
     // The cloud asked for time. Aggregating carries on and the queue keeps dropping its oldest past six: not
     // being able to send is no reason to stop measuring what will be sendable later (gh-205).
     if (this.now() < this.silentUntil) return false;
@@ -127,7 +234,12 @@ export class Sender {
       // 1..maxQueued intervals by construction; the generated type is a union of tuples.
       intervals: intervals as AggregatesBatch["intervals"],
       ...(profile ? { profile } : {}),
+      // 1..16 by construction, like the intervals above: the generated type is a union of tuples.
+      ...(this.captureReports.length > 0
+        ? { captures: this.captureReports as NonNullable<AggregatesBatch["captures"]> }
+        : {}),
     };
+    const reported = this.captureReports.map((c) => c.id);
     const body = JSON.stringify(batch);
     // Written before sending, and written the same whether the send succeeds or not: what the inspection mode
     // shows is what this instrumentation produced, which is the question it exists to answer (gh-181).
@@ -151,7 +263,15 @@ export class Sender {
         // Only on success: a profile whose batch never arrived stays queued and rides the next one.
         if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
         this.sent += 1;
+        // Said, so it is not said again. Only on success: a report whose batch never arrived has not been
+        // heard, and the capture would look accepted-but-never-started for as long as that lasted.
+        this.captureReports = [];
+        this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
+        // The other half of the control channel (ADR 0071): the answer carries what the cloud wants
+        // captured. Read after the batch is accounted for, and never allowed to unaccount it — the batch
+        // arrived, whatever the body says (gh-379).
+        if (this.onCaptures) await this.handOverCaptures(res);
         return true;
       }
       if (REJECTED.has(res.status)) {

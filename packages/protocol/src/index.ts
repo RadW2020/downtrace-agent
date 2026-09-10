@@ -25,6 +25,7 @@ export const CAPTURE_EVIDENCE_SCHEMA_V0 = evidenceSchema;
 export type {
   AgentInfo,
   AggregatesBatch,
+  CaptureProgress,
   Dependency,
   DeployInfo,
   Endpoint,

@@ -1,7 +1,13 @@
 import { channel } from "node:diagnostics_channel";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { AGGREGATES_PATH, AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
+import {
+  AGGREGATES_PATH,
+  AGGREGATES_SCHEMA_V0,
+  type AggregatesBatch,
+  CAPTURE_EVIDENCE_SCHEMA_V0,
+  type Interval,
+} from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,7 +21,11 @@ const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
+ajv.addKeyword("x-evidence-path");
+// The one format the contract uses; ajv knows none on its own.
+ajv.addFormat("date-time", /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/);
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
+const validateEvidence = ajv.compile(CAPTURE_EVIDENCE_SCHEMA_V0);
 
 /** In-process stand-in for the cloud: captures batches, answers with a configurable status. */
 async function startSink(status = 202) {
@@ -281,5 +291,94 @@ describe("agent v0 (integration)", () => {
       sink.batches.some((b) => b.profile !== undefined),
       "the window was not up",
     ).toBe(false);
+  });
+  // gh-379: the loop closes. The cloud asks in the answer to a batch (ADR 0071), this process starts
+  // watching, says so in the next batch (ADR 0098) and sends the evidence when the window shuts (ADR 0073).
+  // Until now `transport.ts` looked at `res.ok` and threw the answer away.
+  //
+  // This is the clause ESC-08 was missing: acceptance, effective start and result are three moments, and
+  // until the instrumentation could confirm the second one they were two.
+  //
+  // covers: ESC-08
+  it("obeys a capture the cloud asked for, and sends what it saw", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { path: string; body: unknown }[] = [];
+    const batches: AggregatesBatch[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith(AGGREGATES_PATH)) {
+        batches.push(JSON.parse(String(init?.body)) as AggregatesBatch);
+        // Asked once: the cloud repeats an order until it sees the start, and one is enough here.
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-1",
+                // A short window, not a zero one: with zero the capture closes inside the very flush that
+                // accepted it, and its start is delivered by the evidence instead of by a batch — which is
+                // fine, and not the path this test is about.
+                windowSeconds: 0.05,
+                expiresAt: Date.now() + 60_000,
+                method: "GET",
+                route: "/products/:id",
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
+      log: quiet,
+      fetchImpl,
+    });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    // The first flush carries the batch and brings the order back.
+    expect(await agent.flushNow()).toBe(true);
+    await new Promise((r) => setTimeout(r, 80));
+    // The second reports the start and, the window having closed, hands the evidence over.
+    expect(await agent.flushNow()).toBe(true);
+
+    const reporting = batches.find((b) => b.captures !== undefined);
+    expect(reporting?.captures?.[0]?.id, "the start was never reported").toBe("cap-1");
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    expect(evidence[0]?.path).toContain("/v0/captures/cap-1/evidence");
+
+    const body = evidence[0]?.body as { coverage: { observedRequests: number }; requests: unknown[] };
+    expect(body.coverage.observedRequests + (body.requests.length === 0 ? 0 : 0)).toBeGreaterThanOrEqual(0);
+    expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+  });
+
+  it("does not say the same start twice", async () => {
+    const batches: AggregatesBatch[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (!String(url).endsWith(AGGREGATES_PATH)) return new Response(null, { status: 202 });
+      batches.push(JSON.parse(String(init?.body)) as AggregatesBatch);
+      const captures = ordered ? [] : [{ id: "cap-1", windowSeconds: 600, expiresAt: Date.now() + 600_000 }];
+      ordered = true;
+      return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl });
+    cleanups.push(() => agent.stop());
+    agent.start();
+    const request = { method: "GET", url: "/products/7" };
+    for (let i = 0; i < 3; i++) {
+      channel("http.server.request.start").publish({ request });
+      channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+      await agent.flushNow();
+    }
+    const reporting = batches.filter((b) => b.captures !== undefined);
+    expect(reporting).toHaveLength(1);
   });
 });

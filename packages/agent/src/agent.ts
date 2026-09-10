@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import diagnostics_channel from "node:diagnostics_channel";
 import { hostname } from "node:os";
-import type { AgentInfo, DeployInfo, InstanceInfo, Observers } from "@downtrace/protocol";
+import {
+  type AgentInfo,
+  type DeployInfo,
+  type InstanceInfo,
+  type Observers,
+  PROTOCOL_VERSION,
+} from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
+import { Captures, type LiveCapture, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
@@ -106,6 +113,8 @@ export class Agent {
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
   private readonly errors: ErrorFingerprintCache | undefined;
   private readonly profile: ProfileAggregator | undefined;
+  /** The captures the cloud has asked this process for. Empty until one arrives (gh-379). */
+  private readonly captures = new Captures();
   private instrumented = false;
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
@@ -232,6 +241,11 @@ export class Agent {
       observers.runtime = "on";
     }
     this.agentInfo.observers = observers;
+    // The other half of the control channel: the orders come back in the answer to a batch (ADR 0071), and
+    // until now nobody was listening. Every instance obeys — none can know what the others are doing — and
+    // the cloud settles the race with a `409` on the second evidence (gh-379).
+    this.sender.onCaptures = (pending) => this.guard(() => this.captures.accept(pending, Date.now()));
+    this.sender.onReported = (ids) => this.guard(() => this.captures.reported(ids));
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
@@ -277,16 +291,56 @@ export class Agent {
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
       const profile = leaving ? this.profile?.drain() : this.profile?.rotate();
       if (profile) this.sender.enqueueProfile(profile);
+      // What the cloud asked for and this process really started, said once (ADR 0098).
+      this.sender.enqueueCaptures(this.captures.toReport());
       const interval = this.recorder.rotate();
       if (interval) {
         // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
         const runtime = this.runtime.rotate();
         this.sender.enqueue(runtime ? { ...interval, runtime } : interval);
       }
-      return await this.sender.flush(timeoutMs);
+      const sent = await this.sender.flush(timeoutMs);
+      // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
+      // Leaving hands over everything under way, because partial evidence is an answer and silence is not.
+      await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(Date.now()));
+      return sent;
     } catch (err) {
       this.internalError(err);
       return false;
+    }
+  }
+
+  /**
+   * Freezes what the black box holds for each capture whose window closed, and sends it.
+   *
+   * A capture that saw nothing sends **empty** evidence and not silence: «una captura sin requests no
+   * prueba recuperación» (CAP-01), and the cloud already knows how to answer that. Failures are logged and
+   * dropped — a `409` is another instance having been quicker, and nothing here is worth retrying after its
+   * window has closed (gh-379).
+   */
+  private async deliverEvidence(done: LiveCapture[]): Promise<void> {
+    for (const capture of done) {
+      const slice = sliceFor(capture, this.fine.snapshot());
+      await this.sender.sendEvidence(capture.id, {
+        protocol: PROTOCOL_VERSION,
+        instance: { id: this.instance.id },
+        startedAt: new Date(capture.startedAt).toISOString(),
+        endedAt: new Date(Date.now()).toISOString(),
+        coverage: {
+          observedRequests: slice.observedRequests,
+          attachedRequests: slice.attachedRequests,
+          detailLost: slice.detailLost,
+          truncated: slice.truncated,
+        },
+        requests: slice.requests.map((r) => ({
+          method: r.method,
+          route: r.route,
+          status: r.status,
+          startedAt: new Date(r.startedAt).toISOString(),
+          durationMs: r.durationMs,
+          operations: r.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
+        })),
+      });
     }
   }
 

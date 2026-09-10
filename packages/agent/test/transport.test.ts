@@ -397,3 +397,48 @@ describe("a profile with no interval to ride on", () => {
     expect(body.intervals).toHaveLength(1);
   });
 });
+
+// gh-379. The orders travel in the ingest response (ADR 0071) and `flush` looked at `res.ok` and threw the
+// body away: a contract with no receiver. This is the receiving end.
+describe("the capture orders that come back in the answer", () => {
+  const answer = (captures: unknown) => JSON.stringify({ accepted: 1, inserted: 1, captures });
+
+  it("hands over what the cloud asked for", async () => {
+    const seen: unknown[] = [];
+    const { s } = sender([202], quiet, answer([{ id: "cap-1", windowSeconds: 60, expiresAt: 1_764_000_000_000 }]));
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as { id: string }).id).toBe("cap-1");
+  });
+
+  it("does not care that an answer carries none", async () => {
+    const seen: unknown[] = [];
+    const { s } = sender([202], quiet, JSON.stringify({ accepted: 1, inserted: 1 }));
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("treats a body it cannot read as no orders, and the batch still counts as sent", async () => {
+    // The body is external input, and a cloud that answers nonsense must not cost the batch that did land.
+    const seen: unknown[] = [];
+    const { s } = sender([202], quiet, "not json at all");
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("drops an order that is not shaped like one", async () => {
+    const seen: unknown[] = [];
+    const { s } = sender([202], quiet, answer([{ id: 7 }, "nope", { id: "cap-2", windowSeconds: 30, expiresAt: 1 }]));
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as { id: string }).id).toBe("cap-2");
+  });
+});
