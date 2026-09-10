@@ -88,8 +88,27 @@ export class ProfileAggregator {
    */
   rotate(): Profile | null {
     const now = this.now();
+    if (now - this.windowStart < PROFILE_WINDOW_MS) return null;
+    return this.close(now);
+  }
+
+  /**
+   * Closes the window whatever the clock says, for a process that is going away.
+   *
+   * A separate method and not a flag on `rotate`, because they answer different questions — «is it time?»
+   * and «close it» — and a caller that could pass `true` on every interval would put the profile back on the
+   * aggregates' cadence, which is the arithmetic the ADR 0017 says does not fit.
+   *
+   * Without this, a process that lives less than a minute sent no profile at all: `rotate` looked at the
+   * clock, said no, and shutting down did not change the clock. The last incomplete minute of every process
+   * went the same way (gh-371).
+   */
+  drain(): Profile | null {
+    return this.close(this.now());
+  }
+
+  private close(now: number): Profile | null {
     const durationMs = now - this.windowStart;
-    if (durationMs < PROFILE_WINDOW_MS) return null;
     const accumulated = this.endpoints;
     const start = this.windowStart;
     this.endpoints = new Map();

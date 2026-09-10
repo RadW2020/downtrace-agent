@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { AGGREGATES_PATH, AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
@@ -7,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Agent, createAgent } from "../src/agent.ts";
 import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
 import type { AgentConfig } from "../src/config.ts";
+import { currentContext, recordOperationIn } from "../src/context.ts";
 import type { Logger } from "../src/log.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -212,5 +214,72 @@ describe("agent v0 (integration)", () => {
 
     // Exactly one: zero would mean the observer never ran and the test proves nothing.
     expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(1);
+  });
+  // gh-371: a process that lives less than a minute used to send no profile at all. The window is 60 s and
+  // shutting down did not change the clock, so everything the instrumentation had learned about what the
+  // routes run went with it — and a process that keeps restarting is exactly when that matters.
+  it("sends the profile of a process that did not live a whole minute", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const sink = await startSink();
+    const agent = createAgent(config(sink.url, { instrument: new Set(["pg"]) }), { log: quiet });
+    cleanups.push(sink.close);
+    agent.start();
+
+    // The same message shape the diagnostics channel publishes, with a query recorded inside the request.
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    const ctx = currentContext();
+    expect(ctx, "the agent should have opened a context for the request").toBeDefined();
+    if (ctx) {
+      recordOperationIn(ctx, {
+        kind: "query",
+        fingerprint: { hash: "abc123", text: "SELECT id FROM products WHERE id = ?" },
+        startedAt: 0,
+        endedAt: 2,
+      });
+    }
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+
+    // Ten seconds of life, not sixty.
+    await agent.stop();
+
+    const withProfile = sink.batches.find((b) => b.profile !== undefined);
+    expect(withProfile, "the profile went with the process").toBeDefined();
+    const operation = withProfile?.profile?.endpoints[0]?.operations[0];
+    expect(operation?.hash).toBe("abc123");
+    // And it says how partial it was rather than claiming a minute it did not have.
+    expect(withProfile?.profile?.durationMs).toBeLessThan(60_000);
+  });
+
+  // The other half of gh-371, and the one a mutation slipped past first: draining is for leaving, not for
+  // every interval. Doing it on each flush would put the profile back on the aggregates' cadence, and the
+  // arithmetic of ADR 0017 says that does not fit in the row budget by nearly double.
+  it("does not send a partial profile just because an interval ended", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const sink = await startSink();
+    const agent = createAgent(config(sink.url, { instrument: new Set(["pg"]) }), { log: quiet });
+    cleanups.push(() => agent.stop(), sink.close);
+    agent.start();
+
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    const ctx = currentContext();
+    if (ctx) {
+      recordOperationIn(ctx, {
+        kind: "query",
+        fingerprint: { hash: "abc123", text: "SELECT id FROM products WHERE id = ?" },
+        startedAt: 0,
+        endedAt: 2,
+      });
+    }
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+
+    expect(await agent.flushNow()).toBe(true);
+    expect(
+      sink.batches.some((b) => b.profile !== undefined),
+      "the window was not up",
+    ).toBe(false);
   });
 });

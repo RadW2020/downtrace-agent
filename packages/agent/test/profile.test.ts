@@ -140,6 +140,48 @@ describe("ProfileAggregator, when there is more than fits", () => {
 });
 
 // A query the scanner did not understand travels as a hash and a class, never as a label (gh-347, ADR 0085).
+// gh-371. A process that lives less than a minute never sent its profile at all: `rotate` looks at the clock
+// and says no, and shutting down does not change the clock. The last incomplete minute of **any** process
+// went the same way.
+describe("ProfileAggregator, when the process is going away", () => {
+  it("closes the window whatever the clock says", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(10_000); // ten seconds and the process is gone
+    const drained = profile.drain();
+    expect(drained?.endpoints[0]?.operations[0]?.hash).toBe("q1");
+    // With its real duration: a partial window says how partial it was rather than claiming a minute.
+    expect(drained?.durationMs).toBe(10_000);
+  });
+
+  it("does not change the ordinary cadence", () => {
+    // Draining on every interval would put the profile back on the aggregates' cadence, and that is the
+    // arithmetic the ADR 0017 said does not fit.
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(10_000);
+    expect(profile.rotate()).toBeNull();
+  });
+
+  it("has nothing to drain when nothing ran", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    time.advance(10_000);
+    expect(profile.drain()).toBeNull();
+  });
+
+  it("does not send the same operations twice", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(10_000);
+    expect(profile.drain()).not.toBeNull();
+    expect(profile.drain()).toBeNull();
+  });
+});
+
 describe("ProfileAggregator, with a query that was not understood", () => {
   const unread = (hash: string) => work(hash, { text: "", class: "select" as const });
 

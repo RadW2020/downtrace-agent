@@ -118,7 +118,7 @@ export class Agent {
   private readonly onFinish = (message: unknown): void => this.guard(() => this.responseFinished(message));
   private readonly onSignal: Record<(typeof SIGNALS)[number], () => void>;
   private readonly onBeforeExit = (): void => {
-    void this.flushNow(SHUTDOWN_FLUSH_MS);
+    void this.flush(SHUTDOWN_FLUSH_MS, true);
   };
 
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
@@ -257,14 +257,25 @@ export class Agent {
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);
-    await this.flushNow(SHUTDOWN_FLUSH_MS);
+    await this.flush(SHUTDOWN_FLUSH_MS, true);
   }
 
   /** Closes the current interval and sends everything queued. */
   async flushNow(timeoutMs?: number): Promise<boolean> {
+    return this.flush(timeoutMs, false);
+  }
+
+  /**
+   * The same, closing the profile's window whatever the clock says.
+   *
+   * Only on the way out. A process that lives less than a minute used to send no profile at all — `rotate`
+   * looked at the clock and shutting down did not change the clock — and so did the last incomplete minute
+   * of every process (gh-371).
+   */
+  private async flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
     try {
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
-      const profile = this.profile?.rotate();
+      const profile = leaving ? this.profile?.drain() : this.profile?.rotate();
       if (profile) this.sender.enqueueProfile(profile);
       const interval = this.recorder.rotate();
       if (interval) {
@@ -371,7 +382,8 @@ export class Agent {
    */
   private signalled(signal: (typeof SIGNALS)[number]): void {
     const onlyUs = process.listenerCount(signal) === 1;
-    const flush = this.flushNow(SHUTDOWN_FLUSH_MS);
+    // A signal is the process leaving, so the profile's window closes with it.
+    const flush = this.flush(SHUTDOWN_FLUSH_MS, true);
     if (!onlyUs) return;
     const resume = (): void => {
       process.removeListener(signal, this.onSignal[signal]);
