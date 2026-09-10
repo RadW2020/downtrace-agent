@@ -1,3 +1,5 @@
+import { patternsOf } from "./exclude.ts";
+
 export interface AgentConfig {
   token: string;
   /** Ingest base URL, without trailing slash. */
@@ -19,6 +21,14 @@ export interface AgentConfig {
    * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
    */
   queryText: boolean;
+  /**
+   * Route templates the operator asked not to be looked at, and dependency targets likewise
+   * (`DOWNTRACE_EXCLUDE_ENDPOINTS`, `DOWNTRACE_EXCLUDE_DEPENDENCIES`). `product.md:104` gives them this,
+   * and excluding means **not observing**: what the cloud is told is how many are missing, not which
+   * (ADR 0101, gh-361).
+   */
+  excludeEndpoints: readonly string[];
+  excludeDependencies: readonly string[];
 }
 
 export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
@@ -70,6 +80,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
+      excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
+      excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
     },
   };

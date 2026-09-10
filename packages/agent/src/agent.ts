@@ -14,6 +14,7 @@ import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
 import { ErrorFingerprintCache } from "./errors.ts";
+import { Excluded } from "./exclude.ts";
 import { FineRegister } from "./fine.ts";
 import { FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
@@ -115,6 +116,9 @@ export class Agent {
   private readonly profile: ProfileAggregator | undefined;
   /** The captures the cloud has asked this process for. Empty until one arrives (gh-379). */
   private readonly captures = new Captures();
+  /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
+  private readonly excludedEndpoints: Excluded;
+  private readonly excludedDependencies: Excluded;
   private instrumented = false;
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
@@ -133,6 +137,8 @@ export class Agent {
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
     this.config = config;
     this.pgModule = deps.pgModule;
+    this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
+    this.excludedDependencies = new Excluded([...config.excludeDependencies]);
     this.log = deps.log ?? createLogger(config.debug);
     this.instance = { id: randomUUID(), hostname: hostname() || "unknown", pid: process.pid };
     // Mutated once, in `start()`, when the observers have actually attached. The sender reads this object at
@@ -293,6 +299,7 @@ export class Agent {
       if (profile) this.sender.enqueueProfile(profile);
       // What the cloud asked for and this process really started, said once (ADR 0098).
       this.sender.enqueueCaptures(this.captures.toReport());
+      this.declareWithholding();
       const interval = this.recorder.rotate();
       if (interval) {
         // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
@@ -344,6 +351,23 @@ export class Agent {
     }
   }
 
+  /**
+   * Says how much is being withheld, so that less arriving reads as a choice and not as a fault (ADR 0092).
+   *
+   * Counts and never names — the name of an excluded endpoint is exactly what the operator asked not to
+   * send — and only once something has actually been excluded: a pattern that matches nothing is not
+   * missing from anything, and declaring it would have the cloud explain an absence that is not there.
+   */
+  private declareWithholding(): void {
+    const endpoints = this.excludedEndpoints.count;
+    const dependencies = this.excludedDependencies.count;
+    if (endpoints === 0 && dependencies === 0) return;
+    this.agentInfo.withholding = {
+      ...(endpoints > 0 ? { endpoints } : {}),
+      ...(dependencies > 0 ? { dependencies } : {}),
+    };
+  }
+
   private requestStarted(message: unknown): void {
     const request = (message as { request?: object }).request;
     if (!request) return;
@@ -356,7 +380,14 @@ export class Agent {
     // The fine register is passed only while it is being kept: shedding it has to stop the writes, not just
     // the reads, or the expensive half goes on costing what it costs.
     const fine = this.overhead.keeping(Sheddable.Fine) ? this.fine : undefined;
-    if (this.instrumented) this.contexts.set(request, enterRequest(fine, startedAt));
+    if (this.instrumented) {
+      this.contexts.set(
+        request,
+        // The dependency exclusions travel with the request: `recordCallIn` is a free function on the hot
+        // path, and reaching the agent from it would mean making the agent global (ADR 0101).
+        enterRequest(fine, startedAt, this.excludedDependencies.configured ? this.excludedDependencies : undefined),
+      );
+    }
   }
 
   private responseFinished(message: unknown): void {
@@ -370,6 +401,10 @@ export class Agent {
     this.contexts.delete(request);
     const method = normalizeMethod(request.method);
     const route = routeOf(request);
+    // Excluded is **not observed**: not an aggregate, not the black box, not the profile, not even the
+    // count of requests. Matched against the normalised template and not the path, because excluding
+    // `/users/123` and not `/users/:id` would be an exclusion that excludes nothing (ADR 0101, gh-361).
+    if (this.excludedEndpoints.has(route)) return;
     this.recorder.record(method, route, response?.statusCode ?? 0, ms, ctx?.work);
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing

@@ -241,6 +241,8 @@ describe("the agent's fine register", () => {
         environment: "test",
         version: "t1",
         queryText: true,
+        excludeEndpoints: [],
+        excludeDependencies: [],
         inspect: undefined,
         debug: false,
         intervalMs: 60_000,

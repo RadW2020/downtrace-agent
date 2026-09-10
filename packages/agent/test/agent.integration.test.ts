@@ -71,6 +71,8 @@ function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     environment: "test",
     version: "t1",
     queryText: true,
+    excludeEndpoints: [],
+    excludeDependencies: [],
     inspect: undefined,
     debug: false,
     intervalMs: 60_000,
@@ -380,5 +382,57 @@ describe("agent v0 (integration)", () => {
     }
     const reporting = batches.filter((b) => b.captures !== undefined);
     expect(reporting).toHaveLength(1);
+  });
+  // `product.md:104`: «el usuario puede excluir endpoints o dependencias completas». Excluding is not
+  // observing, and what is withheld is declared so that less arriving reads as a choice (gh-361, ADR 0101).
+  it("does not observe an endpoint the operator excluded, and says how many", async () => {
+    const sink = await startSink();
+    const app = await startApp();
+    const agent = createAgent(config(sink.url, { excludeEndpoints: ["/products/:id"] }), { log: quiet });
+    cleanups.push(() => agent.stop(), app.close, sink.close);
+    agent.start();
+
+    for (let i = 0; i < 5; i++) await hit(app.url, "/products");
+    for (let i = 1; i <= 5; i++) await hit(app.url, `/products/${i}`);
+
+    expect(await agent.flushNow()).toBe(true);
+    const batch = sink.batches[0] as AggregatesBatch;
+    expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
+    const [interval] = batch.intervals as [Interval];
+    const routes = interval.endpoints.map((e) => e.route).sort();
+    expect(routes).toEqual(["/products"]);
+    // Not even in the count of requests: the whole point is that it was never looked at.
+    expect(interval.endpoints.reduce((n, e) => n + e.count, 0)).toBe(5);
+    // Counted, never named.
+    expect(batch.agent.withholding).toEqual({ endpoints: 1 });
+  });
+
+  it("matches the normalised template and not the path it came in on", async () => {
+    // Excluding `/products/1` and not `/products/:id` would be an exclusion that excludes nothing, and the
+    // path is what a careless operator would write.
+    const sink = await startSink();
+    const app = await startApp();
+    const agent = createAgent(config(sink.url, { excludeEndpoints: ["/products/1"] }), { log: quiet });
+    cleanups.push(() => agent.stop(), app.close, sink.close);
+    agent.start();
+
+    await hit(app.url, "/products/1");
+    expect(await agent.flushNow()).toBe(true);
+    const [interval] = (sink.batches[0] as AggregatesBatch).intervals as [Interval];
+    expect(interval.endpoints.map((e) => e.route)).toEqual(["/products/:id"]);
+    expect((sink.batches[0] as AggregatesBatch).agent.withholding).toBeUndefined();
+  });
+
+  it("says nothing about withholding when a pattern matches nothing", async () => {
+    // Zero excluded is not excluding. Declaring it would have the cloud explain an absence that is not there.
+    const sink = await startSink();
+    const app = await startApp();
+    const agent = createAgent(config(sink.url, { excludeEndpoints: ["/nothing-like-this"] }), { log: quiet });
+    cleanups.push(() => agent.stop(), app.close, sink.close);
+    agent.start();
+
+    await hit(app.url, "/products");
+    expect(await agent.flushNow()).toBe(true);
+    expect((sink.batches[0] as AggregatesBatch).agent.withholding).toBeUndefined();
   });
 });

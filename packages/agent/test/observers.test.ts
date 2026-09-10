@@ -12,6 +12,8 @@ function config(instrument: string[]): AgentConfig {
     environment: "test",
     version: "v",
     queryText: true,
+    excludeEndpoints: [],
+    excludeDependencies: [],
     inspect: undefined,
     debug: false,
     intervalMs: 60_000,

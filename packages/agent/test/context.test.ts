@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type DependencyKind, enterRequest, recordCallIn } from "../src/context.ts";
+import { type DependencyKind, enterRequest, recordCallIn, recordWaitIn } from "../src/context.ts";
 
 /**
  * What the key separator is for. The character itself is an implementation detail — it was a raw NUL byte until
@@ -60,5 +60,26 @@ describe("a request's dependency counters", () => {
     expect(ctx.work?.size).toBe(1);
     const entry = [...(ctx.work?.values() ?? [])][0];
     expect(entry).toMatchObject({ calls: 2, ms: 15, maxMs: 10, errors: 1 });
+  });
+});
+
+// `product.md:104`: excluding a dependency completely, and not observing it rather than observing and
+// dropping it (gh-361, ADR 0101).
+describe("a dependency the operator excluded", () => {
+  const excluding = (...targets: string[]) => ({ has: (t: string) => targets.includes(t) });
+
+  it("records neither its calls nor its waits", () => {
+    const ctx = enterRequest(undefined, 0, excluding("secrets.internal:5432"));
+    recordCallIn(ctx, "postgres", "secrets.internal:5432", 5);
+    recordWaitIn(ctx, "postgres", "secrets.internal:5432", 2);
+    recordCallIn(ctx, "postgres", "orders.internal:5432", 3);
+    const targets = [...(ctx.work?.values() ?? [])].map((w) => w.target);
+    expect(targets).toEqual(["orders.internal:5432"]);
+  });
+
+  it("leaves everything alone when nothing was excluded", () => {
+    const ctx = enterRequest();
+    recordCallIn(ctx, "postgres", "orders.internal:5432", 3);
+    expect(ctx.work?.size).toBe(1);
   });
 });

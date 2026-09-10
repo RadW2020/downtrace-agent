@@ -39,6 +39,12 @@ export interface OperationWork {
  */
 export interface RequestContext {
   work: Map<string, DependencyWork> | undefined;
+  /**
+   * The dependency targets the operator asked not to be looked at, or nothing when they asked for none.
+   * Carried here rather than reached for: this runs per call, and the agent is not reachable from a free
+   * function without making it global (`product.md:104`, ADR 0101).
+   */
+  excluded?: { has(target: string): boolean } | undefined;
   /** What this request ran, by fingerprint. Created on the first operation, like `work`. */
   operations: Map<string, OperationWork> | undefined;
   /** How many calls have been recorded, so an observer can tell whether anything saw a given call. */
@@ -72,7 +78,11 @@ function keyOf(kind: DependencyKind, target: string): string {
  * inside the request's own async context, so `enterWith` reaches the handler and everything it awaits. Verified
  * against concurrent keep-alive traffic: each request counts its own work.
  */
-export function enterRequest(fine?: FineRegister, startedAt = performance.now()): RequestContext {
+export function enterRequest(
+  fine?: FineRegister,
+  startedAt = performance.now(),
+  excluded?: { has(target: string): boolean },
+): RequestContext {
   const ctx: RequestContext = {
     work: undefined,
     operations: undefined,
@@ -81,6 +91,7 @@ export function enterRequest(fine?: FineRegister, startedAt = performance.now())
     startedAt,
     fineFrom: fine ? fine.openRequest() : 0,
     fineOps: 0,
+    excluded,
   };
   storage.enterWith(ctx);
   return ctx;
@@ -113,6 +124,10 @@ export function recordCallIn(
   ms: number,
   failed = false,
 ): void {
+  // What the operator asked not to be looked at is not looked at, here as well as at the route
+  // (`product.md:104`, ADR 0101). The context carries the decision because this runs per call and the
+  // agent is not reachable from here without making it global.
+  if (ctx.excluded?.has(target)) return;
   ctx.work ??= new Map();
   const key = keyOf(kind, target);
   let entry = ctx.work.get(key);
@@ -133,6 +148,7 @@ export function recordCallIn(
  * to it.
  */
 export function recordWaitIn(ctx: RequestContext, kind: DependencyKind, target: string, ms: number): void {
+  if (ctx.excluded?.has(target)) return;
   ctx.work ??= new Map();
   const key = keyOf(kind, target);
   let entry = ctx.work.get(key);
