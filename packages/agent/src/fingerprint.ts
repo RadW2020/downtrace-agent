@@ -1,3 +1,5 @@
+import { meaningful, sanitizeValues } from "./sanitize.ts";
+
 /**
  * Turns a query into what it *is*, without what it was *about*.
  *
@@ -57,6 +59,26 @@ const insideName = (c: string): boolean => {
  * byte — and the honest conclusion is that the text in front of it is not the text it thinks it is reading.
  */
 const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((c) => c !== "`"));
+
+/**
+ * A closed identifier, with anything that looks like a value taken out of it.
+ *
+ * Invariant 5 lets structural metadata leave and asks for it **sanitised**, and a quoted identifier is
+ * structure — the same family as a route template. But the name between the quotes is not always written by
+ * whoever wrote the query: `SELECT * FROM "${schema}"` builds it from data, and a doubled quote is part of
+ * the name in SQL, so `"a"" email = \'ana@cliente.com\' "` is one identifier carrying a whole literal.
+ *
+ * The same patterns that sanitise an error message, and the same threshold: a name of which fewer than half
+ * the words survive is not a name any more, and goes out as `?` rather than as punctuation pretending to be
+ * a label (ADR 0084). A name with no values in it comes back untouched, which is the ordinary case and the
+ * reason the label is worth having at all (gh-350).
+ */
+function quotedName(quoted: string): string {
+  const inner = quoted.slice(1, -1);
+  const sanitised = sanitizeValues(inner);
+  if (sanitised === inner) return quoted;
+  return meaningful(sanitised) ? `"${sanitised}"` : "?";
+}
 
 /** What one scan found: the label, and whether it believes it. */
 interface Scan {
@@ -177,8 +199,12 @@ function scanQuery(sql: string): Scan {
         }
         i++;
       }
-      if (!closed) swallowed = true;
-      emit(closed ? sql.slice(start, i) : "?");
+      if (!closed) {
+        swallowed = true;
+        emit("?");
+        continue;
+      }
+      emit(quotedName(sql.slice(start, i)));
       continue;
     }
 

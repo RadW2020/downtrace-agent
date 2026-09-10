@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ErrorFingerprintCache, errorFingerprint, meaningful, sanitizeMessage, stackSignature } from "../src/errors.ts";
+import { ErrorFingerprintCache, errorFingerprint, stackSignature } from "../src/errors.ts";
+// `sanitizeMessage` and `meaningful` moved to `sanitize.ts`, which the query scanner needs too (gh-350).
+import { meaningful, sanitizeMessage } from "../src/sanitize.ts";
 
 /**
  * `product.md:77`: «Errores y excepciones: **tipo, mensaje saneado, firma del stack**». The instrumentation

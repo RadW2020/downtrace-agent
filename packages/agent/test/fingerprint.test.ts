@@ -7,6 +7,11 @@ const HOSTILE =
   ` AND token = $tag$sk-live-9f1c$tag$ AND id = 4821 /* trace=req-77ab */`;
 const SECRETS = ["ana@cliente.com", "sk-live-9f1c", "4821", "req-77ab"];
 
+const leaks = (sql: string, secret: string) => {
+  const { text } = fingerprintOf(sql);
+  expect(text, `leaked from: ${sql}`).not.toContain(secret);
+};
+
 describe("normalizeQuery", () => {
   it("keeps the shape and drops the values", () => {
     expect(normalizeQuery("SELECT id FROM products WHERE id = 42")).toBe("SELECT id FROM products WHERE id = ?");
@@ -44,6 +49,31 @@ describe("normalizeQuery", () => {
     expect(normalizeQuery('SELECT * FROM "OrderItems" WHERE id = 1')).toBe('SELECT * FROM "OrderItems" WHERE id = ?');
   });
 
+  it("sanitises what a quoted identifier carries, because a name can be interpolated too", () => {
+    // gh-350. Invariant 5 allows structural metadata out, and asks for it **sanitised**. A quoted identifier
+    // is structure — the same family as a route template — but `SELECT * FROM "${schema}"` is a name built
+    // from somebody's data, and with a doubled quote a whole literal fits inside one.
+    leaks(`SELECT * FROM "user ana@cliente.com 4821"`, "ana@cliente.com");
+    leaks(`SELECT * FROM "user ana@cliente.com 4821"`, "4821");
+    const smuggled = `SELECT * FROM "a"" email = 'ana@cliente.com' AND id = 4821 "`;
+    leaks(smuggled, "ana@cliente.com");
+    leaks(smuggled, "4821");
+  });
+
+  it("drops the name entirely when nothing of it was a name", () => {
+    // `"? ?"` is not a label, it is punctuation pretending to be one. Same threshold as an error message:
+    // fewer than half the words surviving means it goes (ADR 0084).
+    expect(normalizeQuery(`SELECT * FROM "4821 9f1c2d3e5a7b"`)).toBe("SELECT * FROM ?");
+  });
+
+  it("leaves a name that is only a name exactly as it is", () => {
+    expect(normalizeQuery(`SELECT * FROM "order id"`)).toBe(`SELECT * FROM "order id"`);
+    const before = fingerprintOf('SELECT * FROM "OrderItems" WHERE id = 1');
+    expect(before.text).toBe(`SELECT * FROM "OrderItems" WHERE id = ?`);
+    // The hash of the day this was written: sanitising a name that has no values in it must change nothing.
+    expect(before.hash).toBe(fingerprintOf(`SELECT * FROM "OrderItems" WHERE id = 2`).hash);
+  });
+
   it("keeps an identifier that carries a quote of its own", () => {
     // `"a""b"` is one name spelled with a doubled quote. The fix for the unterminated case must not eat it.
     expect(normalizeQuery('SELECT "a""b" FROM t WHERE id = 1')).toBe('SELECT "a""b" FROM t WHERE id = ?');
@@ -69,11 +99,6 @@ describe("normalizeQuery", () => {
 
 // Invariant 5: no query literal leaves the user's server. These are the hostile cases, not the polite ones.
 describe("normalizeQuery, against literals that try to survive", () => {
-  const leaks = (sql: string, secret: string) => {
-    const { text } = fingerprintOf(sql);
-    expect(text, `leaked from: ${sql}`).not.toContain(secret);
-  };
-
   it("drops a literal with a doubled quote inside it", () => {
     leaks("SELECT * FROM users WHERE name = 'O''Brien-secret'", "Brien");
   });
