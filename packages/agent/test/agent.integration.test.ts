@@ -96,6 +96,10 @@ describe("agent v0 (integration)", () => {
     const batch = sink.batches[0] as AggregatesBatch;
     expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
     expect(batch.agent).toMatchObject({ name: "@downtrace/agent", runtime: "node", runtimeVersion: process.version });
+    // What was watched travels with the batch, in a batch the schema accepted above (gh-180, COB-01). This
+    // agent asks for nothing, so all four are `off` — and saying so is the point: silence would mean «this
+    // sender did not tell us», which is what an instrumentation older than 0.7.0 says.
+    expect(batch.agent.observers).toEqual({ pg: "off", http: "off", redis: "off", runtime: "off" });
     expect(batch.deploy).toEqual({ version: "t1", environment: "test" });
     expect(batch.instance.pid).toBe(process.pid);
 

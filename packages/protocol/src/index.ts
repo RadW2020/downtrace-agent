@@ -31,6 +31,8 @@ export type {
   InstanceInfo,
   Interval,
   LatencyHistogram,
+  ObserverState,
+  Observers,
   Operation,
   PostgresStats,
   Profile,

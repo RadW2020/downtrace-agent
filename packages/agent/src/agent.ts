@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import diagnostics_channel from "node:diagnostics_channel";
 import { hostname } from "node:os";
-import type { AgentInfo, DeployInfo, InstanceInfo } from "@downtrace/protocol";
+import type { AgentInfo, DeployInfo, InstanceInfo, Observers } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
@@ -48,6 +48,8 @@ export interface AgentDeps {
   fetchImpl?: typeof fetch | undefined;
   /** Flush on SIGTERM/SIGINT. Off in tests; on when loaded via register. */
   handleSignals?: boolean | undefined;
+  /** The `pg` module, so a test can hand it one that cannot be instrumented. Same seam `instrumentPg` has. */
+  pgModule?: unknown;
 }
 
 export interface AgentStats {
@@ -84,6 +86,8 @@ interface FinishMessage {
 export class Agent {
   readonly config: AgentConfig;
   readonly instance: InstanceInfo;
+  private readonly agentInfo: AgentInfo;
+  private readonly pgModule: unknown;
   private readonly log: Logger;
   private readonly recorder: Recorder;
   /** The coarse half of the black box: the last few minutes, second by second. */
@@ -119,14 +123,19 @@ export class Agent {
 
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
     this.config = config;
+    this.pgModule = deps.pgModule;
     this.log = deps.log ?? createLogger(config.debug);
     this.instance = { id: randomUUID(), hostname: hostname() || "unknown", pid: process.pid };
+    // Mutated once, in `start()`, when the observers have actually attached. The sender reads this object at
+    // flush time and the first flush is always after `start()`, so there is nothing to synchronise; building
+    // it here and filling it there is what lets the batch report what happened rather than what was asked.
     const agent: AgentInfo = {
       name: "@downtrace/agent",
       version: AGENT_VERSION,
       runtime: "node",
       runtimeVersion: process.version,
     };
+    this.agentInfo = agent;
     const deploy: DeployInfo = { version: config.version, environment: config.environment };
     this.recorder = deps.recorder ?? new IntervalAggregator();
     // The coarse half of the black box. Always on: `product.md` says the instrumentation **maintains** it, and
@@ -159,6 +168,11 @@ export class Agent {
     };
   }
 
+  /** What attached, once `start()` has run. Undefined before that: nothing has been attached to report. */
+  get observers(): Observers | undefined {
+    return this.agentInfo.observers;
+  }
+
   get stats(): AgentStats {
     const overhead = this.overhead.state();
     return {
@@ -180,16 +194,44 @@ export class Agent {
     if (this.started || this.disabled) return;
     this.started = true;
     const on = this.config.instrument;
+    // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
+    // which is a configuration and not a fault; `unavailable` is «asked for and could not attach», which is
+    // the case that used to disappear into a `log.debug` nobody reads.
+    const observers: Observers = {
+      pg: "off",
+      http: "off",
+      redis: "off",
+      runtime: "off",
+    };
     // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
-    if (on.has("pg")) instrumentPg({ log: this.log, fingerprints: this.fingerprints, errors: this.errors });
+    if (on.has("pg")) {
+      const version = instrumentPg({
+        log: this.log,
+        fingerprints: this.fingerprints,
+        errors: this.errors,
+        ...(this.pgModule !== undefined ? { moduleImpl: this.pgModule } : {}),
+      });
+      // The only observer that resolves a module, so the only one that can be asked for and not attach.
+      observers.pg = version === undefined ? "unavailable" : "on";
+    }
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
-    if (on.has("http")) this.stopHttp = instrumentHttp(this.log);
-    if (on.has("redis")) this.stopRedis = instrumentRedis(this.log);
+    if (on.has("http")) {
+      this.stopHttp = instrumentHttp(this.log);
+      observers.http = "on";
+    }
+    if (on.has("redis")) {
+      this.stopRedis = instrumentRedis(this.log);
+      observers.redis = "on";
+    }
     // A request context is only worth opening if something is going to record into it.
     this.instrumented = on.has("pg") || on.has("http") || on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
-    if (on.has("runtime")) this.runtime.start();
+    if (on.has("runtime")) {
+      this.runtime.start();
+      observers.runtime = "on";
+    }
+    this.agentInfo.observers = observers;
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
