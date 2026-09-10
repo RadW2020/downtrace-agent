@@ -8,7 +8,7 @@
   "scripts": {
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "build": "pnpm --filter @downtrace/protocol --filter @downtrace/agent run build",
+    "build": "pnpm --filter @downtrace/protocol --filter @downtrace/agent --filter @downtrace/mcp run build",
     "release": "pnpm run build && pnpm changeset publish"
   },
   "devDependencies": {

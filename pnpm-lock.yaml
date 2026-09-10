@@ -53,6 +53,8 @@ importers:
         specifier: workspace:*
         version: link:../reference-app
 
+  packages/mcp: {}
+
   packages/protocol:
     devDependencies:
       ajv:

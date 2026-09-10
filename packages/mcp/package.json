@@ -1,0 +1,54 @@
+{
+  "name": "@downtrace/mcp",
+  "version": "0.0.0",
+  "description": "Downtrace over MCP: the queries and operations of the product as tools a coding agent can discover and use. Speaks the public HTTP API, no dependencies.",
+  "type": "module",
+  "bin": {
+    "downtrace-mcp": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsdown"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RadW2020/downtrace-agent.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/RadW2020/downtrace-agent#readme",
+  "keywords": [
+    "downtrace",
+    "mcp",
+    "model-context-protocol",
+    "observability",
+    "agent",
+    "tools"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "bin": {
+      "downtrace-mcp": "./dist/cli.js"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  }
+}
