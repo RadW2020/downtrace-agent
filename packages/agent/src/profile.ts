@@ -132,7 +132,11 @@ export class ProfileAggregator {
       totalMs: work.totalMs,
       errors: work.errors,
     };
-    if (this.sendText && work.text !== "") operation.text = work.text;
+    if (!this.sendText) return operation;
+    if (work.text !== "") operation.text = work.text;
+    // Only when the user has not already answered the question. The absence of the text has one reason, and
+    // when they turned it off that reason is theirs: the cloud must read `suppressed`, not `omitted`.
+    else if (work.class !== undefined) operation.class = work.class;
     return operation;
   }
 }

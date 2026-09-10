@@ -1,3 +1,5 @@
+import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import type { OperationWork } from "../src/context.ts";
 import { DEFAULT_MAX_OPERATIONS, OTHER_OPERATION, PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
@@ -11,6 +13,17 @@ const work = (hash: string, over: Partial<OperationWork> = {}): OperationWork =>
   errors: 0,
   ...over,
 });
+
+/**
+ * The real schema, asked about one operation at a time. The profile is what feeds the batch, so «the schema
+ * accepts this» is a claim to check here rather than to write in a comment.
+ */
+const ajv = new Ajv2020({ allErrors: true, strict: true });
+ajv.addKeyword("x-latency-boundaries-ms");
+ajv.addKeyword("x-calls-per-request-boundaries");
+ajv.addKeyword("x-ingest-path");
+ajv.compile(AGGREGATES_SCHEMA_V0);
+const validateOperation = ajv.getSchema("https://downtrace.io/schema/v0/aggregates.schema.json#/$defs/Operation");
 
 /** A clock the test drives, so a one-minute window does not take a minute. */
 const clock = (start = 1_000_000) => {
@@ -123,6 +136,53 @@ describe("ProfileAggregator, when there is more than fits", () => {
     time.advance(PROFILE_WINDOW_MS);
     const routes = (profile.rotate()?.endpoints ?? []).map((e) => e.route).sort();
     expect(routes).toEqual(["(other)", "/a", "/b"]);
+  });
+});
+
+// A query the scanner did not understand travels as a hash and a class, never as a label (gh-347, ADR 0085).
+describe("ProfileAggregator, with a query that was not understood", () => {
+  const unread = (hash: string) => work(hash, { text: "", class: "select" as const });
+
+  it("sends the class in place of the label", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [unread("q1")]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operation = profile.rotate()?.endpoints[0]?.operations[0];
+    expect(operation?.text).toBeUndefined();
+    expect(operation?.class).toBe("select");
+    expect(operation?.hash).toBe("q1");
+  });
+
+  it("sends neither once the user has turned the text off", () => {
+    // Two reasons for one absence, and the protocol carries one. The user's choice is the reason then: the
+    // cloud must read «suppressed», which is what they asked for, and not «omitted».
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now, sendText: false });
+    profile.record("GET", "/a", [unread("q1")]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operation = profile.rotate()?.endpoints[0]?.operations[0];
+    expect(operation?.text).toBeUndefined();
+    expect(operation?.class).toBeUndefined();
+  });
+
+  it("produces operations the protocol accepts, labelled or classified", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [unread("q1"), work("q2")]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+    expect(operations).toHaveLength(2);
+    for (const operation of operations) {
+      expect(validateOperation?.(operation), ajv.errorsText(validateOperation?.errors)).toBe(true);
+    }
+  });
+
+  it("would be rejected if it ever sent both, which is why it does not", () => {
+    // The exclusion is the schema's, not a convention: a class is the reason there is no text, so the two
+    // together are two answers to one question (ADR 0085). Asking it here keeps the rule above honest.
+    const both = { kind: "query", hash: "q1", count: 1, totalMs: 1, errors: 0, text: "SELECT ?", class: "select" };
+    expect(validateOperation?.(both)).toBe(false);
   });
 });
 

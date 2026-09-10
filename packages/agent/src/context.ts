@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dependency } from "@downtrace/protocol";
 import type { FineRegister } from "./fine.ts";
+import type { QueryClass } from "./fingerprint.ts";
 
 export type DependencyKind = Dependency["kind"];
 
@@ -25,6 +26,8 @@ export interface OperationWork {
   hash: string;
   /** Normalised text. Empty when there is nothing readable to label it with. */
   text: string;
+  /** Set instead of the text when the query was not understood, and then it is the whole label (gh-347). */
+  class?: QueryClass;
   count: number;
   totalMs: number;
   errors: number;
@@ -153,7 +156,7 @@ export function recordWait(kind: DependencyKind, target: string, ms: number): vo
 export interface FinishedOperation {
   kind: OperationWork["kind"];
   /** Never the values: the text is normalised before it reaches here (`fingerprint.ts`, invariant 5). */
-  fingerprint: { hash: string; text: string };
+  fingerprint: { hash: string; text: string; class?: QueryClass };
   /** `performance.now()` when it started and when it finished. */
   startedAt: number;
   endedAt: number;
@@ -179,6 +182,7 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
       totalMs: 0,
       errors: 0,
     };
+    if (op.fingerprint.class !== undefined) entry.class = op.fingerprint.class;
     ctx.operations.set(op.fingerprint.hash, entry);
   }
   entry.count += 1;

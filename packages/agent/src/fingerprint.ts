@@ -17,22 +17,67 @@
 /** Longer than this and the label is truncated. Values are already gone by then, so a cut cannot expose one. */
 const MAX_TEXT = 1024;
 
+/** What a statement is, when that is all that can be said about it safely. The protocol's five and no more. */
+export type QueryClass = "select" | "insert" | "update" | "delete" | "other";
+
 export interface Fingerprint {
-  /** Normalised text: the label a person reads. */
+  /** Normalised text: the label a person reads. Empty when the scan did not understand the query. */
   text: string;
   /** Stable identity, 16 hex characters. What the cloud groups and compares by. */
   hash: string;
+  /**
+   * Set only when the query was not understood, and then it is the whole label. Its presence is the reason
+   * the text is absent, which is how the cloud tells «omitted» from «suppressed» (ADR 0085).
+   */
+  class?: QueryClass;
 }
 
 const isIdentifierChar = (c: string): boolean => /[A-Za-z0-9_$]/.test(c);
 const isDigit = (c: string): boolean => c >= "0" && c <= "9";
+/**
+ * Where a bare name may start, and what may continue it. Not `[A-Za-z_]`: Postgres takes letters, and `año` is
+ * a column somewhere. The ASCII case is answered with two comparisons and only the rest reaches the regex —
+ * this runs per character of every distinct query, and the property escapes cost forty percent when it ran
+ * for all of them.
+ */
+const LETTER = /\p{L}/u;
+const startsName = (c: string): boolean => {
+  const k = c.charCodeAt(0);
+  if ((k >= 97 && k <= 122) || (k >= 65 && k <= 90) || k === 95) return true;
+  return k > 127 && LETTER.test(c);
+};
+const insideName = (c: string): boolean => {
+  const k = c.charCodeAt(0);
+  if ((k >= 97 && k <= 122) || (k >= 65 && k <= 90) || (k >= 48 && k <= 57) || k === 95 || k === 36) return true;
+  return k > 127 && LETTER.test(c);
+};
+/**
+ * Everything else SQL is made of. A character that is not a name, a number, a delimiter or one of these is a
+ * character this scanner has no rule for — a backtick (that is MySQL), a backslash (that is psql), a control
+ * byte — and the honest conclusion is that the text in front of it is not the text it thinks it is reading.
+ */
+const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((c) => c !== "`"));
+
+/** What one scan found: the label, and whether it believes it. */
+interface Scan {
+  text: string;
+  understood: boolean;
+}
 
 export function normalizeQuery(sql: string): string {
+  return scanQuery(sql).text;
+}
+
+function scanQuery(sql: string): Scan {
   const out: string[] = [];
   const n = sql.length;
   let i = 0;
   /** The last character emitted, to tell `table1` from `= 1`. */
   let previous = "";
+  /** A delimiter opened and the scan reached the end still inside it, so it swallowed it does not know what. */
+  let swallowed = false;
+  /** A character with no rule at all. One is enough: this is not a vote. */
+  let unknown = false;
 
   const emit = (s: string): void => {
     out.push(s);
@@ -46,6 +91,7 @@ export function normalizeQuery(sql: string): string {
     // the end of the string, which is the whole point of scanning instead of matching.
     if (c === "'") {
       i++;
+      let closed = false;
       while (i < n) {
         if (sql[i] === "\\") {
           i += 2;
@@ -57,10 +103,12 @@ export function normalizeQuery(sql: string): string {
             continue;
           }
           i++;
+          closed = true;
           break;
         }
         i++;
       }
+      if (!closed) swallowed = true;
       emit("?");
       continue;
     }
@@ -79,6 +127,7 @@ export function normalizeQuery(sql: string): string {
       if (tag !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$|^$/.test(tag)) {
         const delimiter = `$${tag}$`;
         const end = sql.indexOf(delimiter, close + 1);
+        if (end === -1) swallowed = true;
         i = end === -1 ? n : end + delimiter.length;
         emit("?");
         continue;
@@ -102,6 +151,7 @@ export function normalizeQuery(sql: string): string {
 
     if (c === "/" && sql[i + 1] === "*") {
       const end = sql.indexOf("*/", i + 2);
+      if (end === -1) swallowed = true;
       i = end === -1 ? n : end + 2;
       emit(" ");
       continue;
@@ -127,7 +177,18 @@ export function normalizeQuery(sql: string): string {
         }
         i++;
       }
+      if (!closed) swallowed = true;
       emit(closed ? sql.slice(start, i) : "?");
+      continue;
+    }
+
+    // A bare name or keyword: `orders`, `SELECT`, `user_id`. Taking it whole rather than a letter at a time is
+    // what lets the last rule below mean «a character I have no rule for» instead of «a letter in a name».
+    if (startsName(c)) {
+      const start = i;
+      i++;
+      while (i < n && insideName(sql[i] as string)) i++;
+      emit(sql.slice(start, i));
       continue;
     }
 
@@ -149,6 +210,7 @@ export function normalizeQuery(sql: string): string {
       continue;
     }
 
+    if (!PUNCTUATION.has(c)) unknown = true;
     emit(c);
     i++;
   }
@@ -158,7 +220,8 @@ export function normalizeQuery(sql: string): string {
   const listsCollapsed = flat.replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, "(?)");
   // Same for a multi-row insert: the number of rows is a value too.
   const rowsCollapsed = listsCollapsed.replace(/\(\?\)(?:\s*,\s*\(\?\))+/g, "(?)");
-  return rowsCollapsed.length > MAX_TEXT ? rowsCollapsed.slice(0, MAX_TEXT) : rowsCollapsed;
+  const text = rowsCollapsed.length > MAX_TEXT ? rowsCollapsed.slice(0, MAX_TEXT) : rowsCollapsed;
+  return { text, understood: !swallowed && !unknown };
 }
 
 /**
@@ -177,9 +240,44 @@ export function hash64(text: string): string {
   return a.toString(16).padStart(8, "0") + b.toString(16).padStart(8, "0");
 }
 
+/**
+ * What kind of statement this is, for a query whose text cannot be sent.
+ *
+ * The first keyword, and one of five constants or nothing: no path here turns a piece of the query into the
+ * answer, which is what makes this safe to send when the label is not. `WITH` is `other` on purpose — it
+ * usually ends in a SELECT, and «usually» is not a thing to say about a query already declared not understood.
+ */
+export function classOf(sql: string): QueryClass {
+  let i = 0;
+  // An ORM writes its tag in a comment before the verb, so the verb is not always the first word.
+  while (i < sql.length) {
+    const c = sql[i] as string;
+    if (c === " " || c === "\n" || c === "\t" || c === "\r") {
+      i++;
+    } else if (c === "-" && sql[i + 1] === "-") {
+      const end = sql.indexOf("\n", i);
+      if (end === -1) return "other";
+      i = end + 1;
+    } else if (c === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      if (end === -1) return "other";
+      i = end + 2;
+    } else {
+      break;
+    }
+  }
+  let end = i;
+  while (end < sql.length && insideName(sql[end] as string)) end++;
+  const word = sql.slice(i, end).toLowerCase();
+  return word === "select" || word === "insert" || word === "update" || word === "delete" ? word : "other";
+}
+
 export function fingerprintOf(sql: string): Fingerprint {
-  const text = normalizeQuery(sql);
-  return { text, hash: hash64(text) };
+  const { text, understood } = scanQuery(sql);
+  // The hash is a digest of the normalised text either way: it reveals nothing, and keeping it means a query
+  // that cannot be labelled is still one operation the cloud can group, count and compare (ADR 0017).
+  const hash = hash64(text);
+  return understood ? { text, hash } : { text: "", hash, class: classOf(sql) };
 }
 
 /** How many distinct query texts one process is expected to write. Beyond this the cache stops growing. */

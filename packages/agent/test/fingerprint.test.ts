@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FingerprintCache, fingerprintOf, normalizeQuery } from "../src/fingerprint.ts";
+import { classOf, FingerprintCache, fingerprintOf, normalizeQuery } from "../src/fingerprint.ts";
+
+/** Every value here is delimited: a literal, a dollar-quoted body, a number, a comment. None may survive. */
+const HOSTILE =
+  `SELECT "order id", email FROM "orders" WHERE email = 'ana@cliente.com'` +
+  ` AND token = $tag$sk-live-9f1c$tag$ AND id = 4821 /* trace=req-77ab */`;
+const SECRETS = ["ana@cliente.com", "sk-live-9f1c", "4821", "req-77ab"];
 
 describe("normalizeQuery", () => {
   it("keeps the shape and drops the values", () => {
@@ -63,12 +69,6 @@ describe("normalizeQuery", () => {
 
 // Invariant 5: no query literal leaves the user's server. These are the hostile cases, not the polite ones.
 describe("normalizeQuery, against literals that try to survive", () => {
-  /** Every value here is delimited: a literal, a dollar-quoted body, a number, a comment. None may survive. */
-  const HOSTILE =
-    `SELECT "order id", email FROM "orders" WHERE email = 'ana@cliente.com'` +
-    ` AND token = $tag$sk-live-9f1c$tag$ AND id = 4821 /* trace=req-77ab */`;
-  const SECRETS = ["ana@cliente.com", "sk-live-9f1c", "4821", "req-77ab"];
-
   const leaks = (sql: string, secret: string) => {
     const { text } = fingerprintOf(sql);
     expect(text, `leaked from: ${sql}`).not.toContain(secret);
@@ -150,6 +150,108 @@ describe("normalizeQuery, against literals that try to survive", () => {
   });
 });
 
+// `product.md:104`: «cuando algo no puede procesarse con garantías, se omite en lugar de arriesgarse: una
+// consulta que el normalizador no entiende viaja solo como hash y clase» (gh-347).
+describe("a query the scanner does not understand", () => {
+  const understood = (sql: string) => fingerprintOf(sql).class === undefined;
+
+  it("says so instead of labelling it, and keeps the identity", () => {
+    const cut = `SELECT * FROM "orders WHERE email = 'ana@cliente.com'`;
+    const { text, hash, class: kind } = fingerprintOf(cut);
+    expect(text).toBe("");
+    expect(kind).toBe("select");
+    // The hash is a digest of the normalised text, which reveals nothing and keeps the cloud's grouping whole.
+    expect(hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(fingerprintOf(cut).hash).toBe(hash);
+  });
+
+  it("does not understand a delimiter that opened and never closed", () => {
+    expect(understood("SELECT * FROM t WHERE a = 'never closed")).toBe(false);
+    expect(understood("SELECT $tag$never closed")).toBe(false);
+    expect(understood("SELECT /* never closed")).toBe(false);
+    expect(understood('SELECT * FROM "never closed')).toBe(false);
+  });
+
+  it("does understand a line comment that ends where the string ends", () => {
+    // `--` has no closing delimiter to miss: running out of string is how it normally finishes.
+    expect(understood("SELECT id FROM t -- por el ticket 42")).toBe(true);
+    expect(understood("SELECT id FROM t -- por el ticket 42\nWHERE id = 1")).toBe(true);
+  });
+
+  it("does not understand a character it has no rule for", () => {
+    // A backtick is MySQL and this scanner reads Postgres; a backslash is a psql meta-command. Either way the
+    // text in front of the scanner is not the text it thinks it is reading.
+    expect(understood("SELECT * FROM `users`")).toBe(false);
+    expect(understood("\\copy t FROM 'f.csv'")).toBe(false);
+    expect(understood("SELECT id FROM t WHERE a = 1 \u0000 AND b = 2")).toBe(false);
+  });
+
+  it("understands the ordinary punctuation of SQL, accents and all", () => {
+    expect(understood("SELECT a::text, b->>'k' FROM t WHERE (a, b) <> (1, 2) AND c >= 3;")).toBe(true);
+    expect(understood("SELECT año FROM señores WHERE número = 1")).toBe(true);
+  });
+
+  it("still normalises a query it does understand, down to the same hash as before", () => {
+    // Pinned to the values of the day this was written, not to what the code now produces: the point of the
+    // rule is that nothing changed for a query that was already fine.
+    const a = fingerprintOf("SELECT id FROM products WHERE id = 42");
+    expect(a.text).toBe("SELECT id FROM products WHERE id = ?");
+    expect(a.hash).toBe("69ae55bc440f9b1a");
+    expect(a.class).toBeUndefined();
+    const b = fingerprintOf("INSERT INTO t (a) VALUES ('x')");
+    expect(b.text).toBe("INSERT INTO t (a) VALUES (?)");
+    expect(b.hash).toBe("0515d10a30a1c7c8");
+  });
+
+  it("never answers with a label and a class at once, wherever the corpus is broken", () => {
+    // Not every insertion makes a malformed query: a `"` that lands inside a literal or a comment is part of
+    // the value, and that query is as understood as it was. What must hold everywhere is that the two answers
+    // are exclusive — a class is the reason there is no text — and that no value survives either way.
+    let classified = 0;
+    for (let at = 0; at <= HOSTILE.length; at++) {
+      const broken = `${HOSTILE.slice(0, at)}"${HOSTILE.slice(at)}`;
+      const { text, class: kind } = fingerprintOf(broken);
+      if (kind !== undefined) {
+        expect(text, `both a class and a label: ${broken}`).toBe("");
+        classified++;
+      }
+      for (const secret of SECRETS) expect(text, `leaked from: ${broken}`).not.toContain(secret);
+    }
+    // The quote lands outside a literal far more often than inside one, and every one of those is malformed.
+    expect(classified).toBeGreaterThan(HOSTILE.length / 2);
+  });
+});
+
+describe("classOf", () => {
+  it("is the first keyword, and nothing else", () => {
+    expect(classOf("SELECT 1")).toBe("select");
+    expect(classOf("  \n insert into t values (1)")).toBe("insert");
+    expect(classOf("UPDATE t SET a = 1")).toBe("update");
+    expect(classOf("DELETE FROM t")).toBe("delete");
+  });
+
+  it("reads past a leading comment, which is where an ORM puts its tag", () => {
+    expect(classOf("/* app:web */ SELECT 1")).toBe("select");
+    expect(classOf("-- cacheable\nSELECT 1")).toBe("select");
+  });
+
+  it("says `other` rather than guess", () => {
+    // `WITH` usually ends in a SELECT, and «usually» is not something to say about a query already declared
+    // not understood.
+    expect(classOf("WITH x AS (SELECT 1) SELECT * FROM x")).toBe("other");
+    expect(classOf("BEGIN")).toBe("other");
+    expect(classOf("")).toBe("other");
+    expect(classOf("'just-a-secret'")).toBe("other");
+  });
+
+  it("can only ever answer one of five words", () => {
+    // Nothing of the query can become the class: that is what makes it safe to send when the text is not.
+    const answers = new Set<string>();
+    for (const sql of [HOSTILE, "SELECT 1", "no soy sql", "ana@cliente.com", "`x`", ""]) answers.add(classOf(sql));
+    for (const a of answers) expect(["select", "insert", "update", "delete", "other"]).toContain(a);
+  });
+});
+
 describe("fingerprintOf", () => {
   it("gives a short, stable hash", () => {
     const a = fingerprintOf("SELECT id FROM t");
@@ -187,6 +289,15 @@ describe("FingerprintCache", () => {
     expect(overflow.text).toBe("SELECT id FROM c WHERE id = ?");
     // The answer is right whether or not it was stored; only the cost differs.
     expect(cache.get("SELECT id FROM c WHERE id = 4").hash).toBe(overflow.hash);
+  });
+
+  it("carries the class of a query it did not understand, once for all its executions", () => {
+    const cache = new FingerprintCache(16);
+    const cut = `SELECT * FROM "orders WHERE email = 'ana@cliente.com'`;
+    for (let i = 0; i < 1000; i++) cache.get(cut);
+    expect(cache.misses).toBe(1);
+    expect(cache.get(cut).class).toBe("select");
+    expect(cache.get(cut).text).toBe("");
   });
 
   it("caches on the text as written, so the same shape written twice is two entries", () => {
