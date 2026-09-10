@@ -67,7 +67,9 @@ describe("aggregates schema v0", () => {
     expect(reason("negative-count.json")).toMatch(/count must be >= 0/);
     expect(reason("unknown-protocol.json")).toMatch(/protocol must be equal to one of the allowed values/);
     expect(reason("postgres-buckets-length.json")).toMatch(/queriesPerRequest must NOT have fewer than 8 items/);
-    expect(reason("runtime-missing-rss.json")).toMatch(/must have required property 'rssMb'/);
+    // A partial runtime health used to be the invalid case, and since 0.7.0 it is the normal one: a runtime
+    // that is not Node has no event loop (gh-285). What is invalid now is a reading with nothing in it.
+    expect(reason("runtime-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
     expect(reason("dependency-unknown-kind.json")).toMatch(/kind must be equal to one of the allowed values/);
   });
 });

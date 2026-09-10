@@ -3,7 +3,7 @@
   "agent": {
     "name": "@downtrace/agent",
     "version": "0.0.0",
-    "runtime": "node",
+    "runtime": "go",
     "runtimeVersion": "v24.0.0"
   },
   "instance": {
@@ -46,15 +46,10 @@
         }
       ],
       "runtime": {
-        "eventLoopDelayMs": {
-          "p50": 0.9,
-          "p99": 14.2,
-          "max": 61.5
-        },
         "gcPauseMs": 22.4,
         "gcCount": 7,
         "heapUsedMb": 48.6,
-        "inFlightMax": 9
+        "rssMb": 140.2
       }
     }
   ]

@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { RuntimeSampler } from "../src/runtime.ts";
 
 /** Keeps the event loop busy long enough for the delay histogram to have something to say. */
+/**
+ * The event loop reading, insisted upon. Optional in the protocol since 0.7.0, because a runtime that is
+ * not Node has none (gh-285); this sampler is Node's, so its absence here is a failure and not a case to
+ * tiptoe around.
+ */
+function loopOf(health: RuntimeHealth): NonNullable<RuntimeHealth["eventLoopDelayMs"]> {
+  const loop = health.eventLoopDelayMs;
+  if (!loop) throw new Error("the Node sampler reported no event loop delay");
+  return loop;
+}
+
 function block(ms: number): void {
   const until = Date.now() + ms;
   while (Date.now() < until) {
@@ -26,7 +37,7 @@ async function windowWithDelay(sampler: RuntimeSampler, attempts = 40): Promise<
     block(30);
     await new Promise((r) => setTimeout(r, 40));
     const health = sampler.rotate();
-    if (health && health.eventLoopDelayMs.max > 0) return health;
+    if (health && (health.eventLoopDelayMs?.max ?? 0) > 0) return health;
   }
   throw new Error(`the event loop delay histogram recorded nothing across ${attempts} windows`);
 }
@@ -47,8 +58,8 @@ describe("RuntimeSampler", () => {
     expect(Object.keys(health).sort()).toEqual(
       ["eventLoopDelayMs", "gcCount", "gcPauseMs", "heapUsedMb", "inFlightMax", "rssMb"].sort(),
     );
-    expect(health.eventLoopDelayMs.max).toBeGreaterThan(0);
-    expect(health.eventLoopDelayMs.p99).toBeGreaterThanOrEqual(health.eventLoopDelayMs.p50);
+    expect(loopOf(health).max).toBeGreaterThan(0);
+    expect(loopOf(health).p99).toBeGreaterThanOrEqual(loopOf(health).p50);
     expect(health.rssMb).toBeGreaterThan(0);
     expect(health.heapUsedMb).toBeGreaterThan(0);
     expect(health.gcCount).toBeGreaterThanOrEqual(0);
@@ -93,8 +104,8 @@ describe("RuntimeSampler", () => {
     // Comparing magnitudes between windows instead would measure the machine, and a loaded runner fails it.
     const second = sampler.rotate();
     sampler.stop();
-    expect(first.eventLoopDelayMs.max).toBeGreaterThan(0);
-    expect(second?.eventLoopDelayMs.max).toBe(0);
+    expect(loopOf(first).max).toBeGreaterThan(0);
+    expect(second?.eventLoopDelayMs?.max).toBe(0);
     expect(second?.gcCount).toBe(0);
     expect(second?.gcPauseMs).toBe(0);
   });

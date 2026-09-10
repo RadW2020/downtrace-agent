@@ -269,10 +269,9 @@
     },
     "RuntimeHealth": {
       "title": "RuntimeHealth",
-      "description": "Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.",
+      "description": "What the runtime itself was doing. Every field is optional and at least one has to be there: `product.md:251` says the protocol is independent of the language, and a Go runtime has garbage collection, a heap and a resident set but no event loop. Requiring the six of them meant it could either invent an event loop or send none of the three it does have. An empty object is not a reading, hence the minimum of one (gh-285).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["eventLoopDelayMs", "gcPauseMs", "gcCount", "heapUsedMb", "rssMb", "inFlightMax"],
       "properties": {
         "eventLoopDelayMs": {
           "type": "object",
@@ -322,7 +321,8 @@
           "minimum": 0,
           "description": "Peak concurrent in-flight requests during the interval."
         }
-      }
+      },
+      "minProperties": 1
     },
     "Dependency": {
       "title": "Dependency",

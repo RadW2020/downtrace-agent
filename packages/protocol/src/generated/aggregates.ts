@@ -222,13 +222,13 @@ export interface Dependency {
   waitMs?: number;
 }
 /**
- * Health of the agent's own process during the interval. Optional: an agent that does not measure it omits it. Per interval, not per route, because it belongs to the process.
+ * What the runtime itself was doing. Every field is optional and at least one has to be there: `product.md:251` says the protocol is independent of the language, and a Go runtime has garbage collection, a heap and a resident set but no event loop. Requiring the six of them meant it could either invent an event loop or send none of the three it does have. An empty object is not a reading, hence the minimum of one (gh-285).
  */
 export interface RuntimeHealth {
   /**
    * How long the event loop was late, in ms. The signal that says the process itself is the bottleneck.
    */
-  eventLoopDelayMs: {
+  eventLoopDelayMs?: {
     /**
      * Median delay.
      */
@@ -245,23 +245,23 @@ export interface RuntimeHealth {
   /**
    * Total time spent in garbage collection during the interval.
    */
-  gcPauseMs: number;
+  gcPauseMs?: number;
   /**
    * Garbage collections during the interval.
    */
-  gcCount: number;
+  gcCount?: number;
   /**
    * Heap in use at the end of the interval.
    */
-  heapUsedMb: number;
+  heapUsedMb?: number;
   /**
    * Resident set size at the end of the interval.
    */
-  rssMb: number;
+  rssMb?: number;
   /**
    * Peak concurrent in-flight requests during the interval.
    */
-  inFlightMax: number;
+  inFlightMax?: number;
 }
 /**
  * What each route normally does, sent once a minute rather than with every interval: a profile changes when the code changes, and at the aggregates' cadence it would not fit in the project's row budget (ADR 0017).
