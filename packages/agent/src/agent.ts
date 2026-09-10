@@ -13,7 +13,7 @@ import { Captures, type LiveCapture, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
-import { ErrorFingerprintCache } from "./errors.ts";
+import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
 import { FineRegister } from "./fine.ts";
@@ -23,6 +23,7 @@ import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { withheldName } from "./minimal.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel } from "./overhead.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
@@ -125,7 +126,15 @@ export class Agent {
    * trace becomes exit 0 with nothing. That is what invariant 2 forbids (gh-386).
    */
   private readonly onThrown = (err: unknown, origin: string): void =>
-    this.guard(() => this.exceptions.record(origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT, err));
+    this.guard(() =>
+      this.exceptions.record(
+        origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT,
+        err,
+        // In minimal mode the signature keeps its identity and loses its words: the hash is a digest and
+        // says nothing, and the text is the user's (ADR 0105).
+        this.config.minimal ? (e) => ({ ...errorFingerprint(e), text: "" }) : undefined,
+      ),
+    );
   /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
   private readonly excludedEndpoints: Excluded;
   private readonly excludedDependencies: Excluded;
@@ -150,7 +159,14 @@ export class Agent {
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
     this.log = deps.log ?? createLogger(config.debug);
-    this.instance = { id: randomUUID(), hostname: hostname() || "unknown", pid: process.pid };
+    // The hostname is the user's; the id is ours, generated here. In minimal mode the first travels as a
+    // digest of itself, which keeps two machines apart without naming either (ADR 0105).
+    const host = hostname() || "unknown";
+    this.instance = {
+      id: randomUUID(),
+      hostname: config.minimal ? withheldName(host) : host,
+      pid: process.pid,
+    };
     // Mutated once, in `start()`, when the observers have actually attached. The sender reads this object at
     // flush time and the first flush is always after `start()`, so there is nothing to synchronise; building
     // it here and filling it there is what lets the batch report what happened rather than what was asked.
@@ -161,7 +177,14 @@ export class Agent {
       runtimeVersion: process.version,
     };
     this.agentInfo = agent;
-    const deploy: DeployInfo = { version: config.version, environment: config.environment };
+    // The version is the user's, and a finding is attributed to a deploy, so it travels as a digest rather
+    // than not at all. The environment is **not** withheld: the ingest token already tells the cloud which
+    // one this is, so hiding it here protects nothing and would collapse the scope everything is organised
+    // by (ADR 0105).
+    const deploy: DeployInfo = {
+      version: config.minimal ? withheldName(config.version) : config.version,
+      environment: config.environment,
+    };
     this.recorder = deps.recorder ?? new IntervalAggregator();
     // The coarse half of the black box. Always on: `product.md` says the instrumentation **maintains** it, and
     // it is cheap enough to — five additions per request into a preallocated row. Nothing leaves the process
@@ -172,7 +195,9 @@ export class Agent {
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
       this.errors = new ErrorFingerprintCache();
-      this.profile = new ProfileAggregator({ sendText: config.queryText });
+      // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
+      // «send my routes but not my queries» is a real thing to want — and this turns it off as well.
+      this.profile = new ProfileAggregator({ sendText: config.queryText && !config.minimal });
     }
     this.sender =
       deps.sender ??
@@ -376,8 +401,9 @@ export class Agent {
   private declareWithholding(): void {
     const endpoints = this.excludedEndpoints.count;
     const dependencies = this.excludedDependencies.count;
-    if (endpoints === 0 && dependencies === 0) return;
+    if (!this.config.minimal && endpoints === 0 && dependencies === 0) return;
     this.agentInfo.withholding = {
+      ...(this.config.minimal ? { freeText: true as const } : {}),
       ...(endpoints > 0 ? { endpoints } : {}),
       ...(dependencies > 0 ? { dependencies } : {}),
     };
@@ -400,7 +426,12 @@ export class Agent {
         request,
         // The dependency exclusions travel with the request: `recordCallIn` is a free function on the hot
         // path, and reaching the agent from it would mean making the agent global (ADR 0101).
-        enterRequest(fine, startedAt, this.excludedDependencies.configured ? this.excludedDependencies : undefined),
+        enterRequest(
+          fine,
+          startedAt,
+          this.excludedDependencies.configured ? this.excludedDependencies : undefined,
+          this.config.minimal ? withheldName : undefined,
+        ),
       );
     }
   }
@@ -420,7 +451,11 @@ export class Agent {
     // count of requests. Matched against the normalised template and not the path, because excluding
     // `/users/123` and not `/users/:id` would be an exclusion that excludes nothing (ADR 0101, gh-361).
     if (this.excludedEndpoints.has(route)) return;
-    this.recorder.record(method, route, response?.statusCode ?? 0, ms, ctx?.work);
+    // Withheld **after** the exclusion is decided, so a pattern is matched against the real template and
+    // not against a digest of it, and after the black box has its own copy: what the coarse and fine
+    // registers hold never leaves the process except in a capture (ADR 0105).
+    const named = this.config.minimal ? withheldName(route) : route;
+    this.recorder.record(method, named, response?.statusCode ?? 0, ms, ctx?.work);
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
     // is still true. What it has none of is detail, and an empty list says that already.
@@ -436,7 +471,7 @@ export class Agent {
       );
     }
     if (ctx?.operations && this.overhead.keeping(Sheddable.Profile)) {
-      this.profile?.record(method, route, ctx.operations.values());
+      this.profile?.record(method, named, ctx.operations.values());
     }
     this.recorded += 1;
     // Closed here and not in the hook wrapper: what invariant 3 bounds is the cost **per request**, and this

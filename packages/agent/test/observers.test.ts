@@ -12,6 +12,7 @@ function config(instrument: string[]): AgentConfig {
     environment: "test",
     version: "v",
     queryText: true,
+    minimal: false,
     excludeEndpoints: [],
     excludeDependencies: [],
     inspect: undefined,

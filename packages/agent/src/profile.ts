@@ -108,7 +108,11 @@ export class ProfileAggregator {
   }
 
   private close(now: number): Profile | null {
-    const durationMs = now - this.windowStart;
+    // At least one: the contract says `durationMs >= 1`, and a process that observes something and leaves
+    // within the same millisecond would otherwise send a batch the cloud refuses with a 400 — losing the
+    // aggregates too, and opening a coverage-loss episode for what is a rounding error (gh-392). The
+    // window existed and had operations in it; «shorter than can be measured» is truer than nothing.
+    const durationMs = Math.max(1, now - this.windowStart);
     const accumulated = this.endpoints;
     const start = this.windowStart;
     this.endpoints = new Map();

@@ -29,6 +29,12 @@ export interface AgentConfig {
    */
   excludeEndpoints: readonly string[];
   excludeDependencies: readonly string[];
+  /**
+   * `DOWNTRACE_MINIMAL=1`: no free text leaves the server. Routes, dependency targets, the hostname and
+   * the deployed version travel as stable digests of themselves; query text, error messages and exception
+   * signatures do not travel at all (`product.md:104`, ADR 0105).
+   */
+  minimal: boolean;
 }
 
 export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
@@ -80,6 +86,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
+      minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
       excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,

@@ -71,6 +71,7 @@ function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     environment: "test",
     version: "t1",
     queryText: true,
+    minimal: false,
     excludeEndpoints: [],
     excludeDependencies: [],
     inspect: undefined,

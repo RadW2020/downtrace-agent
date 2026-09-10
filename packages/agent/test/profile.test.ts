@@ -24,6 +24,9 @@ ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
 ajv.compile(AGGREGATES_SCHEMA_V0);
 const validateOperation = ajv.getSchema("https://downtrace.io/schema/v0/aggregates.schema.json#/$defs/Operation");
+const validateProfile = ajv.getSchema("https://downtrace.io/schema/v0/aggregates.schema.json#/$defs/Profile");
+/** The real schema, asked of a window: the one thing a unit test of the aggregator never did. */
+const validateProfileWindow = (p: unknown): boolean => validateProfile?.(p) === true;
 
 /** A clock the test drives, so a one-minute window does not take a minute. */
 const clock = (start = 1_000_000) => {
@@ -163,6 +166,18 @@ describe("ProfileAggregator, when the process is going away", () => {
     profile.record("GET", "/a", [work("q1")]);
     time.advance(10_000);
     expect(profile.rotate()).toBeNull();
+  });
+
+  it("declares a window the contract accepts, even one shorter than a millisecond", () => {
+    // The schema says `durationMs >= 1`. A process that observes something and leaves inside the same
+    // millisecond used to produce a batch the cloud refuses with a 400 — losing the aggregates with it,
+    // and opening a coverage-loss episode over a rounding error (gh-392).
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    const drained = profile.drain();
+    expect(drained?.durationMs).toBeGreaterThanOrEqual(1);
+    expect(validateProfileWindow(drained)).toBe(true);
   });
 
   it("has nothing to drain when nothing ran", () => {

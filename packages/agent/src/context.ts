@@ -45,6 +45,12 @@ export interface RequestContext {
    * function without making it global (`product.md:104`, ADR 0101).
    */
   excluded?: { has(target: string): boolean } | undefined;
+  /**
+   * Turns a dependency target into what may leave the process. Identity in minimal mode, the host itself
+   * otherwise. Carried here for the same reason as `excluded`: this runs per call, and reaching the agent
+   * from a free function would mean making it global (ADR 0105).
+   */
+  named?: ((target: string) => string) | undefined;
   /** What this request ran, by fingerprint. Created on the first operation, like `work`. */
   operations: Map<string, OperationWork> | undefined;
   /** How many calls have been recorded, so an observer can tell whether anything saw a given call. */
@@ -82,6 +88,7 @@ export function enterRequest(
   fine?: FineRegister,
   startedAt = performance.now(),
   excluded?: { has(target: string): boolean },
+  named?: (target: string) => string,
 ): RequestContext {
   const ctx: RequestContext = {
     work: undefined,
@@ -92,6 +99,7 @@ export function enterRequest(
     fineFrom: fine ? fine.openRequest() : 0,
     fineOps: 0,
     excluded,
+    named,
   };
   storage.enterWith(ctx);
   return ctx;
@@ -128,11 +136,12 @@ export function recordCallIn(
   // (`product.md:104`, ADR 0101). The context carries the decision because this runs per call and the
   // agent is not reachable from here without making it global.
   if (ctx.excluded?.has(target)) return;
+  const named = ctx.named ? ctx.named(target) : target;
   ctx.work ??= new Map();
-  const key = keyOf(kind, target);
+  const key = keyOf(kind, named);
   let entry = ctx.work.get(key);
   if (!entry) {
-    entry = { kind, target, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };
+    entry = { kind, target: named, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };
     ctx.work.set(key, entry);
   }
   ctx.recorded += 1;
@@ -149,11 +158,12 @@ export function recordCallIn(
  */
 export function recordWaitIn(ctx: RequestContext, kind: DependencyKind, target: string, ms: number): void {
   if (ctx.excluded?.has(target)) return;
+  const named = ctx.named ? ctx.named(target) : target;
   ctx.work ??= new Map();
-  const key = keyOf(kind, target);
+  const key = keyOf(kind, named);
   let entry = ctx.work.get(key);
   if (!entry) {
-    entry = { kind, target, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };
+    entry = { kind, target: named, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };
     ctx.work.set(key, entry);
   }
   entry.waitMs += ms;

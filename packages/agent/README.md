@@ -75,6 +75,21 @@ Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `n
 
 Either import the instrumentation from an entry point you own, as above, or make the bundler keep it. In Next that is `outputFileTracingIncludes`; other tools have an equivalent.
 
+## Sending no free text at all
+
+`DOWNTRACE_MINIMAL=1` withholds everything you wrote. Route templates, dependency targets, your hostname
+and your deployed version travel as stable digests of themselves — same name, same digest, every time, so
+the analysis still groups — and query text, error messages and exception signatures do not travel at all.
+
+What stays is what is not yours: the protocol version, the agent's own name, the HTTP method, the kind of
+each dependency, the counts and the timings. Downtrace keeps detecting and comparing; what it loses is the
+ability to **name** anything, and it says so in every report rather than showing you a bare hash.
+
+The environment is not withheld: your ingest token already tells the cloud which one it is, so hiding it
+here would protect nothing and would collapse the per-environment scope everything is organised by.
+
+`DOWNTRACE_QUERY_TEXT=off` still exists and still does the smaller thing: send the routes, not the queries.
+
 ## Exceptions that kill the process
 
 An uncaught exception and a promise rejected with no `catch` are watched through
