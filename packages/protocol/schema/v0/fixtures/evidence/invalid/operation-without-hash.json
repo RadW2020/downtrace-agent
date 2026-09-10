@@ -1,0 +1,17 @@
+{
+  "protocol": "0.7.0",
+  "instance": { "id": "i-1" },
+  "startedAt": "2026-09-10T10:00:00.000Z",
+  "endedAt": "2026-09-10T10:01:00.000Z",
+  "coverage": { "observedRequests": 1, "attachedRequests": 0, "detailLost": 0, "truncated": 0 },
+  "requests": [
+    {
+      "method": "GET",
+      "route": "/checkout",
+      "status": 200,
+      "startedAt": "2026-09-10T10:00:03.000Z",
+      "durationMs": 10,
+      "operations": [{ "startMs": 0, "endMs": 5 }]
+    }
+  ]
+}

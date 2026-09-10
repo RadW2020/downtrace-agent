@@ -1,0 +1,28 @@
+{
+  "protocol": "0.7.0",
+  "instance": { "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55", "hostname": "web-1", "pid": 4242 },
+  "startedAt": "2026-09-10T10:00:00.000Z",
+  "endedAt": "2026-09-10T10:01:00.000Z",
+  "coverage": { "observedRequests": 2, "attachedRequests": 0, "detailLost": 0, "truncated": 0 },
+  "requests": [
+    {
+      "method": "GET",
+      "route": "/checkout",
+      "status": 200,
+      "startedAt": "2026-09-10T10:00:03.120Z",
+      "durationMs": 412.5,
+      "operations": [
+        { "hash": "9f2b1c", "startMs": 1.2, "endMs": 38.4 },
+        { "hash": "9f2b1c", "startMs": 38.9, "endMs": 74.1 }
+      ]
+    },
+    {
+      "method": "GET",
+      "route": "/checkout",
+      "status": 500,
+      "startedAt": "2026-09-10T10:00:41.900Z",
+      "durationMs": 88,
+      "operations": []
+    }
+  ]
+}

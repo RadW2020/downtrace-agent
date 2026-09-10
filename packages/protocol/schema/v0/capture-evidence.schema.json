@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://downtrace.io/schema/v0/capture-evidence.schema.json",
+  "title": "CaptureEvidence",
+  "description": "What an instrumentation sends back for a capture the cloud asked for (POST /v0/captures/{id}/evidence). It is the contents of the black box's fine register, frozen: requests with their operations, in order, with starts and ends. Hashes only — the text of a query never travels here (invariant 5). Its own path and not the aggregates batch, because a batch is what goes out every ten seconds and this is a rare event several orders of magnitude larger.",
+  "x-evidence-path": "/v0/captures/{id}/evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "instance", "startedAt", "endedAt", "coverage", "requests"],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "description": "Protocol version this payload conforms to. Same enum as a batch: every published minor of v0 stays acceptable.",
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0"]
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "description": "Which process observed this. Several instances of one deployment get the same order on purpose (ADR 0071), so the cloud has to be able to tell two answers apart.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "hostname": {
+          "type": "string",
+          "maxLength": 253
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The **effective start of observation**, which is the instant CAP-01 insists on keeping apart from the acceptance. It travels with the evidence rather than in a call of its own: a capture that started and never finished should not cost two requests."
+    },
+    "endedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the instrumentation stopped watching."
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "requests": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/CapturedRequest"
+      },
+      "description": "The requests observed, oldest first. An empty array is a real answer and the commonest one: a route nobody called during the window. It means the capture is `empty`, and `product.md:192` is explicit that this must never read as an invitation to ask again unchanged."
+    }
+  },
+  "$defs": {
+    "Coverage": {
+      "type": "object",
+      "title": "CaptureCoverage",
+      "additionalProperties": false,
+      "required": ["observedRequests", "attachedRequests", "detailLost", "truncated"],
+      "description": "`product.md:192` asks a capture to declare **both** coverages: what it attached from detail still retained, and what it observed from its effective start. Two numbers, never one — a total would hide that half of it is older than the capture.",
+      "properties": {
+        "observedRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests seen from the effective start onwards."
+        },
+        "attachedRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests that were already in the register when the capture started, and are attached. Zero is normal: the register may have wrapped, and nothing brings back what was not kept."
+        },
+        "detailLost": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests whose operations were overwritten before they could be read. Their timing is still true; what is gone is the detail. Reported rather than dropped, because a request with no operations reads as one that ran nothing (invariant 14)."
+        },
+        "truncated": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests that ran more operations than the register keeps per request. Their count is real and their list is not complete."
+        }
+      }
+    },
+    "CapturedRequest": {
+      "type": "object",
+      "title": "CapturedRequest",
+      "additionalProperties": false,
+      "required": ["method", "route", "status", "startedAt", "durationMs", "operations"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "route": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "The route template, never the path with its values in it (invariant 5)."
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this request started. Absolute, so requests from two instances can be read side by side."
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "operations": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/CapturedOperation"
+          },
+          "description": "What it ran, in the order it started them. Empty means it ran nothing — unless `detailLost` says the list was overwritten, which is why that flag is on the request and not only in the totals."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "This request ran more operations than the register keeps per request. Absent means false."
+        },
+        "detailLost": {
+          "type": "boolean",
+          "description": "This request's operations were overwritten before they were read. Absent means false. Its timing is still true."
+        }
+      }
+    },
+    "CapturedOperation": {
+      "type": "object",
+      "title": "CapturedOperation",
+      "additionalProperties": false,
+      "required": ["hash", "startMs", "endMs"],
+      "description": "One operation inside a request. Starts and ends and not durations, because the whole reason for capturing detail is order and overlap, which a duration cannot express (ADR 0068).",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The fingerprint's hash. Never the text: the profile is where a sender chooses whether to ship the text of its queries, and this path never carries it (invariant 5, ADR 0017)."
+        },
+        "startMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Milliseconds from the start of its own request."
+        },
+        "endMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "protocol": "0.7.0",
+  "instance": { "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55" },
+  "startedAt": "2026-09-10T10:00:00.000Z",
+  "endedAt": "2026-09-10T10:01:00.000Z",
+  "coverage": { "observedRequests": 3, "attachedRequests": 9, "detailLost": 1, "truncated": 1 },
+  "requests": [
+    {
+      "method": "POST",
+      "route": "/orders",
+      "status": 200,
+      "startedAt": "2026-09-10T10:00:05.000Z",
+      "durationMs": 1200,
+      "operations": [{ "hash": "aa11bb", "startMs": 0.5, "endMs": 900 }],
+      "truncated": true
+    },
+    {
+      "method": "POST",
+      "route": "/orders",
+      "status": 200,
+      "startedAt": "2026-09-10T10:00:06.000Z",
+      "durationMs": 90,
+      "operations": [],
+      "detailLost": true
+    }
+  ]
+}

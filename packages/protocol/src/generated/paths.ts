@@ -2,3 +2,11 @@
 
 /** Path, relative to the ingest URL, that receives AggregatesBatch payloads. */
 export const AGGREGATES_PATH = "/v0/aggregates";
+
+/** Path template that receives a capture's evidence. `{id}` is the capture's identifier. */
+export const CAPTURE_EVIDENCE_PATH = "/v0/captures/{id}/evidence";
+
+/** The evidence path for one capture. Here rather than in every caller: one place builds it (gh-322). */
+export function captureEvidencePath(id: string): string {
+  return CAPTURE_EVIDENCE_PATH.replace("{id}", encodeURIComponent(id));
+}

@@ -4,6 +4,7 @@ The ingestion contract between Downtrace agents and the Downtrace cloud, as a JS
 
 - `schema/v0/aggregates.schema.json` — the contract for what an agent sends. Everything else derives from it.
 - `schema/v0/ingest-response.schema.json` — the contract for what the cloud answers, since 0.7.0.
+- `schema/v0/capture-evidence.schema.json` — what an instrumentation sends back for a capture, since 0.7.0.
 - `schema/v0/fixtures/{valid,invalid}/` — examples every implementation must accept and reject.
 - Exports: `PROTOCOL_VERSION`, `ACCEPTED_PROTOCOL_VERSIONS_V0`, `AGGREGATES_PATH`, `AGGREGATES_SCHEMA_V0`, `LATENCY_BOUNDARIES_V0`, `LATENCY_BUCKETS_V0`, `latencyBucket()`, `CALLS_PER_REQUEST_BOUNDARIES_V0`, `CALLS_PER_REQUEST_BUCKETS_V0`, `callsPerRequestBucket()`, and the types `AggregatesBatch`, `Interval`, `Endpoint`, `LatencyHistogram`, `Dependency`, `PostgresStats`, …
 
@@ -22,6 +23,8 @@ Since **0.2.0** an endpoint may also carry `postgres`: how many queries each req
 Since **0.6.0** a batch may also carry `profile`: what each route normally does, on its own cadence rather than with every interval. Each operation is a `hash` — the identity, which is what groups them — plus an optional normalised `text`, so a sender who would rather not ship the text of their queries keeps the whole analysis and loses only the label. Queries and error signatures share one shape, so the next kind needs no new field.
 
 Since **0.7.0** `agent` may also carry `observers`: which of `pg`, `http`, `redis` and `runtime` are `on`, `off` or `unavailable`. The third state is the point — a service nobody is watching must not look like a service with nothing to watch — and **absent is a fourth answer**, meaning the sender did not say, which is not the same as watching nothing.
+
+Also since **0.7.0**, a capture's evidence has a contract of its own: `schema/v0/capture-evidence.schema.json`, exported as `CAPTURE_EVIDENCE_SCHEMA_V0` with the types `CaptureEvidence`, `CapturedRequest`, `CapturedOperation` and `CaptureCoverage`, and its path as `CAPTURE_EVIDENCE_PATH` / `captureEvidencePath(id)`. It is the black box's fine detail, frozen: requests with their operations, in order, with **starts and ends** rather than durations — order and overlap are the whole reason for capturing detail. Hashes only; the text of a query never travels here. And it declares **two coverages**, never a total: what it observed from its effective start, and what it attached from detail still retained.
 
 Also since **0.7.0**, **what the cloud answers is part of the contract**: `schema/v0/ingest-response.schema.json`, exported as `INGEST_RESPONSE_SCHEMA_V0` with the types `IngestResponse` and `PendingCapture`. It carries `accepted` and `inserted` as it always did, and may carry `captures` — the captures the cloud is waiting for in the environment the batch came from, each with what to watch, for how long, and until when. An agent that ignores the body behaves exactly as it did, which is what lets the cloud accept before any agent sends (ADR 0008).
 

@@ -1,0 +1,8 @@
+{
+  "protocol": "9.9.9",
+  "instance": { "id": "i-1" },
+  "startedAt": "2026-09-10T10:00:00.000Z",
+  "endedAt": "2026-09-10T10:01:00.000Z",
+  "coverage": { "observedRequests": 0, "attachedRequests": 0, "detailLost": 0, "truncated": 0 },
+  "requests": []
+}
