@@ -38,6 +38,18 @@ describe("normalizeQuery", () => {
     expect(normalizeQuery('SELECT * FROM "OrderItems" WHERE id = 1')).toBe('SELECT * FROM "OrderItems" WHERE id = ?');
   });
 
+  it("keeps an identifier that carries a quote of its own", () => {
+    // `"a""b"` is one name spelled with a doubled quote. The fix for the unterminated case must not eat it.
+    expect(normalizeQuery('SELECT "a""b" FROM t WHERE id = 1')).toBe('SELECT "a""b" FROM t WHERE id = ?');
+  });
+
+  it("counts a doubled quote as part of the name and not as its end", () => {
+    // Without this the pairing is simply first-to-second, and `"a""b` reads as the finished name `"a"` with a
+    // stray quote after it, rather than as a name that opened and never closed. The label differs; so does
+    // what the next test asks of it.
+    expect(normalizeQuery('SELECT "a""b FROM t')).toBe("SELECT ?");
+  });
+
   it("does not mistake digits inside an identifier for a value", () => {
     expect(normalizeQuery("SELECT col2 FROM table1 WHERE col2 = 5")).toBe("SELECT col2 FROM table1 WHERE col2 = ?");
   });
@@ -51,6 +63,12 @@ describe("normalizeQuery", () => {
 
 // Invariant 5: no query literal leaves the user's server. These are the hostile cases, not the polite ones.
 describe("normalizeQuery, against literals that try to survive", () => {
+  /** Every value here is delimited: a literal, a dollar-quoted body, a number, a comment. None may survive. */
+  const HOSTILE =
+    `SELECT "order id", email FROM "orders" WHERE email = 'ana@cliente.com'` +
+    ` AND token = $tag$sk-live-9f1c$tag$ AND id = 4821 /* trace=req-77ab */`;
+  const SECRETS = ["ana@cliente.com", "sk-live-9f1c", "4821", "req-77ab"];
+
   const leaks = (sql: string, secret: string) => {
     const { text } = fingerprintOf(sql);
     expect(text, `leaked from: ${sql}`).not.toContain(secret);
@@ -95,6 +113,33 @@ describe("normalizeQuery, against literals that try to survive", () => {
 
   it("keeps nothing of a query that is only a literal", () => {
     expect(normalizeQuery("'just-a-secret'")).toBe("?");
+  });
+
+  it("drops what follows an identifier quote that never closes", () => {
+    // gh-348. A double-quoted identifier is a name and stays, but only while it is one: with no closing quote
+    // the scanner is no longer reading a name, it is reading the rest of the query, values and all.
+    const cut = `SELECT * FROM "orders WHERE email = 'ana@cliente.com' AND id = 4821`;
+    leaks(cut, "ana@cliente.com");
+    leaks(cut, "4821");
+  });
+
+  it("gives nothing away wherever a stray double quote lands", () => {
+    // The cases above are a list, and a list is written by hand: the unterminated double quote was not on it
+    // until it leaked. So this one is not a list. An odd number of double quotes is what the bug looks like
+    // however it arises — a name built by concatenation, a quote inside an identifier, a string cut in half —
+    // so put one more at every position of a query whose values are all delimited, and ask the same of all.
+    for (let at = 0; at <= HOSTILE.length; at++) {
+      const broken = `${HOSTILE.slice(0, at)}"${HOSTILE.slice(at)}`;
+      for (const secret of SECRETS) leaks(broken, secret);
+    }
+  });
+
+  it("gives nothing away at any point a query can be cut", () => {
+    // Truncation is the other way a delimiter loses its partner. It is sound to demand this of every prefix:
+    // cutting at the end can leave a delimiter open, never turn a delimited value into bare syntax.
+    for (let end = 0; end <= HOSTILE.length; end++) {
+      for (const secret of SECRETS) leaks(HOSTILE.slice(0, end), secret);
+    }
   });
 
   it("truncates without leaving half a literal behind", () => {

@@ -5,7 +5,9 @@
  * as a single pass over the characters rather than a chain of regular expressions. The difference matters for
  * malformed input: a regex for `'…'` simply fails to match an unterminated quote and lets the whole thing
  * through, whereas a scanner that has entered a literal and never finds its end swallows to the end of the
- * string. Everything unrecognised is emitted, and everything recognised as a value becomes `?`.
+ * string. That holds for every delimiter here, the double quote of an identifier included: a delimiter that
+ * opens and never closes swallows the rest and emits `?`, because from there on the scanner is not reading
+ * what it thought it was reading. What is emitted verbatim is only what a rule recognised.
  *
  * What survives is structure: keywords, table and column names, the shape of the statement. Case is left alone —
  * the hash is computed on the normalised text, so it is already insensitive to formatting, and lowercasing would
@@ -105,10 +107,14 @@ export function normalizeQuery(sql: string): string {
       continue;
     }
 
-    // A double-quoted identifier is a name, not a value: it is what makes the label readable, so it stays.
+    // A double-quoted identifier is a name, not a value: it is what makes the label readable, so it stays —
+    // but only while it is one. With no closing quote the scanner is not reading a name any more, it is
+    // reading whatever the rest of the query happens to be, literals included, and emitting it verbatim is
+    // the very thing this file exists to prevent (gh-348). Unread is unread: it becomes `?`, as `'` does.
     if (c === '"') {
       const start = i;
       i++;
+      let closed = false;
       while (i < n) {
         if (sql[i] === '"') {
           if (sql[i + 1] === '"') {
@@ -116,11 +122,12 @@ export function normalizeQuery(sql: string): string {
             continue;
           }
           i++;
+          closed = true;
           break;
         }
         i++;
       }
-      emit(sql.slice(start, i));
+      emit(closed ? sql.slice(start, i) : "?");
       continue;
     }
 
