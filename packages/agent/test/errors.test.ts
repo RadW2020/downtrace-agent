@@ -191,3 +191,36 @@ describe("the cache", () => {
     expect(cache.get(new Error("distinct 9")).text).toContain("distinct ?");
   });
 });
+
+// gh-368. `String({message: "…"})` is `"[object Object]"` for every object, so the cache handed the second
+// thrown object the signature — and the message — of the first. That is not a coarse identity: it is the
+// wrong evidence, which invariant 7 cares about more than about having little.
+describe("ErrorFingerprintCache, keyed on what the signature actually reads", () => {
+  it("does not give one thrown object the signature of another", () => {
+    const cache = new ErrorFingerprintCache();
+    const first = cache.get({ message: "first distinct message" });
+    const second = cache.get({ message: "second totally different" });
+    expect(second.text).not.toBe(first.text);
+    expect(second.hash).not.toBe(first.hash);
+    expect(second.text).toContain("second");
+  });
+
+  it("tells two thrown strings apart", () => {
+    const cache = new ErrorFingerprintCache();
+    expect(cache.get("boom over here").hash).not.toBe(cache.get("boom over there").hash);
+  });
+
+  it("is still a cache: the same object shape is normalised once", () => {
+    const cache = new ErrorFingerprintCache();
+    for (let i = 0; i < 100; i++) cache.get({ message: "the same one every time" });
+    expect(cache.misses).toBe(1);
+  });
+
+  it("does not confuse a thrown object with an Error carrying the same message", () => {
+    // One has a stack and the other does not, so their signatures differ; the key has to differ too.
+    const cache = new ErrorFingerprintCache();
+    const plain = cache.get({ message: "same words" });
+    const real = cache.get(new Error("same words"));
+    expect(real.hash).not.toBe(plain.hash);
+  });
+});

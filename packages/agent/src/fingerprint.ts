@@ -38,7 +38,12 @@ const isIdentifierChar = (c: string): boolean => /[A-Za-z0-9_$]/.test(c);
 const isDigit = (c: string): boolean => c >= "0" && c <= "9";
 /**
  * Where a bare name may start, and what may continue it. Not `[A-Za-z_]`: Postgres takes letters, and `año` is
- * a column somewhere. The ASCII case is answered with two comparisons and only the rest reaches the regex —
+ * a column somewhere.
+ *
+ * A `$` does **not** continue a name here, although Postgres allows it in one. It is the character that opens
+ * a dollar-quoted body, and a name that swallowed it hid `x$secreto$1x$` inside one identifier — the body
+ * came out whole. Ending the name at the `$` hands it to the rule that knows what to do with it, which for
+ * anything it cannot account for is to stop trusting the query (gh-368). The ASCII case is answered with two comparisons and only the rest reaches the regex —
  * this runs per character of every distinct query, and the property escapes cost forty percent when it ran
  * for all of them.
  */
@@ -50,9 +55,21 @@ const startsName = (c: string): boolean => {
 };
 const insideName = (c: string): boolean => {
   const k = c.charCodeAt(0);
-  if ((k >= 97 && k <= 122) || (k >= 65 && k <= 90) || (k >= 48 && k <= 57) || k === 95 || k === 36) return true;
+  if ((k >= 97 && k <= 122) || (k >= 65 && k <= 90) || (k >= 48 && k <= 57) || k === 95) return true;
   return k > 127 && LETTER.test(c);
 };
+/**
+ * The tag of a dollar-quoted body, read the way PostgreSQL reads it: **the same rules as an identifier**.
+ * `$étiquette$` is a valid dollar quote, and a check that only accepted ASCII left its body to be emitted
+ * word by word (gh-368). Empty is the `$$…$$` form.
+ */
+const isDollarTag = (tag: string): boolean => {
+  if (tag === "") return true;
+  if (!startsName(tag[0] as string)) return false;
+  for (let k = 1; k < tag.length; k++) if (!insideName(tag[k] as string)) return false;
+  return true;
+};
+
 /**
  * Everything else SQL is made of. A character that is not a name, a number, a delimiter or one of these is a
  * character this scanner has no rule for — a backtick (that is MySQL), a backslash (that is psql), a control
@@ -146,7 +163,7 @@ function scanQuery(sql: string): Scan {
       // `$tag$…$tag$` or `$$…$$`: a dollar-quoted body, which is a value however it is spelled.
       const close = sql.indexOf("$", i + 1);
       const tag = close === -1 ? undefined : sql.slice(i + 1, close);
-      if (tag !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$|^$/.test(tag)) {
+      if (tag !== undefined && isDollarTag(tag)) {
         const delimiter = `$${tag}$`;
         const end = sql.indexOf(delimiter, close + 1);
         if (end === -1) swallowed = true;
@@ -154,6 +171,10 @@ function scanQuery(sql: string): Scan {
         emit("?");
         continue;
       }
+      // A `$` that is neither of those. It may be a tag this scanner reads differently from Postgres, or
+      // not a dollar-quote at all — and either way the next characters are not what they seem to be. Not
+      // knowing what it was is enough to stop trusting the rest (gh-368).
+      unknown = true;
     }
 
     // A named placeholder, `:name`. `::` is a cast, not a parameter.
@@ -167,15 +188,33 @@ function scanQuery(sql: string): Scan {
     if (c === "-" && sql[i + 1] === "-") {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? n : end + 1;
-      emit(" ");
+      if (previous !== "" && previous !== " ") emit(" ");
       continue;
     }
 
+    // Block comments **nest** in PostgreSQL: `/* a /* b */ c */` is one comment and ends at the second
+    // `*/`. Stopping at the first emits the rest of the comment as if it were SQL, and a comment carries
+    // whatever anybody put in it — an ORM tag with the request's context, for instance (gh-368).
     if (c === "/" && sql[i + 1] === "*") {
-      const end = sql.indexOf("*/", i + 2);
-      if (end === -1) swallowed = true;
-      i = end === -1 ? n : end + 2;
-      emit(" ");
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          i += 2;
+          continue;
+        }
+        if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+          continue;
+        }
+        i++;
+      }
+      if (depth > 0) swallowed = true;
+      // A comment is whitespace as far as the label goes, so it collapses like whitespace: emitting a space
+      // unconditionally left `SELECT  ?` with two of them.
+      if (previous !== "" && previous !== " ") emit(" ");
       continue;
     }
 

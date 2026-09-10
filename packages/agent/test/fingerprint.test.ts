@@ -228,6 +228,41 @@ describe("a query the scanner does not understand", () => {
     expect(b.hash).toBe("0515d10a30a1c7c8");
   });
 
+  // gh-368. The third kind of doubt: not «a delimiter that never closed» nor «a character with no rule», but
+  // a construction the scanner **believes** it understood. No signal fires, the query is taken as read and
+  // its text travels. These are the ones found by walking PostgreSQL's grammar rather than the code.
+  it("reads a dollar-quote tag the way Postgres does, letters and all", () => {
+    // Postgres takes as a tag what it takes as an identifier, and that includes non-ASCII letters. The
+    // scanner already knows this everywhere else: `startsName` uses `\p{L}` so that `año` is a column.
+    leaks("SELECT $étiquette$confidential_customer_name$étiquette$", "confidential_customer_name");
+    expect(normalizeQuery("SELECT $étiquette$confidential$étiquette$")).toBe("SELECT ?");
+  });
+
+  it("does not understand a dollar sign it cannot account for", () => {
+    // `a-b` and `1x` are not valid tags, so this is not valid SQL either. That is not a reason to emit it.
+    for (const sql of ["SELECT $a-b$secreto$a-b$", "SELECT $1x$secreto$1x$", "SELECT a $ b"]) {
+      const { text, class: kind } = fingerprintOf(sql);
+      expect(text, `still labelled: ${sql}`).toBe("");
+      expect(kind, `no class for: ${sql}`).toBeDefined();
+    }
+    leaks("SELECT $a-b$secreto$a-b$", "secreto");
+    leaks("SELECT $1x$secreto$1x$", "secreto");
+  });
+
+  it("counts the depth of a block comment, because in Postgres they nest", () => {
+    // `/* a /* b */ c */` is one comment and ends at the second `*/`. Stopping at the first emits the rest
+    // of the comment verbatim, and a comment carries whatever anybody put in it.
+    expect(normalizeQuery("SELECT /* a /* secreto */ b */ 1")).toBe("SELECT ?");
+    leaks("SELECT /* nota /* interna */ token=secreto */ 1", "secreto");
+    leaks("SELECT /* nota /* interna */ token=secreto */ 1", "token");
+  });
+
+  it("does not understand a nested comment that never closes at its level", () => {
+    const { text, class: kind } = fingerprintOf("SELECT /* a /* secreto */ 1");
+    expect(text).toBe("");
+    expect(kind).toBeDefined();
+  });
+
   it("never answers with a label and a class at once, wherever the corpus is broken", () => {
     // Not every insertion makes a malformed query: a `"` that lands inside a literal or a comment is part of
     // the value, and that query is as understood as it was. What must hold everywhere is that the two answers

@@ -115,9 +115,16 @@ export const DEFAULT_ERROR_CACHE_SIZE = 200;
 /**
  * Signs each distinct error once.
  *
- * Keyed on the type and the raw stack rather than on the message, because the message is the part that
- * varies — «user 4821 not found» is a thousand strings and one error. The same reasoning as the query cache,
- * with the opposite key: there, the text as written is what repeats.
+ * Keyed on exactly what the signature reads, and on nothing else. For an `Error` that is its name, its raw
+ * stack and its message. For anything else it is the type and the message `errorFingerprint` will read —
+ * **not** `String(err)`, which is `"[object Object]"` for every object thrown, so the second one came back
+ * wearing the first one's signature and the first one's message (gh-368). That is not a coarse identity, it
+ * is the wrong evidence.
+ *
+ * The message is part of the key because the signature is built from it. It is not the query cache's
+ * reasoning inverted by accident: there the text as written is what repeats, and here two throws from the
+ * same place with different numbers in the message do share a signature — the sanitising is what collapses
+ * them, and it runs on a miss.
  *
  * When it fills it stops admitting rather than evicting, exactly like the query cache: an application
  * throwing unbounded distinct errors is the one that would thrash an LRU, and the answer stays correct.
@@ -136,7 +143,10 @@ export class ErrorFingerprintCache {
   }
 
   get(err: unknown): Fingerprint {
-    const key = err instanceof Error ? `${err.name}\n${err.stack ?? ""}\n${err.message}` : String(err);
+    const key =
+      err instanceof Error
+        ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
+        : `${typeOf(err)}\n${messageOf(err)}`;
     const cached = this.entries.get(key);
     if (cached) return cached;
     this.misses += 1;
