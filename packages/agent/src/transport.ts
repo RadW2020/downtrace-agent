@@ -108,7 +108,11 @@ export class Sender {
 
   /** Sends everything queued in one batch. Resolves true when the cloud accepted it. */
   async flush(timeoutMs = this.timeoutMs): Promise<boolean> {
-    if (this.inflight || this.queue.length === 0) return false;
+    // Something to say is an interval **or** a profile. The queue is intervals, and asking only about it
+    // meant a profile with no interval to ride on never left — at shutdown, always, and in any window that
+    // closed with no traffic. The ADR 0017 says the profile hangs off the batch and not off an interval; its
+    // delivery did not (gh-375).
+    if (this.inflight || (this.queue.length === 0 && this.profiles.length === 0)) return false;
     // The cloud asked for time. Aggregating carries on and the queue keeps dropping its oldest past six: not
     // being able to send is no reason to stop measuring what will be sendable later (gh-205).
     if (this.now() < this.silentUntil) return false;

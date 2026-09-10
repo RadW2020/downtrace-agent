@@ -17,10 +17,13 @@ export interface AggregatesBatch {
   instance: InstanceInfo;
   deploy: DeployInfo;
   /**
-   * @minItems 1
+   * The intervals this batch carries. May be empty when the batch carries a profile: the profile has a cadence of its own and hangs off the batch, not off an interval (ADR 0017), so tying its delivery to one meant it was lost whenever a window closed with no traffic — at shutdown, always (gh-375). A batch with neither is refused by the cloud with a reason, which the schema cannot say without making the generated types unusable.
+   *
+   * @minItems 0
    * @maxItems 6
    */
   intervals:
+    | []
     | [Interval]
     | [Interval, Interval]
     | [Interval, Interval, Interval]

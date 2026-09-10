@@ -349,3 +349,51 @@ describe("Sender, when the cloud asks for time", () => {
     expect(await s.flush()).toBe(true);
   });
 });
+
+// gh-375. The queue is intervals, and `flush` returned early when it was empty — so a profile with no
+// interval to ride on never left. The ADR 0017 says the profile hangs off the batch and not off an interval;
+// its delivery did not.
+//
+// It went unnoticed because the only end-to-end look at a profile used a cloud that was switched off: with
+// the sends failing, intervals piled up in the queue and the profile always found transport. The bug hides
+// when the network is bad and shows when it is good.
+describe("a profile with no interval to ride on", () => {
+  const aProfile = () => ({
+    start: Date.now() - 60_000,
+    durationMs: 60_000,
+    endpoints: [
+      {
+        method: "GET" as const,
+        route: "/orders",
+        operations: [{ kind: "query" as const, hash: "abc123", text: "SELECT ?", count: 1, totalMs: 1, errors: 0 }],
+      },
+    ],
+  });
+
+  it("travels on its own", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueueProfile(aProfile());
+    expect(await s.flush()).toBe(true);
+    expect(calls).toHaveLength(1);
+    const body = calls[0]?.body as { profile?: unknown; intervals: unknown[] };
+    expect(body.profile).toBeDefined();
+    expect(body.intervals).toEqual([]);
+  });
+
+  it("still sends nothing when there is nothing", async () => {
+    const { s, calls } = sender([202]);
+    expect(await s.flush()).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rides with the intervals when there are any, in one batch", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueue(interval(1));
+    s.enqueueProfile(aProfile());
+    expect(await s.flush()).toBe(true);
+    expect(calls).toHaveLength(1);
+    const body = calls[0]?.body as { profile?: unknown; intervals: unknown[] };
+    expect(body.profile).toBeDefined();
+    expect(body.intervals).toHaveLength(1);
+  });
+});
