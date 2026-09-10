@@ -25,6 +25,13 @@ async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
   return Promise.all(names.map(async (f) => [f, JSON.parse(await readFile(dir + f, "utf8"))] as [string, unknown]));
 }
 
+/** One fixture by name, typed loosely: these tests poke at the document on purpose. */
+function byName(all: [string, unknown][], name: string): { agent: Record<string, unknown> } {
+  const found = all.find(([n]) => n === name);
+  if (!found) throw new Error(`no fixture called ${name}`);
+  return structuredClone(found[1]) as { agent: Record<string, unknown> };
+}
+
 describe("aggregates schema v0", () => {
   it("exports the ingest path defined in the schema", () => {
     const path = (AGGREGATES_SCHEMA_V0 as { "x-ingest-path"?: string })["x-ingest-path"];
@@ -79,6 +86,28 @@ describe("aggregates schema v0", () => {
     // A class and a text are two answers to one question: «hash y clase» is what travels when the text
     // could not be produced safely (`product.md:104`, gh-344).
     expect(reason("operation-with-class-and-text.json")).toMatch(/must NOT be valid/);
+    // An empty declaration is a way of saying nothing, and absence already says that (gh-360).
+    expect(reason("withholding-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
+  });
+
+  it("reads a declaration of what the sender withholds", async () => {
+    const doc = byName(await load("valid"), "withholding.json");
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+    expect(doc.agent.withholding).toEqual({ freeText: true, endpoints: 3 });
+  });
+
+  it("refuses a sender that says it is not withholding, because absence already says that", async () => {
+    // `freeText: false` and no `freeText` at all would be two spellings of one thing, and two spellings is
+    // how a reader ends up asking which one means what.
+    const doc = byName(await load("valid"), "minimal.json");
+    doc.agent.withholding = { freeText: false };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("refuses an exclusion of nothing, which is not an exclusion", async () => {
+    const doc = byName(await load("valid"), "minimal.json");
+    doc.agent.withholding = { endpoints: 0 };
+    expect(validate(doc)).toBe(false);
   });
 });
 

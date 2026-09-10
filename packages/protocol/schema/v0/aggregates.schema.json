@@ -62,6 +62,10 @@
         "observers": {
           "$ref": "#/$defs/Observers",
           "description": "Absent from an instrumentation older than protocol 0.7.0. Absent is not 'nothing is observed': it is 'this one did not say', and the two must not be shown alike."
+        },
+        "withholding": {
+          "$ref": "#/$defs/Withholding",
+          "description": "Absent means **this sender did not say**, not that it withholds nothing — the same reading as `observers`, and for the same reason."
         }
       }
     },
@@ -496,6 +500,30 @@
         },
         "runtime": {
           "$ref": "#/$defs/ObserverState"
+        }
+      }
+    },
+    "Withholding": {
+      "title": "Withholding",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "What this sender is deliberately not sending, so that less arriving can be read as a choice rather than as a fault (invariant 14, COB-01). Counts and never names: the name of an excluded endpoint is exactly what the user asked not to send. The cloud cannot verify any of this and does not try — it is what the sender says, and it is shown as such.",
+      "properties": {
+        "freeText": {
+          "type": "boolean",
+          "description": "True when the sender is in minimal mode: no query text, no route templates, no dependency hosts, no error messages. Only ever true — a sender that is not in minimal mode leaves it out.",
+          "const": true
+        },
+        "endpoints": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many endpoints are excluded. Absent means none are."
+        },
+        "dependencies": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many dependencies are excluded. Absent means none are."
         }
       }
     }

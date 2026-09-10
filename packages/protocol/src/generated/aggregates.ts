@@ -35,6 +35,7 @@ export interface AgentInfo {
   runtime: "node" | "go";
   runtimeVersion: string;
   observers?: Observers;
+  withholding?: Withholding;
 }
 /**
  * Absent from an instrumentation older than protocol 0.7.0. Absent is not 'nothing is observed': it is 'this one did not say', and the two must not be shown alike.
@@ -44,6 +45,23 @@ export interface Observers {
   http?: ObserverState;
   redis?: ObserverState;
   runtime?: ObserverState;
+}
+/**
+ * Absent means **this sender did not say**, not that it withholds nothing — the same reading as `observers`, and for the same reason.
+ */
+export interface Withholding {
+  /**
+   * True when the sender is in minimal mode: no query text, no route templates, no dependency hosts, no error messages. Only ever true — a sender that is not in minimal mode leaves it out.
+   */
+  freeText?: true;
+  /**
+   * How many endpoints are excluded. Absent means none are.
+   */
+  endpoints?: number;
+  /**
+   * How many dependencies are excluded. Absent means none are.
+   */
+  dependencies?: number;
 }
 export interface InstanceInfo {
   /**
