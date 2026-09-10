@@ -179,6 +179,12 @@ export interface AggregatesBatch {
         CaptureProgress,
         CaptureProgress,
       ];
+  /**
+   * Distinct exception signatures this process saw outside any request. Absent from every sender that predates it and from every batch with none. Bounded: a process crashing in a loop must not become an unbounded batch.
+   *
+   * @maxItems 32
+   */
+  exceptions?: ProcessException[];
 }
 export interface AgentInfo {
   name: string;
@@ -506,4 +512,25 @@ export interface CaptureProgress {
    * Unix milliseconds when observation **really** started, which CAP-01 keeps apart from when the capture was accepted.
    */
   startedAt: number;
+}
+/**
+ * Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errores **y excepciones**», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).
+ */
+export interface ProcessException {
+  /**
+   * Which of the two. Two different failures with two different fixes: counting them together hides which one is happening.
+   */
+  kind: "uncaught" | "unhandled-rejection";
+  /**
+   * Stable identity of the signature, the same shape a query's or an operation error's has (ADR 0017).
+   */
+  hash: string;
+  /**
+   * Type, sanitised message and stack signature. Optional and for the same reason as everywhere else: when nothing recognisable survives the sanitising, only the type and the signature travel (ADR 0084). Its absence is not the absence of an exception.
+   */
+  text?: string;
+  /**
+   * How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many.
+   */
+  count: number;
 }

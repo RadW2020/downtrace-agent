@@ -41,6 +41,14 @@
         "$ref": "#/$defs/CaptureProgress"
       },
       "description": "Progress on the captures this sender was asked for. Absent from every sender that predates it, and from every batch with nothing to report. Bounded like the answer that carries the orders."
+    },
+    "exceptions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/ProcessException"
+      },
+      "description": "Distinct exception signatures this process saw outside any request. Absent from every sender that predates it and from every batch with none. Bounded: a process crashing in a loop must not become an unbounded batch."
     }
   },
   "$defs": {
@@ -552,6 +560,35 @@
         "startedAt": {
           "type": "integer",
           "description": "Unix milliseconds when observation **really** started, which CAP-01 keeps apart from when the capture was accepted."
+        }
+      }
+    },
+    "ProcessException": {
+      "title": "ProcessException",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "hash", "count"],
+      "description": "Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errores **y excepciones**», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).",
+      "properties": {
+        "kind": {
+          "enum": ["uncaught", "unhandled-rejection"],
+          "description": "Which of the two. Two different failures with two different fixes: counting them together hides which one is happening."
+        },
+        "hash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Stable identity of the signature, the same shape a query's or an operation error's has (ADR 0017)."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Type, sanitised message and stack signature. Optional and for the same reason as everywhere else: when nothing recognisable survives the sanitising, only the type and the signature travel (ADR 0084). Its absence is not the absence of an exception."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many."
         }
       }
     }

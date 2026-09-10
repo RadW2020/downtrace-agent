@@ -90,6 +90,8 @@ describe("aggregates schema v0", () => {
     expect(reason("withholding-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
     // Reporting a capture without saying when it started is reporting nothing about it (gh-378).
     expect(reason("capture-without-a-start.json")).toMatch(/must have required property 'startedAt'/);
+    // An exception that happened zero times did not happen (gh-341).
+    expect(reason("exception-that-did-not-happen.json")).toMatch(/count must be >= 1/);
   });
 
   it("reads a declaration of what the sender withholds", async () => {
