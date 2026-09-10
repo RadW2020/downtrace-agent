@@ -88,6 +88,8 @@ describe("aggregates schema v0", () => {
     expect(reason("operation-with-class-and-text.json")).toMatch(/must NOT be valid/);
     // An empty declaration is a way of saying nothing, and absence already says that (gh-360).
     expect(reason("withholding-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
+    // Reporting a capture without saying when it started is reporting nothing about it (gh-378).
+    expect(reason("capture-without-a-start.json")).toMatch(/must have required property 'startedAt'/);
   });
 
   it("reads a declaration of what the sender withholds", async () => {

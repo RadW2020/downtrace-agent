@@ -31,6 +31,154 @@ export interface AggregatesBatch {
     | [Interval, Interval, Interval, Interval, Interval]
     | [Interval, Interval, Interval, Interval, Interval, Interval];
   profile?: Profile;
+  /**
+   * Progress on the captures this sender was asked for. Absent from every sender that predates it, and from every batch with nothing to report. Bounded like the answer that carries the orders.
+   *
+   * @maxItems 16
+   */
+  captures?:
+    | []
+    | [CaptureProgress]
+    | [CaptureProgress, CaptureProgress]
+    | [CaptureProgress, CaptureProgress, CaptureProgress]
+    | [CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress]
+    | [CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress]
+    | [CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress, CaptureProgress]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ]
+    | [
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+        CaptureProgress,
+      ];
 }
 export interface AgentInfo {
   name: string;
@@ -345,4 +493,17 @@ export interface Operation {
    * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «solo como hash y clase», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
    */
   class?: "select" | "insert" | "update" | "delete" | "other";
+}
+/**
+ * What the instrumentation has to say about a capture the cloud asked it for. The order travels in the ingest response (ADR 0071) and the answer travels here, on the same cadence and at the same cost: a path of its own would be one more call per capture, and one more thing to authenticate, for a fact that fits in the batch that is already going (gh-378).
+ */
+export interface CaptureProgress {
+  /**
+   * The capture's id, as the ingest response gave it. Carries nothing the service wrote.
+   */
+  id: string;
+  /**
+   * Unix milliseconds when observation **really** started, which CAP-01 keeps apart from when the capture was accepted.
+   */
+  startedAt: number;
 }

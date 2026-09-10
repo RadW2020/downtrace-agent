@@ -33,6 +33,14 @@
     },
     "profile": {
       "$ref": "#/$defs/Profile"
+    },
+    "captures": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/CaptureProgress"
+      },
+      "description": "Progress on the captures this sender was asked for. Absent from every sender that predates it, and from every batch with nothing to report. Bounded like the answer that carries the orders."
     }
   },
   "$defs": {
@@ -525,6 +533,25 @@
           "type": "integer",
           "minimum": 1,
           "description": "How many dependencies are excluded. Absent means none are."
+        }
+      }
+    },
+    "CaptureProgress": {
+      "title": "CaptureProgress",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "startedAt"],
+      "description": "What the instrumentation has to say about a capture the cloud asked it for. The order travels in the ingest response (ADR 0071) and the answer travels here, on the same cadence and at the same cost: a path of its own would be one more call per capture, and one more thing to authenticate, for a fact that fits in the batch that is already going (gh-378).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The capture's id, as the ingest response gave it. Carries nothing the service wrote."
+        },
+        "startedAt": {
+          "type": "integer",
+          "description": "Unix milliseconds when observation **really** started, which CAP-01 keeps apart from when the capture was accepted."
         }
       }
     }
