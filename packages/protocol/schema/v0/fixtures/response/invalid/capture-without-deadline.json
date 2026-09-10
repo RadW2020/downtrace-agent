@@ -1,0 +1,5 @@
+{
+  "accepted": 1,
+  "inserted": 1,
+  "captures": [{ "id": "cap-1", "route": "/checkout", "windowSeconds": 60 }]
+}

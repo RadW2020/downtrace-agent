@@ -1,0 +1,16 @@
+{
+  "accepted": 1,
+  "inserted": 1,
+  "captures": [
+    {
+      "id": "5b6d1f0e-2c3a-4d5e-8f90-1a2b3c4d5e6f",
+      "environment": "production",
+      "method": "GET",
+      "route": "/checkout",
+      "kind": "",
+      "target": "",
+      "windowSeconds": 60,
+      "expiresAt": "2026-09-10T10:15:00Z"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://downtrace.io/schema/v0/ingest-response.schema.json",
+  "title": "IngestResponse",
+  "description": "What the cloud answers to POST /v0/aggregates. Described here, and not left as an implementation detail, because since protocol 0.7.0 it carries instructions: the captures the cloud is waiting for. It follows the same rules as the batch — fields are only ever added, each addition bumps the minor, and a published minor is accepted for ever — with one difference in who owes what. An agent that does not read this body must behave exactly as it did before (ADR 0008), so every field here is something an agent may ignore.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accepted", "inserted"],
+  "properties": {
+    "accepted": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many intervals of the batch the cloud took."
+    },
+    "inserted": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many rows were new. Lower than `accepted` when a batch is re-sent: ingest is idempotent."
+    },
+    "captures": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/PendingCapture" },
+      "description": "Captures the cloud is waiting for, in the environment this batch came from. Absent or empty means none. Bounded because this rides on every batch: the cloud never asks for more at once than an instrumentation could reasonably freeze, and the concurrency budget is far below this anyway. Several instances of one deployment receive the same list on purpose — the cloud knows which instance sent recently, not which is alive, so dealing one capture to one instance would lose it silently when that process is gone (invariant 14)."
+    }
+  },
+  "$defs": {
+    "PendingCapture": {
+      "type": "object",
+      "title": "PendingCapture",
+      "additionalProperties": false,
+      "required": ["id", "windowSeconds", "expiresAt"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "What the evidence will be sent back under. Carries nothing the service wrote."
+        },
+        "environment": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The environment this capture is about, which is always the one the batch came from. Sent anyway so the payload is readable on its own."
+        },
+        "method": { "type": "string", "maxLength": 16, "description": "HTTP method of the route to watch." },
+        "route": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Route template to watch. Empty when the capture is about a dependency rather than a route."
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Dependency kind to watch. Empty when the capture is about a route."
+        },
+        "target": { "type": "string", "maxLength": 256, "description": "Dependency target to watch." },
+        "windowSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "description": "How long to watch for, from the effective start of observation."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "After this instant the cloud stops waiting. An instrumentation that reads a stale response must not start a capture past it: the cloud will refuse the evidence, and a capture nobody is waiting for spends the fine register for nothing."
+        }
+      }
+    }
+  }
+}

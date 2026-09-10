@@ -7,14 +7,14 @@ import { DEFAULT_MAX_QUEUED, Sender } from "../src/transport.ts";
 const interval = (start: number): Interval => ({ start, durationMs: 10_000, endpoints: [] });
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 
-function sender(responses: Array<number | Error>, log: Logger = quiet) {
+function sender(responses: Array<number | Error>, log: Logger = quiet, responseBody?: string) {
   const calls: { url: string; auth: string | undefined; body: unknown }[] = [];
   const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string>;
     calls.push({ url: String(url), auth: headers.authorization, body: JSON.parse(String(init?.body)) });
     const next = responses.shift() ?? 202;
     if (next instanceof Error) throw next;
-    return new Response(null, { status: next });
+    return new Response(responseBody ?? null, { status: next });
   }) as unknown as typeof fetch;
   const s = new Sender({
     url: "http://cloud.test",
@@ -152,6 +152,57 @@ describe("Sender, carrying the profile", () => {
  * displacing batches that were fine — and `failed` could not tell "the cloud is down" from "I am producing
  * something it does not accept", which are two problems with opposite fixes (gh-205).
  */
+/**
+ * ADR 0008 in one test. Since protocol 0.8.0 the cloud's answer carries the captures it is waiting for
+ * (gh-320), and this instrumentation does not read it yet — gh-277 is that half. What must hold meanwhile is
+ * that a body it does not understand changes nothing at all: the ordering exists so the cloud can accept
+ * before the agent sends, and it only works if the agent in the wild is genuinely unaffected.
+ */
+describe("Sender, against a cloud that answers with instructions it does not read yet", () => {
+  const withCaptures = JSON.stringify({
+    accepted: 1,
+    inserted: 1,
+    captures: [
+      {
+        id: "cap-1",
+        environment: "test",
+        method: "GET",
+        route: "/checkout",
+        windowSeconds: 60,
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+    ],
+  });
+
+  it("clears the queue and reports success exactly as with an empty body", async () => {
+    const { s, calls } = sender([202], quiet, withCaptures);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(calls).toHaveLength(1);
+    // Nothing dropped, nothing rejected: the same state an empty 202 leaves behind.
+    expect([s.sent, s.dropped, s.rejected]).toEqual([1, 0, 0]);
+  });
+
+  it("does not send anything back because of it", async () => {
+    const { s, calls } = sender([202, 202], quiet, withCaptures);
+    s.enqueue(interval(1));
+    await s.flush();
+    s.enqueue(interval(2));
+    await s.flush();
+    // Two batches, two POSTs to the ingest path. An agent that had started acting on the instruction would
+    // show up here as a third call, or as a different body.
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((c) => c.url)).size).toBe(1);
+  });
+
+  it("is unmoved by a body it cannot parse at all", async () => {
+    const { s } = sender([202], quiet, "this is not JSON");
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect([s.sent, s.dropped, s.rejected]).toEqual([1, 0, 0]);
+  });
+});
+
 describe("Sender, when the batch itself is the problem", () => {
   const rejecting = (status: number) => sender([status, 202]);
 
