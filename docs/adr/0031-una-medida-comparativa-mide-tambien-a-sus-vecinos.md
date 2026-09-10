@@ -63,3 +63,10 @@ propias opciones y su propia decisión (gh-200), y ninguna de ellas quita la nec
 - El bench queda atado a Linux para esta señal. En macOS informa «desconocido» y el veredicto no se degrada.
 - Los números publicados de tiradas anteriores no llevan esta columna y no se pueden reinterpretar. Quedan como
   lo que son: medidas sin saber contra qué se hicieron.
+
+## Errata (2026-09-10)
+
+Este ADR dice «nadie lo vio durante **semanas**». No es cierto y no podía serlo: el repositorio empezó el
+2026-09-03 y este ADR está fechado el 2026-09-08. Lo que consta es que nadie lo vio **hasta que el informe
+dijo algo de la máquina**, que es lo que la decisión resuelve; cuánto duró no se midió y no debió escribirse
+(ADR 0096, gh-373). El texto se deja como estaba a propósito: es lo que se creía al decidir.
