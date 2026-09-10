@@ -1,7 +1,16 @@
 import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { currentContext, recordCall, recordCallIn, recordOperationIn, recordWait, recordWaitIn } from "../context.ts";
+import {
+  currentContext,
+  type RequestContext,
+  recordCall,
+  recordCallIn,
+  recordOperationIn,
+  recordWait,
+  recordWaitIn,
+} from "../context.ts";
+import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
 
@@ -37,6 +46,11 @@ export interface InstrumentPgDeps {
    * never even looked at: the cost of normalising is not paid by an agent that would not send it.
    */
   fingerprints?: FingerprintCache | undefined;
+  /**
+   * Where a thrown thing becomes a signature. Absent means errors are counted and not identified, which is
+   * what this instrumentation did until gh-338.
+   */
+  errors?: ErrorFingerprintCache | undefined;
   /** Resolution base; defaults to the application's entry point, then its working directory. */
   from?: string | undefined;
   /** Injected in tests instead of resolving the real module. */
@@ -52,6 +66,36 @@ export interface InstrumentPgDeps {
  *
  * Returns the instrumented module's version, or undefined when there is nothing to instrument.
  */
+/**
+ * Records what a failed operation threw, beside the operation itself.
+ *
+ * A second operation rather than a field on the first, because they answer different questions and the cloud
+ * counts them separately: how often this query runs, and how often *this error* happens. The shape is the one
+ * the ADR 0017 left ready — «queries and error signatures share one shape» — so nothing new travels.
+ *
+ * `product.md:77` asks for the identity of an error and not only its count, and until gh-338 the count was
+ * all there was.
+ */
+function recordErrorIn(
+  ctx: RequestContext,
+  errors: ErrorFingerprintCache | undefined,
+  failed: boolean,
+  err: unknown,
+  startedAt: number,
+  endedAt: number,
+): void {
+  // Nothing thrown, or nobody asked for signatures: a failure with no error object still counts as a failed
+  // query above, which is what it is.
+  if (!failed || !errors || err === undefined || err === null) return;
+  recordOperationIn(ctx, {
+    kind: "error",
+    fingerprint: errors.get(err),
+    startedAt,
+    endedAt,
+    failed: true,
+  });
+}
+
 export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   let pg: PgModule;
   let version = "unknown";
@@ -81,12 +125,12 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
     const target = targetOfClient(this);
     // Everything below is best effort: a bug here must never change what the application's query does.
-    let done: ((failed?: boolean) => void) | undefined;
+    let done: ((failed?: boolean, err?: unknown) => void) | undefined;
     try {
       const started = performance.now();
       const sql = fingerprints ? queryTextOf(args) : undefined;
       let counted = false;
-      done = (failed = false) => {
+      done = (failed = false, err?: unknown) => {
         if (counted) return;
         counted = true;
         const ms = performance.now() - started;
@@ -105,6 +149,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
                 endedAt: started + ms,
                 failed,
               });
+              recordErrorIn(ctx, deps.errors, failed, err, started, started + ms);
             }
           }
         } catch (err) {
@@ -135,6 +180,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
                   endedAt: started + ms,
                   failed,
                 });
+                recordErrorIn(ctx, deps.errors, failed, cbArgs[0], started, started + ms);
               }
             } catch (err) {
               deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -158,7 +204,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
           return value;
         },
         (err: unknown) => {
-          settle?.(true);
+          settle?.(true, err);
           throw err; // the application sees exactly the error it would have seen
         },
       );

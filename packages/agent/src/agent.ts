@@ -6,6 +6,7 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
+import { ErrorFingerprintCache } from "./errors.ts";
 import { FineRegister } from "./fine.ts";
 import { FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
@@ -96,8 +97,10 @@ export class Agent {
   private readonly runtime = new RuntimeSampler();
   /** What the instrumentation costs, measured while it runs, and what it gives up when it costs too much. */
   private readonly overhead: OverheadMeter;
-  /** Both exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
+  /** All three exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
   private readonly fingerprints: FingerprintCache | undefined;
+  /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
+  private readonly errors: ErrorFingerprintCache | undefined;
   private readonly profile: ProfileAggregator | undefined;
   private instrumented = false;
   private stopHttp: (() => void) | undefined;
@@ -134,6 +137,7 @@ export class Agent {
     this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
+      this.errors = new ErrorFingerprintCache();
       this.profile = new ProfileAggregator({ sendText: config.queryText });
     }
     this.sender =
@@ -178,7 +182,7 @@ export class Agent {
     const on = this.config.instrument;
     // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
-    if (on.has("pg")) instrumentPg({ log: this.log, fingerprints: this.fingerprints });
+    if (on.has("pg")) instrumentPg({ log: this.log, fingerprints: this.fingerprints, errors: this.errors });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) this.stopHttp = instrumentHttp(this.log);
     if (on.has("redis")) this.stopRedis = instrumentRedis(this.log);

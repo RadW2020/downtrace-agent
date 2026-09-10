@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { enterRequest } from "../src/context.ts";
+import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import { instrumentPg } from "../src/instrument/pg.ts";
 import type { Logger } from "../src/log.ts";
@@ -335,5 +336,58 @@ describe("instrumentPg, building the profile", () => {
     // The application gets its rows: an agent bug must never change what the application's query does.
     const rows = client.query("SELECT id FROM t WHERE id = $1", [1]) as Promise<unknown>;
     await expect(rows).resolves.toEqual({ rows: [{ ok: 1 }] });
+  });
+});
+
+/**
+ * `product.md:77` asks for the identity of an error and not only its count, and the cloud's hypothesis about
+ * a failing operation had no evidence to read until this existed (gh-338, gh-337).
+ */
+describe("a query that fails", () => {
+  function withErrors() {
+    const pg = fakePg();
+    const fingerprints = new FingerprintCache();
+    const errors = new ErrorFingerprintCache();
+    instrumentPg({ log: quiet, moduleImpl: pg.module, fingerprints, errors });
+    return { pg, errors };
+  }
+
+  it("records what it threw, beside the query itself", async () => {
+    const { pg } = withErrors();
+    const ctx = enterRequest();
+    const client = new (pg.module.Client as unknown as new () => { query: (s: string) => Promise<unknown> })();
+
+    await expect(client.query("boom")).rejects.toThrow("query failed");
+
+    const operations = [...(ctx.operations?.values() ?? [])];
+    const query = operations.find((o) => o.kind === "query");
+    const error = operations.find((o) => o.kind === "error");
+    if (!query || !error) {
+      throw new Error(`operations = ${JSON.stringify(operations)}, want one of each`);
+    }
+    // Both: how often this query runs, and how often this error happens, are different questions.
+    expect(query.errors).toBe(1);
+    expect(error.text).toContain("query failed");
+    expect(error.errors).toBe(1);
+  });
+
+  it("records nothing extra when the query succeeds", async () => {
+    const { pg } = withErrors();
+    const ctx = enterRequest();
+    const client = new (pg.module.Client as unknown as new () => { query: (s: string) => Promise<unknown> })();
+
+    await client.query("SELECT 1");
+
+    const kinds = [...(ctx.operations?.values() ?? [])].map((o) => o.kind);
+    expect(kinds).toEqual(["query"]);
+  });
+
+  it("lets the application see exactly the error it would have seen", async () => {
+    const { pg } = withErrors();
+    enterRequest();
+    const client = new (pg.module.Client as unknown as new () => { query: (s: string) => Promise<unknown> })();
+
+    // The whole point of invariant 2: measuring must not change what is being measured.
+    await expect(client.query("boom")).rejects.toThrow("query failed");
   });
 });

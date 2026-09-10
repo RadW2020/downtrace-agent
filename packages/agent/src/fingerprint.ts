@@ -158,7 +158,8 @@ export function normalizeQuery(sql: string): string {
  * 64 bits of FNV-1a as two independent 32-bit passes, because a single 32-bit hash collides too readily across
  * the thousands of fingerprints a large application produces, and BigInt in a per-query path is not worth it.
  */
-function hash64(text: string): string {
+/** Shared with the error signatures, which hash their own text the same way (`errors.ts`, gh-338). */
+export function hash64(text: string): string {
   let a = 0x811c9dc5;
   let b = 0x01000193;
   for (let i = 0; i < text.length; i++) {
