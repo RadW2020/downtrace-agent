@@ -3,14 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
-import {
-  OVERHEAD_BUDGET_MS,
-  OverheadMeter,
-  SAMPLE_EVERY,
-  Sheddable,
-  ThrottleReasons,
-  WINDOW_REQUESTS,
-} from "../src/overhead.ts";
+import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
 
 /**
  * `product.md:241`: «si detecta que ella misma añade latencia, **se autolimita**». Two words carry it:

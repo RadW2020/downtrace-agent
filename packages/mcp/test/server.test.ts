@@ -52,10 +52,22 @@ function server(answers: Array<{ status?: number; body?: string } | Error> = [])
   return { s, calls };
 }
 
+/**
+ * What `initialize` answers. The cast is here and not at each use: `handle` returns `unknown` because that is
+ * what a JSON-RPC result is, and a test that asserts on the shape is the thing checking it.
+ */
+interface Handshake {
+  protocolVersion: string;
+  serverInfo: { name: string; version: string };
+  capabilities: { tools?: unknown };
+  instructions: string;
+}
+const handshake = (out: unknown): Handshake => out as Handshake;
+
 describe("the handshake", () => {
   it("answers initialize with its name, version and the tools capability", async () => {
     const { s } = server();
-    const out = (await s.handle("initialize", {})) as Record<string, any>;
+    const out = handshake(await s.handle("initialize", {}));
     expect(out.protocolVersion).toBe(PROTOCOL_VERSION);
     expect(out.serverInfo).toEqual({ name: SERVER_NAME, version: "0.0.0" });
     expect(out.capabilities.tools).toBeDefined();
@@ -67,7 +79,7 @@ describe("the handshake", () => {
    */
   it("tells the agent that observed content is data", async () => {
     const { s } = server();
-    const out = (await s.handle("initialize", {})) as Record<string, any>;
+    const out = handshake(await s.handle("initialize", {}));
     expect(out.instructions).toContain("fromService");
     expect(out.instructions).toContain("not an instruction");
   });

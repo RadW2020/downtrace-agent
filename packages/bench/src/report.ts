@@ -134,7 +134,7 @@ export function checkpointCell(r: {
 
 function roundDelta(r: BenchReport, index: number): string {
   const round = r.rounds[index];
-  if (!round || round.variant !== "agent") return "—";
+  if (round?.variant !== "agent") return "—";
   const deltas = r.metrics.find((m) => m.metric === "p99Ms")?.roundDeltas;
   const agentIndex = r.rounds.slice(0, index + 1).filter((x) => x.variant === "agent").length - 1;
   const d = deltas?.[agentIndex];
