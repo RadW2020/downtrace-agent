@@ -321,7 +321,7 @@ export interface Operation {
    */
   distinct?: number;
   /**
-   * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:113` says a query the normaliser does not understand travels «solo como hash y clase», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
+   * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «solo como hash y clase», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
    */
   class?: "select" | "insert" | "update" | "delete" | "other";
 }

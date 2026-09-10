@@ -8,7 +8,7 @@ Con el gh-312 el cloud sabe qué capturas existen y no tiene forma de decírselo
 un solo sentido: la instrumentación hace `POST /v0/aggregates` y el cloud contesta
 `{"accepted":N,"inserted":M}`, un cuerpo que la instrumentación **ni siquiera lee**.
 
-`product.md:257` quiere capturas «por disparador local, **por petición del cloud** y por petición de un
+`product.md:256` quiere capturas «por disparador local, **por petición del cloud** y por petición de un
 consumidor». La del medio necesita un canal que no existe.
 
 ## Decisión

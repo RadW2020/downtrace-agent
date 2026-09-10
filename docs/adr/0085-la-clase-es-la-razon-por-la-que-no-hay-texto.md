@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-344)
 
-`product.md:113`: «una consulta que el normalizador no entiende viaja solo como **hash y clase**». La clase no
+`product.md:104`: «una consulta que el normalizador no entiende viaja solo como **hash y clase**». La clase no
 existía, y sin ella omitir el texto de una consulta la vuelve indistinguible de una que el usuario suprimió a
 propósito — que es exactamente la confusión que el gh-216 arregló dando tres respuestas a «por qué no hay
 texto»: enviado, suprimido por quien envía, inaplicable.

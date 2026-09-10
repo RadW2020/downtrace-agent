@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-09 · Alcance: público
 
 ## Contexto
 
-Segunda pieza de la caja negra y la cara. `product.md:91` pide «cada request con sus operaciones hijas, **tiempos y orden**», y esa última palabra es toda la razón de que exista: los agregados ya dicen que una ruta ejecutó cincuenta y seis consultas, y solo una secuencia con principios y finales dice si fueron una detrás de otra o todas a la vez. Esa diferencia es la que separa el tiempo **añadido** a la request del tiempo que la request pasó esperando algo que ya había pedido.
+Segunda pieza de la caja negra y la cara. `product.md:93` pide «cada request con sus operaciones hijas, **tiempos y orden**», y esa última palabra es toda la razón de que exista: los agregados ya dicen que una ruta ejecutó cincuenta y seis consultas, y solo una secuencia con principios y finales dice si fueron una detrás de otra o todas a la vez. Esa diferencia es la que separa el tiempo **añadido** a la request del tiempo que la request pasó esperando algo que ya había pedido.
 
 Tres afirmaciones que el cloud hoy se niega a hacer estaban esperando a este registro: la atribución al camino crítico (ATR-01, ADR 0055), el conteo de requests dañadas (IMP-01, ADR 0060) y el total único entre hallazgos (ESC-03).
 

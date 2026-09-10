@@ -120,7 +120,7 @@ describe("the signature", () => {
 });
 
 /**
- * `product.md:113`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
+ * `product.md:104`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
  * un mensaje de error que no encaja en los formatos conocidos viaja solo como tipo y firma, sin texto».
  *
  * It is the only line of the document that says how the product behaves when it is not sure, and until

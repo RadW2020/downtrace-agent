@@ -77,7 +77,7 @@ describe("aggregates schema v0", () => {
     expect(reason("runtime-with-nothing-in-it.json")).toMatch(/must NOT have fewer than 1 properties/);
     expect(reason("dependency-unknown-kind.json")).toMatch(/kind must be equal to one of the allowed values/);
     // A class and a text are two answers to one question: «hash y clase» is what travels when the text
-    // could not be produced safely (`product.md:113`, gh-344).
+    // could not be produced safely (`product.md:104`, gh-344).
     expect(reason("operation-with-class-and-text.json")).toMatch(/must NOT be valid/);
   });
 });

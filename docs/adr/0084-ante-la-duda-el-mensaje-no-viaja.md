@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-343)
 
-`product.md:113` es la única línea del documento que dice **cómo se comporta el producto cuando no está
+`product.md:104` es la única línea del documento que dice **cómo se comporta el producto cuando no está
 seguro**:
 
 > Cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: una consulta que el
@@ -31,7 +31,7 @@ proporción de las palabras conserva alguna letra.
 producto. Cualquier número aquí es discutible; el sesgo no.
 
 **4. Se omite el mensaje, no la firma.** Tipo y firma del stack siguen viajando, que es lo que
-`product.md:113` dice y lo que mantiene la identidad agrupable: dos errores omitidos en el mismo sitio siguen
+`product.md:104` dice y lo que mantiene la identidad agrupable: dos errores omitidos en el mismo sitio siguen
 siendo el mismo error.
 
 **5. Y se dice.** El texto queda como `Tipo: (message omitted: nothing recognisable survived sanitising)`. Un
