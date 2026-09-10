@@ -11,6 +11,7 @@ import {
   PROTOCOL_VERSION,
   type Profile,
 } from "@downtrace/protocol";
+import type { CountedException } from "./exceptions.ts";
 import type { Inspector } from "./inspect.ts";
 import type { Logger } from "./log.ts";
 
@@ -76,6 +77,8 @@ export function capturesIn(body: string): PendingCapture[] {
 export const DEFAULT_MAX_QUEUED = 6;
 /** As many capture reports as the answer may carry orders. Bounded on both sides of the same channel. */
 const MAX_CAPTURE_REPORTS = 16;
+/** As many signatures as the protocol accepts in one batch. */
+const MAX_EXCEPTIONS = 32;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 /**
@@ -107,6 +110,8 @@ export class Sender {
   private profiles: Profile[] = [];
   /** Capture starts waiting to ride the next batch. Cleared when it lands, so nothing is said twice. */
   private captureReports: CaptureProgress[] = [];
+  /** What the process threw outside any request, waiting for a batch to carry it (ADR 0103). */
+  private exceptions: CountedException[] = [];
   private inflight = false;
   private warnedAuth = false;
   sent = 0;
@@ -139,6 +144,15 @@ export class Sender {
    * Queues a profile for the next batch. A batch carries at most one, so they go out oldest first and, like
    * intervals, the oldest is dropped rather than letting an unreachable cloud grow this without bound.
    */
+  /** What the process threw outside a request. Accumulates: two flushes without a send must not lose one. */
+  enqueueExceptions(all: CountedException[]): void {
+    for (const e of all) {
+      const seen = this.exceptions.find((x) => x.kind === e.kind && x.hash === e.hash);
+      if (seen) seen.count += e.count;
+      else if (this.exceptions.length < MAX_EXCEPTIONS) this.exceptions.push(e);
+    }
+  }
+
   /** What the next batch says about the captures under way (ADR 0098). Replaces, never accumulates. */
   enqueueCaptures(reports: CaptureProgress[]): void {
     this.captureReports = reports.slice(0, MAX_CAPTURE_REPORTS);
@@ -212,14 +226,25 @@ export class Sender {
     }
   }
 
+  /**
+   * Whether there is anything at all to send.
+   *
+   * A question and not a list of cases, because the list has come up short twice: once when the profile
+   * was added (gh-375) and again when the capture reports were (gh-379). Anything new that a batch can
+   * carry goes here, or it will not be sent on a quiet interval.
+   */
+  private hasSomethingToSay(): boolean {
+    return (
+      this.queue.length > 0 || this.profiles.length > 0 || this.captureReports.length > 0 || this.exceptions.length > 0
+    );
+  }
+
   async flush(timeoutMs = this.timeoutMs): Promise<boolean> {
     // Something to say is an interval, a profile **or** a capture report. Asking only about the interval
     // queue meant a profile with no interval to ride on never left — at shutdown, always (gh-375) — and the
     // same trap caught the capture reports the moment they existed: a capture watching a route with no
     // traffic would have gone unreported for as long as the quiet lasted (gh-379).
-    if (this.inflight || (this.queue.length === 0 && this.profiles.length === 0 && this.captureReports.length === 0)) {
-      return false;
-    }
+    if (this.inflight || !this.hasSomethingToSay()) return false;
     // The cloud asked for time. Aggregating carries on and the queue keeps dropping its oldest past six: not
     // being able to send is no reason to stop measuring what will be sendable later (gh-205).
     if (this.now() < this.silentUntil) return false;
@@ -235,6 +260,9 @@ export class Sender {
       intervals: intervals as AggregatesBatch["intervals"],
       ...(profile ? { profile } : {}),
       // 1..16 by construction, like the intervals above: the generated type is a union of tuples.
+      ...(this.exceptions.length > 0
+        ? { exceptions: this.exceptions as NonNullable<AggregatesBatch["exceptions"]> }
+        : {}),
       ...(this.captureReports.length > 0
         ? { captures: this.captureReports as NonNullable<AggregatesBatch["captures"]> }
         : {}),
@@ -266,6 +294,7 @@ export class Sender {
         // Said, so it is not said again. Only on success: a report whose batch never arrived has not been
         // heard, and the capture would look accepted-but-never-started for as long as that lasted.
         this.captureReports = [];
+        this.exceptions = [];
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants

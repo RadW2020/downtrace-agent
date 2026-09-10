@@ -75,6 +75,20 @@ Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `n
 
 Either import the instrumentation from an entry point you own, as above, or make the bundler keep it. In Next that is `outputFileTracingIncludes`; other tools have an equivalent.
 
+## Exceptions that kill the process
+
+An uncaught exception and a promise rejected with no `catch` are watched through
+`uncaughtExceptionMonitor`, which Node calls before any real handler and which **does not count as handling
+the exception**. Your process ends exactly as it would have: same exit code, same stack trace. There is a
+test that runs two processes, one with the instrumentation and one without, and compares both.
+
+What is reported is the type, the sanitised message and the stack signature, counted per signature.
+
+**If the process dies, the exception is lost.** Sending is asynchronous, an uncaught exception does not go
+through `beforeExit`, and there is no synchronous channel to send it on. It arrives when your application
+survives what it threw — because it has its own `uncaughtException` handler, or because the rejection did
+not kill it — which is the common case for the ones you can still do something about.
+
 ## If your application calls `process.exit()`
 
 `process.exit()` is immediate. It does not wait for a promise in flight and it does not fire `beforeExit`,

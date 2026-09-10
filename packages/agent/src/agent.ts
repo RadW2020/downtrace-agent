@@ -14,6 +14,7 @@ import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
 import { ErrorFingerprintCache } from "./errors.ts";
+import { ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
 import { FineRegister } from "./fine.ts";
 import { FingerprintCache } from "./fingerprint.ts";
@@ -116,6 +117,15 @@ export class Agent {
   private readonly profile: ProfileAggregator | undefined;
   /** The captures the cloud has asked this process for. Empty until one arrives (gh-379). */
   private readonly captures = new Captures();
+  /** What the process threw outside any request (`product.md:77`, ADR 0103). */
+  private readonly exceptions = new ProcessExceptions();
+  /**
+   * Watched with `uncaughtExceptionMonitor` and nothing else: a plain `uncaughtException` listener
+   * **handles** the exception, and a handled exception does not kill the process — measured, exit 1 with a
+   * trace becomes exit 0 with nothing. That is what invariant 2 forbids (gh-386).
+   */
+  private readonly onThrown = (err: unknown, origin: string): void =>
+    this.guard(() => this.exceptions.record(origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT, err));
   /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
   private readonly excludedEndpoints: Excluded;
   private readonly excludedDependencies: Excluded;
@@ -252,6 +262,7 @@ export class Agent {
     // the cloud settles the race with a `409` on the second evidence (gh-379).
     this.sender.onCaptures = (pending) => this.guard(() => this.captures.accept(pending, Date.now()));
     this.sender.onReported = (ids) => this.guard(() => this.captures.reported(ids));
+    process.on("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
@@ -267,6 +278,7 @@ export class Agent {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    process.removeListener("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
     if (this.timer) clearInterval(this.timer);
@@ -299,6 +311,9 @@ export class Agent {
       if (profile) this.sender.enqueueProfile(profile);
       // What the cloud asked for and this process really started, said once (ADR 0098).
       this.sender.enqueueCaptures(this.captures.toReport());
+      // What died outside a request. Taken rather than copied: a batch that lands has said them, and one
+      // that does not gets them back (ADR 0103).
+      this.sender.enqueueExceptions(this.exceptions.take());
       this.declareWithholding();
       const interval = this.recorder.rotate();
       if (interval) {
