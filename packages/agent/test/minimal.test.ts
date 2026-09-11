@@ -137,6 +137,65 @@ describe("the minimal mode", () => {
     expect(batch.agent.withholding).toBeUndefined();
   });
 
+  // gh-395. The batch was the easy half. A capture freezes the black box and sends it down a path of its
+  // own, and that path copied the route straight out of the register. The ADR 0105 left the hole named:
+  // «el modo mínimo tiene un agujero del tamaño de una captura».
+  //
+  // covers: ESC-08
+  it("withholds the route in a capture's evidence too, and still finds the requests it was asked for", async () => {
+    const evidence: { path: string; body: string }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/v0/aggregates")) {
+        // The cloud only ever knew the withheld name, so that is what its order carries. Before this, the
+        // filter compared it against the real route and every capture in minimal mode came back empty.
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-1",
+                windowSeconds: 0.05,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                method: "GET",
+                route: withheldName(THEIRS.route),
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: String(init.body) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config({ minimal: true }), { log: quiet, fetchImpl });
+    agent.start();
+    try {
+      const request = { method: "GET", url: THEIRS.path };
+      channel(REQUEST_START).publish({ request });
+      channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await agent.flushNow()).toBe(true);
+      await new Promise((r) => setTimeout(r, 80));
+      expect(await agent.flushNow()).toBe(true);
+    } finally {
+      await agent.stop();
+    }
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0]?.body ?? "";
+    // Asked of the bytes that would be sent, like everything else here.
+    for (const [what, value] of Object.entries(THEIRS)) {
+      expect(body, `«${what}» reached the wire in a capture`).not.toContain(value);
+    }
+    const sent = JSON.parse(body) as { requests: { method: string; route: string }[] };
+    // The filter found it, which it could only do by comparing comparable names.
+    expect(sent.requests).toHaveLength(1);
+    // And the same hash as the batch, or the cloud cannot tell which endpoint this evidence is about.
+    expect(sent.requests[0]?.route).toBe(withheldName(THEIRS.route));
+    expect(sent.requests[0]?.method).toBe("GET");
+  });
+
   it("leaves the finer control doing exactly what it did", async () => {
     // `DOWNTRACE_QUERY_TEXT=off` is «send my routes but not my queries», which is a real thing to want and
     // not the same as this.

@@ -135,8 +135,17 @@ export interface CaptureSlice {
   truncated: number;
 }
 
-export function sliceFor(capture: LiveCapture, snapshot: FineSnapshot): CaptureSlice {
-  const keep = matcher(capture.footprint);
+/**
+ * `nameOf` is how a route is called outside this process: itself, or a digest of itself in minimal mode.
+ * The order comes from the cloud, which only ever knew the outside name, so the comparison happens there
+ * and not against what the register keeps (gh-395).
+ */
+export function sliceFor(
+  capture: LiveCapture,
+  snapshot: FineSnapshot,
+  nameOf: (route: string) => string = (route) => route,
+): CaptureSlice {
+  const keep = matcher(capture.footprint, nameOf);
   let observed = 0;
   let attached = 0;
   let detailLost = 0;
@@ -163,10 +172,10 @@ export function sliceFor(capture: LiveCapture, snapshot: FineSnapshot): CaptureS
  * A request whose dependency list did not fit **matches anyway**: what the register has is incomplete, and
  * reading a gap as proof that the dependency was not used is the mistake invariant 14 is about.
  */
-function matcher(footprint: CaptureFootprint): (r: FineRequest) => boolean {
+function matcher(footprint: CaptureFootprint, nameOf: (route: string) => string): (r: FineRequest) => boolean {
   const { method, route, kind, target } = footprint;
   if (route !== undefined && route !== "") {
-    return (r) => r.route === route && (method === undefined || method === "" || r.method === method);
+    return (r) => nameOf(r.route) === route && (method === undefined || method === "" || r.method === method);
   }
   if ((kind !== undefined && kind !== "") || (target !== undefined && target !== "")) {
     const label = dependencyKey(kind ?? "", target ?? "");

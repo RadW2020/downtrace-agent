@@ -373,7 +373,7 @@ export class Agent {
    */
   private async deliverEvidence(done: LiveCapture[]): Promise<void> {
     for (const capture of done) {
-      const slice = sliceFor(capture, this.fine.snapshot());
+      const slice = sliceFor(capture, this.fine.snapshot(), (route) => this.nameOf(route));
       await this.sender.sendEvidence(capture.id, {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },
@@ -387,7 +387,9 @@ export class Agent {
         },
         requests: slice.requests.map((r) => ({
           method: r.method,
-          route: r.route,
+          // The register keeps the real template —the black box never leaves the process— and this is the
+          // moment it does (ADR 0105).
+          route: this.nameOf(r.route),
           status: r.status,
           startedAt: new Date(r.startedAt).toISOString(),
           durationMs: r.durationMs,
@@ -395,6 +397,17 @@ export class Agent {
         })),
       });
     }
+  }
+
+  /**
+   * What a route is called outside this process: itself, or a digest of itself in minimal mode.
+   *
+   * One place rather than three, because the name has to be the **same** in the batch, in the evidence and
+   * in the comparison against what the cloud asks to capture — the cloud only ever knew the digest, and a
+   * filter that compared it against the real template found nothing (gh-395).
+   */
+  private nameOf(route: string): string {
+    return this.config.minimal ? withheldName(route) : route;
   }
 
   /**
@@ -460,7 +473,7 @@ export class Agent {
     // Withheld **after** the exclusion is decided, so a pattern is matched against the real template and
     // not against a digest of it, and after the black box has its own copy: what the coarse and fine
     // registers hold never leaves the process except in a capture (ADR 0105).
-    const named = this.config.minimal ? withheldName(route) : route;
+    const named = this.nameOf(route);
     this.recorder.record(method, named, response?.statusCode ?? 0, ms, ctx?.work);
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
