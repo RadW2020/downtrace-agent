@@ -8,7 +8,7 @@ import { OTHER_ROUTE } from "./routes.ts";
  * aggregate says a minute was bad; this says whether it went bad in one step or over forty seconds, and those
  * are different problems with different causes.
  *
- * Nothing here leaves the process. It exists to be frozen by a capture, which does not exist yet.
+ * Nothing here leaves the process on its own: it leaves when a capture freezes it and sends the evidence.
  *
  * The memory is bounded by construction (invariant 1): every row is a typed array allocated once, at the size of
  * the window, and a second that comes round again overwrites the one from a window ago. Nothing grows.
