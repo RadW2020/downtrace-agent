@@ -188,7 +188,15 @@ describe("the minimal mode", () => {
     for (const [what, value] of Object.entries(THEIRS)) {
       expect(body, `«${what}» reached the wire in a capture`).not.toContain(value);
     }
-    const sent = JSON.parse(body) as { requests: { method: string; route: string }[] };
+    const sent = JSON.parse(body) as {
+      requests: { method: string; route: string }[];
+      reference: { samples: { route: string }[] };
+    };
+    // The samples carry routes too, and they are the operator's words like any other (gh-307).
+    expect(sent.reference.samples.length, "no samples, so the loop below checks nothing").toBeGreaterThan(0);
+    for (const sample of sent.reference.samples) {
+      expect(sample.route).toBe(withheldName(THEIRS.route));
+    }
     // The filter found it, which it could only do by comparing comparable names.
     expect(sent.requests).toHaveLength(1);
     // And the same hash as the batch, or the cloud cannot tell which endpoint this evidence is about.

@@ -378,6 +378,71 @@ describe("agent v0 (integration)", () => {
     expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
   });
 
+  // gh-307. A capture used to arrive with the detail of what went wrong and nothing to compare it
+  // against. `product.md:100`: «la instrumentación conserva, por endpoint y versión, un pequeño número
+  // acotado de requests representativas de la referencia utilizada (…) Cada muestra identifica su
+  // referencia y cómo se seleccionó».
+  it("sends reference samples with a capture, and says how they were chosen", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: unknown[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [{ id: "cap-4", windowSeconds: 0.05, expiresAt: new Date(Date.now() + 60_000).toISOString() }];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push(JSON.parse(String(init?.body)));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    // Traffic before anything is asked of the process: this is what a reference is made of.
+    for (let i = 0; i < 5; i += 1) {
+      const request = { method: "GET", url: `/products/${i}` };
+      channel(REQUEST_START).publish({ request });
+      channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    }
+    expect(await agent.flushNow()).toBe(true);
+
+    // And one while the capture is open, which must not renew the samples (REF-01).
+    const during = { method: "GET", url: "/products/9" };
+    channel(REQUEST_START).publish({ request: during });
+    channel(RESPONSE_FINISH).publish({ request: during, response: { statusCode: 500 } });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0] as {
+      reference: {
+        selection: string;
+        population: number;
+        renewalPaused?: boolean;
+        samples: { method: string; route: string; startedAt: string; status: number }[];
+      };
+    };
+    expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    expect(body.reference.selection).toBe("uniform-reservoir");
+    // Drawn from the five requests before the capture, and not from the one during it.
+    expect(body.reference.population).toBe(5);
+    expect(body.reference.renewalPaused).toBe(true);
+    expect(body.reference.samples.length).toBeGreaterThan(0);
+    for (const sample of body.reference.samples) {
+      expect(sample.route).toBe("/products/:id");
+      // The 500 happened during the capture: a sample of it would be the degraded behaviour walking
+      // into the reference, which is what REF-01 forbids.
+      expect(sample.status).toBe(200);
+      // Dated in the clock everyone reads, like the captured requests (gh-399).
+      expect(Math.abs(Date.parse(sample.startedAt) - Date.now())).toBeLessThan(60_000);
+    }
+  });
+
   // gh-396. The register knows, request by request, whether its detail was overwritten, and the contract
   // has a field for it on the request and not only in the totals. Nothing filled it: a request whose
   // operations were gone arrived with an empty list and no mark, which reads as one that ran nothing.
@@ -470,7 +535,7 @@ describe("agent v0 (integration)", () => {
       if (path.endsWith(AGGREGATES_PATH)) {
         const captures = ordered
           ? []
-          : [{ id: "cap-2", windowSeconds: 0.3, expiresAt: new Date(Date.now() + 60_000).toISOString() }];
+          : [{ id: "cap-2", windowSeconds: 0.6, expiresAt: new Date(Date.now() + 60_000).toISOString() }];
         ordered = true;
         return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
       }
@@ -492,7 +557,10 @@ describe("agent v0 (integration)", () => {
     const during = { method: "GET", url: "/products/2" };
     channel(REQUEST_START).publish({ request: during });
     channel(RESPONSE_FINISH).publish({ request: during, response: { statusCode: 200 } });
-    await new Promise((r) => setTimeout(r, 350));
+    // Wide enough that a loaded machine cannot close the window inside the flush that opened it: with a
+    // shorter one the evidence went out before the second request, and the test read that as the bug it
+    // is meant to catch.
+    await new Promise((r) => setTimeout(r, 700));
     expect(await agent.flushNow()).toBe(true);
 
     expect(evidence, "no evidence was sent").toHaveLength(1);

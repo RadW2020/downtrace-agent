@@ -3,6 +3,7 @@ import diagnostics_channel from "node:diagnostics_channel";
 import { hostname } from "node:os";
 import {
   type AgentInfo,
+  type CaptureEvidence,
   type DeployInfo,
   type InstanceInfo,
   type Observers,
@@ -26,6 +27,7 @@ import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel } from "./overhead.ts";
 import { ProfileAggregator } from "./profile.ts";
+import { ReferenceRegister } from "./reference.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
@@ -56,6 +58,8 @@ export interface AgentDeps {
   coarse?: CoarseRegister;
   /** The fine register, so a test can size its rings down to a few entries. */
   fine?: FineRegister;
+  /** The reference samples, so a test can make them small or make their selection deterministic. */
+  reference?: ReferenceRegister;
   /** The overhead meter, so a test can sample every call and drive its clock. */
   overhead?: OverheadMeter;
   recorder?: Recorder | undefined;
@@ -110,6 +114,8 @@ export class Agent {
   private readonly coarse: CoarseRegister;
   /** The fine half: the last tens of seconds, request by request and operation by operation. */
   private readonly fine: FineRegister;
+  /** A few requests per endpoint, kept as something for a capture to compare against (gh-307). */
+  private readonly reference: ReferenceRegister;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
@@ -197,6 +203,7 @@ export class Agent {
     // with it until captures exist.
     this.coarse = deps.coarse ?? new CoarseRegister();
     this.fine = deps.fine ?? new FineRegister();
+    this.reference = deps.reference ?? new ReferenceRegister();
     this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
@@ -291,7 +298,11 @@ export class Agent {
     // The other half of the control channel: the orders come back in the answer to a batch (ADR 0071), and
     // until now nobody was listening. Every instance obeys — none can know what the others are doing — and
     // the cloud settles the race with a `409` on the second evidence (gh-379).
-    this.sender.onCaptures = (pending) => this.guard(() => this.captures.accept(pending, Date.now()));
+    this.sender.onCaptures = (pending) =>
+      this.guard(() => {
+        this.captures.accept(pending, Date.now());
+        this.renewReference();
+      });
     this.sender.onReported = (ids) => this.guard(() => this.captures.reported(ids));
     process.on("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
@@ -356,6 +367,7 @@ export class Agent {
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
       // Leaving hands over everything under way, because partial evidence is an answer and silence is not.
       await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(Date.now()));
+      this.renewReference();
       return sent;
     } catch (err) {
       this.internalError(err);
@@ -385,6 +397,7 @@ export class Agent {
           detailLost: slice.detailLost,
           truncated: slice.truncated,
         },
+        reference: this.referenceFor(),
         requests: slice.requests.map((r) => ({
           method: r.method,
           // The register keeps the real template —the black box never leaves the process— and this is the
@@ -402,6 +415,43 @@ export class Agent {
         })),
       });
     }
+  }
+
+  /**
+   * The samples a capture carries, with how they were chosen.
+   *
+   * `product.md:100`: «Cada muestra identifica su referencia y cómo se seleccionó; ser anterior no
+   * acredita salud». The second half is the cloud's to say; the first is this (gh-307).
+   */
+  private referenceFor(): NonNullable<CaptureEvidence["reference"]> {
+    const snapshot = this.reference.snapshot();
+    return {
+      selection: snapshot.selection,
+      population: snapshot.population,
+      ...(snapshot.routesDropped > 0 ? { routesDropped: snapshot.routesDropped } : {}),
+      ...(snapshot.renewalPaused ? { renewalPaused: true } : {}),
+      samples: snapshot.samples.map((s) => ({
+        method: s.method,
+        route: this.nameOf(s.route),
+        status: s.status,
+        startedAt: new Date(s.startedAt).toISOString(),
+        durationMs: s.durationMs,
+        operations: s.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
+        ...(s.truncated ? { truncated: true } : {}),
+      })),
+    };
+  }
+
+  /**
+   * Stops renewing the samples while this process is watching a capture, and starts again when it is not.
+   *
+   * It is the closest an instrumentation can get to REF-01 —«la referencia permanece protegida mientras
+   * un incidente esté abierto»— from inside the process: it cannot know whether an incident is open, but
+   * it knows detail has been asked of it, which is when something is happening (gh-307).
+   */
+  private renewReference(): void {
+    if (this.captures.size > 0) this.reference.pause();
+    else this.reference.resume();
   }
 
   /**
@@ -484,21 +534,27 @@ export class Agent {
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
     // is still true. What it has none of is detail, and an empty list says that already.
     if (this.overhead.keeping(Sheddable.Fine)) {
+      // In the clock everybody else reads. Durations are measured with `performance.now()`, which counts
+      // from the start of the process and is the only one that cannot jump; an **instant** has to be
+      // absolute or two instances cannot be read side by side, and the capture's own start —which comes
+      // from the cloud's clock— cannot be compared with it at all (gh-399).
+      const startedWall = startedAt === undefined ? Date.now() - ms : EPOCH + startedAt;
       this.fine.request(
         method,
         route,
         response?.statusCode ?? 0,
-        // In the clock everybody else reads. Durations are measured with `performance.now()`, which counts
-        // from the start of the process and is the only one that cannot jump; an **instant** has to be
-        // absolute or two instances cannot be read side by side, and the capture's own start —which comes
-        // from the cloud's clock— cannot be compared with it at all (gh-399).
-        startedAt === undefined ? Date.now() - ms : EPOCH + startedAt,
+        startedWall,
         ms,
         ctx?.fineFrom ?? this.fine.openRequest(),
         ctx?.fineOps ?? 0,
         // The keys `work` is already built with: a capture of a dependency has to know which requests
         // touched it, and the register holds only fingerprints, which do not say (gh-397).
         ctx?.work?.keys(),
+      );
+      // And the same request is offered to the reference samples. The operations are read back from the
+      // ring **only if it takes it**, which after the first few is one request in `seen` (gh-307).
+      this.reference.consider(method, route, response?.statusCode ?? 0, startedWall, ms, () =>
+        this.fine.lastOperations(),
       );
     }
     if (ctx?.operations && this.overhead.keeping(Sheddable.Profile)) {

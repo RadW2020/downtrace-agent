@@ -73,6 +73,23 @@ describe("the capture evidence schema", () => {
     expect([...op.required].sort()).toEqual(["endMs", "hash", "startMs"]);
   });
 
+  /**
+   * `product.md:100`: «Cada muestra identifica su referencia y **cómo se seleccionó**». A sample whose
+   * selection nobody stated cannot support a comparison, so the field is required and its values are an
+   * enum: a free string would let a sender write «representative» and mean anything (gh-307).
+   */
+  it("makes a reference sample say how it was chosen", () => {
+    const reference = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as {
+        $defs: { Reference: { required: string[]; properties: { selection: { enum: string[] } } } };
+      }
+    ).$defs.Reference;
+    expect([...reference.required].sort()).toEqual(["population", "samples", "selection"]);
+    expect(reference.properties.selection.enum).toContain("uniform-reservoir");
+    // And it never says a sample is healthy, because being earlier does not make it so (`product.md:100`).
+    expect(JSON.stringify(CAPTURE_EVIDENCE_SCHEMA_V0)).not.toContain('"healthy"');
+  });
+
   it("speaks exactly the versions the batch does", () => {
     // One fact, one place: the enum lives in the batch schema and `make gen` refuses a copy that has drifted.
     const batch = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;

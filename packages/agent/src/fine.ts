@@ -240,6 +240,30 @@ export class FineRegister {
     this.requestCursor += 1;
   }
 
+  /**
+   * The operations of the request written last, or none when it kept none.
+   *
+   * For the reference register, which copies a sample **only when it takes one** (gh-307): asking the
+   * ring costs nothing until then, and the request it asks about is the one just written, so its
+   * operations are necessarily still live.
+   */
+  lastOperations(): FineOperation[] {
+    if (this.requestCursor === 0) return [];
+    const at = ((this.requestCursor - 1) % this.capacity) * R_FIELDS;
+    const opFrom = this.requests[at + R_OP_FROM] ?? 0;
+    const opCount = this.requests[at + R_OP_COUNT] ?? 0;
+    const out: FineOperation[] = [];
+    for (let i = 0; i < opCount; i += 1) {
+      const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
+      out.push({
+        hash: this.fingerprints[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
+        startMs: this.operations[opAt + O_START] ?? 0,
+        endMs: this.operations[opAt + O_END] ?? 0,
+      });
+    }
+    return out;
+  }
+
   /** Exactly how many bytes of typed array this register has allocated. */
   bytes(): number {
     return this.requests.byteLength + this.operations.byteLength + this.dependencies.byteLength;

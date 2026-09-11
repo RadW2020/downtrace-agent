@@ -31,6 +31,7 @@ export interface CaptureEvidence {
    * @maxItems 4096
    */
   requests: CapturedRequest[];
+  reference?: ReferenceSamples;
 }
 /**
  * `product.md:192` asks a capture to declare **both** coverages: what it attached from detail still retained, and what it observed from its effective start. Two numbers, never one — a total would hide that half of it is older than the capture.
@@ -93,4 +94,31 @@ export interface CapturedOperation {
    */
   startMs: number;
   endMs: number;
+}
+/**
+ * A few requests of each endpoint kept as something to compare the captured ones against. `product.md:100`: «Comparar requests degradadas con requests de referencia exige conservar ambas; el detalle fino de hace una hora ya no existe». Being earlier does not certify health, which is why every field here is about how they were chosen and none of them says «healthy».
+ */
+export interface ReferenceSamples {
+  /**
+   * How they were chosen. Travels with them because a sample whose selection is unknown cannot support an attribution (ATR-01). `uniform-reservoir`: every request observed of that endpoint had the same chance of being kept, whatever it did — which is what «the fastest N» would not be.
+   */
+  selection: "uniform-reservoir";
+  /**
+   * How many requests they were drawn from, over the life of the sending process.
+   */
+  population: number;
+  /**
+   * Endpoints seen that the register had no room for. Counted rather than silently absent: an endpoint with no samples is not an endpoint with no traffic (invariant 14).
+   */
+  routesDropped?: number;
+  /**
+   * True when requests were observed that the register deliberately did not consider. The instrumentation pauses renewal while it is watching a capture, which is the closest it can get to REF-01 from inside the process: it cannot know whether an incident is open, but it knows detail has been asked of it. Absent means false.
+   */
+  renewalPaused?: boolean;
+  /**
+   * The kept requests, in the same shape as the captured ones. An empty array is a real answer: a process that has just started has nothing to compare with yet.
+   *
+   * @maxItems 64
+   */
+  samples: CapturedRequest[];
 }
