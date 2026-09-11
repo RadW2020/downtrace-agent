@@ -18,6 +18,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepublishOnly": "node -e \"const p=require('./package.json');if(!JSON.stringify([p.exports,p.bin,p.main,p.types]).includes('./src/'))process.exit(0);console.error('\\n  '+p.name+' publishes through publishConfig, which npm does not apply and pnpm does.\\n  Publishing from here would ship entry points the tarball does not carry, which is how\\n  @downtrace/mcp@0.1.0 went out broken (gh-421). Pack it first, as CI does:\\n\\n    pnpm pack --pack-destination /tmp && npm publish /tmp/<tarball> --access public\\n');process.exit(1)\"",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsdown"
