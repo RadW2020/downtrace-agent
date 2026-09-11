@@ -304,6 +304,7 @@ describe("agent v0 (integration)", () => {
   //
   // covers: ESC-08
   it("obeys a capture the cloud asked for, and sends what it saw", async () => {
+    const startedRoughly = Date.now();
     const REQUEST_START = "http.server.request.start";
     const RESPONSE_FINISH = "http.server.response.finish";
     const evidence: { path: string; body: unknown }[] = [];
@@ -323,7 +324,7 @@ describe("agent v0 (integration)", () => {
                 // accepted it, and its start is delivered by the evidence instead of by a batch — which is
                 // fine, and not the path this test is about.
                 windowSeconds: 0.05,
-                expiresAt: Date.now() + 60_000,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
                 method: "GET",
                 route: "/products/:id",
               },
@@ -345,6 +346,10 @@ describe("agent v0 (integration)", () => {
     const request = { method: "GET", url: "/products/7" };
     channel(REQUEST_START).publish({ request });
     channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    // A gap wide enough for the two clocks to be told apart: the capture's start is a whole millisecond
+    // (`Date.now()`) and a request's is a fraction of one, so inside the same millisecond which came first
+    // is not a question the measurement can answer.
+    await new Promise((r) => setTimeout(r, 20));
     // The first flush carries the batch and brings the order back.
     expect(await agent.flushNow()).toBe(true);
     await new Promise((r) => setTimeout(r, 80));
@@ -356,9 +361,67 @@ describe("agent v0 (integration)", () => {
     expect(evidence, "no evidence was sent").toHaveLength(1);
     expect(evidence[0]?.path).toContain("/v0/captures/cap-1/evidence");
 
-    const body = evidence[0]?.body as { coverage: { observedRequests: number }; requests: unknown[] };
-    expect(body.coverage.observedRequests + (body.requests.length === 0 ? 0 : 0)).toBeGreaterThanOrEqual(0);
+    const body = evidence[0]?.body as {
+      coverage: { observedRequests: number; attachedRequests: number };
+      requests: { startedAt: string }[];
+    };
     expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    // The request happened before the order arrived, so it is **attached** detail and not observed: that is
+    // the distinction CAP-01 asks for, and a total would hide it.
+    expect(body.requests).toHaveLength(1);
+    expect([body.coverage.observedRequests, body.coverage.attachedRequests]).toEqual([0, 1]);
+    // And it is dated in the clock everyone else reads. The register measures with `performance.now()`,
+    // which counts from the start of the process; sending that as an instant dates every captured request
+    // to 1970 and makes every comparison between instances nonsense (gh-399).
+    const dated = Date.parse(body.requests[0]?.startedAt ?? "");
+    expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
+  });
+
+  // gh-399. Same journey, the other half of the clock: a request that runs **while** the window is open is
+  // observed, not attached. It failed for the same reason — the two numbers were compared in two clocks.
+  //
+  // The marker is ESC-08 and not CAP-01 on purpose: CAP-01 also asks that a requested capture compete with
+  // the automatic ones for one budget, and no automatic capture exists yet (gh-307).
+  //
+  // covers: ESC-08
+  it("counts a request made during the window as observed, and one from before as attached", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: unknown[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [{ id: "cap-2", windowSeconds: 0.3, expiresAt: new Date(Date.now() + 60_000).toISOString() }];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push(JSON.parse(String(init?.body)));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const before = { method: "GET", url: "/products/1" };
+    channel(REQUEST_START).publish({ request: before });
+    channel(RESPONSE_FINISH).publish({ request: before, response: { statusCode: 200 } });
+    await new Promise((r) => setTimeout(r, 20));
+    // This flush brings the order back and the window opens.
+    expect(await agent.flushNow()).toBe(true);
+
+    const during = { method: "GET", url: "/products/2" };
+    channel(REQUEST_START).publish({ request: during });
+    channel(RESPONSE_FINISH).publish({ request: during, response: { statusCode: 200 } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0] as { coverage: { observedRequests: number; attachedRequests: number } };
+    expect([body.coverage.observedRequests, body.coverage.attachedRequests]).toEqual([1, 1]);
   });
 
   it("does not say the same start twice", async () => {
@@ -367,7 +430,9 @@ describe("agent v0 (integration)", () => {
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       if (!String(url).endsWith(AGGREGATES_PATH)) return new Response(null, { status: 202 });
       batches.push(JSON.parse(String(init?.body)) as AggregatesBatch);
-      const captures = ordered ? [] : [{ id: "cap-1", windowSeconds: 600, expiresAt: Date.now() + 600_000 }];
+      const captures = ordered
+        ? []
+        : [{ id: "cap-1", windowSeconds: 600, expiresAt: new Date(Date.now() + 600_000).toISOString() }];
       ordered = true;
       return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
     }) as unknown as typeof fetch;

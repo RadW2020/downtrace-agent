@@ -44,6 +44,12 @@ const SHUTDOWN_FLUSH_MS = 1_000;
  */
 const MEMORY_HIGH_WATER_BYTES = Math.floor(3 * 1024 * 1024 * 0.8);
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
+/**
+ * When this process started, in the clock the rest of the world reads. `performance.now()` measures
+ * durations and never jumps; adding this to one turns it into the instant it happened, which is what an
+ * instant in the evidence has to be (gh-399).
+ */
+const EPOCH = performance.timeOrigin;
 
 export interface AgentDeps {
   /** The coarse register, so a test can drive its clock. */
@@ -464,7 +470,11 @@ export class Agent {
         method,
         route,
         response?.statusCode ?? 0,
-        startedAt ?? 0,
+        // In the clock everybody else reads. Durations are measured with `performance.now()`, which counts
+        // from the start of the process and is the only one that cannot jump; an **instant** has to be
+        // absolute or two instances cannot be read side by side, and the capture's own start —which comes
+        // from the cloud's clock— cannot be compared with it at all (gh-399).
+        startedAt === undefined ? Date.now() - ms : EPOCH + startedAt,
         ms,
         ctx?.fineFrom ?? this.fine.openRequest(),
         ctx?.fineOps ?? 0,

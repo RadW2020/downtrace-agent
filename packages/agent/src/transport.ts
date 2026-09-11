@@ -41,10 +41,22 @@ export interface SenderOptions {
 export interface PendingCapture {
   id: string;
   windowSeconds: number;
+  /** Milliseconds since the epoch. The contract sends an RFC 3339 string; it is converted on the way in. */
   expiresAt: number;
   environment?: string;
   method?: string;
   route?: string;
+}
+
+/**
+ * The contract writes an instant as an RFC 3339 string and this side counts in milliseconds, so the
+ * conversion happens here, at the boundary, once. Anything that is not a date the clock can read is an order
+ * that cannot be obeyed: it has no deadline, and an order with no deadline never stops (gh-398).
+ */
+function instant(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? undefined : ms;
 }
 
 /** The orders in one answer, or none: a body that cannot be read is no orders, never an error (gh-379). */
@@ -64,8 +76,10 @@ export function capturesIn(body: string): PendingCapture[] {
     // `as` at the boundary and nowhere else: id, window and expiry are what this side acts on, and an order
     // missing any of them is one it cannot obey.
     if (typeof c.id !== "string" || c.id === "") continue;
-    if (typeof c.windowSeconds !== "number" || typeof c.expiresAt !== "number") continue;
-    const pending: PendingCapture = { id: c.id, windowSeconds: c.windowSeconds, expiresAt: c.expiresAt };
+    if (typeof c.windowSeconds !== "number") continue;
+    const expiresAt = instant(c.expiresAt);
+    if (expiresAt === undefined) continue;
+    const pending: PendingCapture = { id: c.id, windowSeconds: c.windowSeconds, expiresAt };
     if (typeof c.environment === "string") pending.environment = c.environment;
     if (typeof c.method === "string") pending.method = c.method;
     if (typeof c.route === "string") pending.route = c.route;

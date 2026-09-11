@@ -59,6 +59,11 @@ export interface FineRequest {
   method: string;
   route: string;
   status: number;
+  /**
+   * When it started, in milliseconds since the epoch. Absolute and not process-relative: an instant that
+   * only means something inside this process cannot be compared with the start of a capture, which comes
+   * from the cloud, nor read beside another instance's (gh-399).
+   */
   startedAt: number;
   durationMs: number;
   /** In the order they started. */

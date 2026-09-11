@@ -1,11 +1,21 @@
+import { readdir, readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { AGGREGATES_SCHEMA_V0, type Interval, PROTOCOL_VERSION, type Profile } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import type { Logger } from "../src/log.ts";
-import { DEFAULT_MAX_QUEUED, Sender } from "../src/transport.ts";
+import { DEFAULT_MAX_QUEUED, type PendingCapture, Sender } from "../src/transport.ts";
 
 const interval = (start: number): Interval => ({ start, durationMs: 10_000, endpoints: [] });
 const quiet: Logger = { warn: () => {}, debug: () => {} };
+
+/** The answers the cloud publishes, read from the protocol's own fixtures instead of retyped here. */
+const RESPONSES = fileURLToPath(new URL("../../protocol/schema/v0/fixtures/response/valid/", import.meta.url));
+const fixture = (name: string): Promise<string> => readFile(RESPONSES + name, "utf8");
+async function allFixtures(): Promise<[string, string][]> {
+  const names = (await readdir(RESPONSES)).filter((f) => f.endsWith(".json")).sort();
+  return Promise.all(names.map(async (f) => [f, await fixture(f)] as [string, string]));
+}
 
 function sender(responses: Array<number | Error>, log: Logger = quiet, responseBody?: string) {
   const calls: { url: string; auth: string | undefined; body: unknown }[] = [];
@@ -405,7 +415,7 @@ describe("the capture orders that come back in the answer", () => {
 
   it("hands over what the cloud asked for", async () => {
     const seen: unknown[] = [];
-    const { s } = sender([202], quiet, answer([{ id: "cap-1", windowSeconds: 60, expiresAt: 1_764_000_000_000 }]));
+    const { s } = sender([202], quiet, answer([{ id: "cap-1", windowSeconds: 60, expiresAt: "2025-11-24T16:00:00Z" }]));
     s.onCaptures = (pending) => seen.push(...pending);
     s.enqueue(interval(1));
     expect(await s.flush()).toBe(true);
@@ -432,9 +442,58 @@ describe("the capture orders that come back in the answer", () => {
     expect(seen).toHaveLength(0);
   });
 
+  it("obeys the order as the cloud actually writes it, taken from the protocol's own fixture", async () => {
+    // The parser used to require a number here and the contract has always said a date, so every order the
+    // real cloud sent was dropped in silence. The body is not written here on purpose: it is the published
+    // fixture, which is what the cloud emits (gh-398).
+    const seen: PendingCapture[] = [];
+    const { s } = sender([202], quiet, await fixture("one-capture.json"));
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen.map((c) => c.id)).toEqual(["5b6d1f0e-2c3a-4d5e-8f90-1a2b3c4d5e6f"]);
+    expect(seen[0]?.expiresAt).toBe(Date.parse("2026-09-10T10:15:00Z"));
+    expect(seen[0]?.route).toBe("/checkout");
+  });
+
+  it("reads every published answer without throwing, and finds the orders each one declares", async () => {
+    // Enumerated from the protocol's fixture directory rather than from a list written here: a list written
+    // here only covers what somebody remembered to put in it.
+    for (const [name, body] of await allFixtures()) {
+      const declared = (JSON.parse(body) as { captures?: unknown[] }).captures ?? [];
+      const seen: PendingCapture[] = [];
+      const { s } = sender([202], quiet, body);
+      s.onCaptures = (pending) => seen.push(...pending);
+      s.enqueue(interval(1));
+      expect(await s.flush(), name).toBe(true);
+      expect(seen.length, name).toBe(declared.length);
+      for (const c of seen) expect(Number.isFinite(c.expiresAt), `${name}: ${c.id}`).toBe(true);
+    }
+  });
+
+  it("drops an order whose deadline is not a date, and keeps the others in the same answer", async () => {
+    const seen: PendingCapture[] = [];
+    const { s } = sender(
+      [202],
+      quiet,
+      answer([
+        { id: "cap-bad", windowSeconds: 60, expiresAt: "tomorrow" },
+        { id: "cap-good", windowSeconds: 60, expiresAt: "2099-01-01T00:00:00Z" },
+      ]),
+    );
+    s.onCaptures = (pending) => seen.push(...pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(seen.map((c) => c.id)).toEqual(["cap-good"]);
+  });
+
   it("drops an order that is not shaped like one", async () => {
     const seen: unknown[] = [];
-    const { s } = sender([202], quiet, answer([{ id: 7 }, "nope", { id: "cap-2", windowSeconds: 30, expiresAt: 1 }]));
+    const { s } = sender(
+      [202],
+      quiet,
+      answer([{ id: 7 }, "nope", { id: "cap-2", windowSeconds: 30, expiresAt: "2099-01-01T00:00:00Z" }]),
+    );
     s.onCaptures = (pending) => seen.push(...pending);
     s.enqueue(interval(1));
     expect(await s.flush()).toBe(true);
