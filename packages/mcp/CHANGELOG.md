@@ -1,5 +1,11 @@
 # @downtrace/mcp
 
+## 0.1.1
+
+### Patch Changes
+
+- 7f23137: The server reads its version from the manifest npm publishes, instead of repeating it in a constant nothing bumps. The first release of this package moved the manifest to 0.1.0, the constant stayed at 0.0.0, and the test that held the two together turned main red — which is the test doing its job and nobody being able to do theirs.
+
 ## 0.1.0
 
 ### Minor Changes
