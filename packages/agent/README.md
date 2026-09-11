@@ -130,6 +130,11 @@ empty is what runs `beforeExit`, and the instrumentation flushes there.
 
 Only structural metadata: method, **route template** (`/products/:id`, never the actual URL), status, counts and a fixed-bucket latency histogram per route and interval, plus the process identity (random id, hostname, pid) and the deploy (version, environment). No bodies, no headers, no query strings. The exact contract is the JSON Schema in [`@downtrace/protocol`](https://www.npmjs.com/package/@downtrace/protocol).
 
+That is what goes out every ten seconds. Three other things can leave, and they are listed here rather than left for
+somebody to find in a schema: **the detail of a capture**, **reference samples** and **the instrumentation's own
+resources**. Each has its own section below. None of them carries a value from your database, a body, a header or a
+URL — the same rule as the aggregates, and `DOWNTRACE_INSPECT` shows you all of it.
+
 ### The health of your process
 
 Every interval the instrumentation also reports how late Node's event loop ran (median, p99 and worst), how much time went to
@@ -184,6 +189,38 @@ changes when your code changes, not every ten seconds.
 replaced before anything is stored or sent, and that happens in your process, not ours. If you would still rather
 not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it and changes nothing else — the hash is
 the identity, so you keep the whole analysis and only lose the readable label.
+
+### When someone asks for detail: a capture
+
+The instrumentation keeps a **black box** in memory: the last tens of seconds request by request, with the operations each
+one ran and when each started and finished, plus a coarser summary of the last few minutes. Nothing of it leaves your
+server on its own. It leaves when a capture asks for it — and a capture is asked for in one of two ways: the cloud asks,
+in the answer to a batch, or **the instrumentation asks for one itself** when a local signal says the process is in
+trouble (today: the event loop running more than 250 ms late, at the p99, for two intervals in a row).
+
+What travels then is the same kind of thing as an aggregate, one level finer: for each request, its **route template**,
+method, status, when it started and how long it took, and the operations it ran as **hashes** with their starts and ends.
+Never the query text, never a value, never a path. Order and overlap are the whole point — they are what separates «this
+request spent 400 ms waiting on the database» from «it ran three queries at once».
+
+It also says what it could **not** give you: how many requests it observed from the moment it started watching, how many
+it attached from detail it still had, and how many lost their detail before it could be read. A capture that saw nothing
+sends an empty answer rather than silence.
+
+### A few requests to compare against: reference samples
+
+A capture of what went wrong is worth little without something to compare it with, and the fine detail of an hour ago no
+longer exists. So the instrumentation keeps a handful of requests per endpoint — a **uniform reservoir**, so every request
+has the same chance of being kept, whatever it did — and sends them with a capture, saying how they were chosen. They have
+exactly the same shape as the captured requests, and the same rule: hashes, never text.
+
+### What the instrumentation itself costs
+
+Every batch can carry what the instrumentation is spending and losing: batches it dropped because its queue was full,
+batches the cloud refused, batches it could not send, errors inside itself, the memory its registers hold and an
+**estimate** of its own hook time per request. Numbers about the library, not about your application — and the reason they
+travel is that a cloud seeing nothing has to be able to tell «nothing happened» from «this instrumentation has been
+throwing batches away for two hours».
 
 ## See exactly what would leave your server
 
