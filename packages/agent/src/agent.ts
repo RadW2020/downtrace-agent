@@ -3,6 +3,7 @@ import diagnostics_channel from "node:diagnostics_channel";
 import { hostname } from "node:os";
 import {
   type AgentInfo,
+  type AgentResources,
   type CaptureEvidence,
   type DeployInfo,
   type InstanceInfo,
@@ -25,7 +26,7 @@ import { instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
-import { OverheadMeter, Sheddable, type SheddableLevel } from "./overhead.ts";
+import { OverheadMeter, Sheddable, type SheddableLevel, ThrottleReasons } from "./overhead.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
@@ -121,6 +122,8 @@ export class Agent {
   private readonly reference: ReferenceRegister;
   /** The local signals that ask for a capture when the process is in trouble (gh-409). */
   private readonly triggers = new LocalTriggers();
+  /** How many internal errors have already been reported, so each is counted once (gh-243). */
+  private reportedInternalErrors = 0;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
@@ -228,6 +231,9 @@ export class Agent {
         deploy,
         log: this.log,
         fetchImpl: deps.fetchImpl,
+        // What the sender cannot know about itself: the memory the registers hold, what the hooks cost,
+        // and what has been given up to stay inside the budget (gh-243).
+        resources: () => this.ownResources(),
         inspector: createInspector(config.inspect, this.log),
       });
     this.handleSignals = deps.handleSignals ?? false;
@@ -463,6 +469,36 @@ export class Agent {
   private renewReference(): void {
     if (this.captures.size > 0) this.reference.pause();
     else this.reference.resume();
+  }
+
+  /**
+   * What this instrumentation costs and what it has lost, for the next batch.
+   *
+   * `product.md:239` asks for it by name —«recursos internos medidos»— and the reason it matters is one
+   * distinction: a cloud that sees nothing has to be able to tell «nothing happened» from «this
+   * instrumentation has been throwing batches away» (invariant 14).
+   *
+   * Only what is worth saying: a field that would be zero is left out, because absent means «did not
+   * say» and zero would be a claim (the rule the observers set, ADR 0093).
+   */
+  private ownResources(): AgentResources | undefined {
+    const overhead = this.overhead.state();
+    const out: AgentResources = {};
+    if (this.internalErrors > this.reportedInternalErrors) {
+      out.internalErrors = this.internalErrors - this.reportedInternalErrors;
+      this.reportedInternalErrors = this.internalErrors;
+    }
+    const bytes = this.fine.bytes() + this.coarse.bytes() + this.reference.bytes();
+    if (bytes > 0) out.bufferBytes = bytes;
+    // An estimate, sampled, and sent as one: it is what invariant 3 budgets, and calling it a
+    // measurement would claim a precision the sampling does not have.
+    if (overhead.perRequestMs > 0) out.hookMsPerRequest = overhead.perRequestMs;
+    if (overhead.shed !== Sheddable.Nothing) {
+      out.shed = overhead.shed === Sheddable.Fine ? "fine" : "profile";
+      if (overhead.reason === ThrottleReasons.Latency) out.shedReason = "latency";
+      else if (overhead.reason === ThrottleReasons.Memory) out.shedReason = "memory";
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   /**

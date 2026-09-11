@@ -204,6 +204,7 @@ export interface AgentInfo {
   runtimeVersion: string;
   observers?: Observers;
   withholding?: Withholding;
+  resources?: AgentResources;
 }
 /**
  * Absent from an instrumentation older than protocol 0.7.0. Absent is not 'nothing is observed': it is 'this one did not say', and the two must not be shown alike.
@@ -230,6 +231,43 @@ export interface Withholding {
    * How many dependencies are excluded. Absent means none are.
    */
   dependencies?: number;
+}
+/**
+ * What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «recursos internos medidos».
+ */
+export interface AgentResources {
+  /**
+   * Batches the instrumentation threw away because its queue was full, since the previous batch. This is telemetry that existed and is gone: the number that separates «nothing happened» from «nothing arrived».
+   */
+  droppedBatches?: number;
+  /**
+   * Batches the cloud refused as invalid, since the previous batch. Nothing broke: something was sent wrong.
+   */
+  rejectedBatches?: number;
+  /**
+   * Batches that could not be sent —network, timeout, a cloud that was not there— since the previous batch. Not the same as dropped: these are retried, and only become loss if the queue fills.
+   */
+  failedBatches?: number;
+  /**
+   * Errors inside the instrumentation itself, since the previous batch. It disables itself after enough of them, and a sender that has gone quiet with these climbing is not a quiet service.
+   */
+  internalErrors?: number;
+  /**
+   * What the black box's registers have allocated, right now. An instant, and arithmetic rather than a measurement: the rings are preallocated.
+   */
+  bufferBytes?: number;
+  /**
+   * Estimated milliseconds of the instrumentation's own hooks per request. **An estimate**, sampled, and named as one: it is what invariant 3 budgets, and reporting it as an exact measurement would claim a precision the sampling does not have.
+   */
+  hookMsPerRequest?: number;
+  /**
+   * What the instrumentation has given up because it was costing too much, cheapest loss first. `product.md:241` asks for both halves —«se autolimita» and «lo registra como pérdida de cobertura»— and this is the second. An enum and not free text: it is ours, and it has to be comparable between senders.
+   */
+  shed?: "nothing" | "fine" | "profile";
+  /**
+   * Why it gave ground. Absent when nothing was given up.
+   */
+  shedReason?: "latency" | "memory";
 }
 export interface InstanceInfo {
   /**

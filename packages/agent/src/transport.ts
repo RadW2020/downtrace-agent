@@ -2,6 +2,7 @@ import type { CaptureEvidence } from "@downtrace/protocol";
 import {
   AGGREGATES_PATH,
   type AgentInfo,
+  type AgentResources,
   type AggregatesBatch,
   type CaptureProgress,
   captureEvidencePath,
@@ -31,6 +32,12 @@ export interface SenderOptions {
   now?: (() => number) | undefined;
   /** Writes every batch exactly as it would be sent. Absent means the inspection mode is off (gh-181). */
   inspector?: Inspector | undefined;
+  /**
+   * What the rest of the instrumentation has to say about itself for the next batch: the memory its
+   * registers hold, the time its hooks cost, what it has given up. The sender knows its own queue and
+   * nothing else, and asking is cheaper than being told on every change (gh-243).
+   */
+  resources?: (() => AgentResources | undefined) | undefined;
 }
 
 /**
@@ -143,6 +150,14 @@ export class Sender {
   dropped = 0;
   /** Batches the cloud refused as invalid. Not `failed`: nothing broke, we sent something wrong. */
   rejected = 0;
+  /**
+   * The same three since the **last batch that landed**, which is what travels (gh-243).
+   *
+   * Separate counters rather than a snapshot of the totals: they have to survive a batch that never
+   * arrives —what it was going to say rides the next one— and a counter that dies with its batch lies
+   * downwards, which is the direction that makes a losing instrumentation look healthy.
+   */
+  private since = { dropped: 0, failed: 0, rejected: 0 };
   private warnedRejected = false;
   /** While set, the cloud has asked for time and no request goes out until then. */
   private silentUntil = 0;
@@ -162,6 +177,21 @@ export class Sender {
 
   get pending(): number {
     return this.queue.length;
+  }
+
+  /**
+   * What this sender has to say about itself, for the batch about to go out. Only what is worth saying:
+   * a field that would be zero is left out, because **absent means «did not say»** and zero would be a
+   * claim (the rule the observers set, gh-220).
+   */
+  private resources(): AgentResources | undefined {
+    const out: AgentResources = {};
+    if (this.since.dropped > 0) out.droppedBatches = this.since.dropped;
+    if (this.since.failed > 0) out.failedBatches = this.since.failed;
+    if (this.since.rejected > 0) out.rejectedBatches = this.since.rejected;
+    const extra = this.opts.resources?.();
+    if (extra) Object.assign(out, extra);
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   /**
@@ -199,6 +229,7 @@ export class Sender {
     while (this.profiles.length > this.maxQueued) {
       this.profiles.shift();
       this.dropped += 1;
+      this.since.dropped += 1;
     }
   }
 
@@ -207,6 +238,7 @@ export class Sender {
     while (this.queue.length > this.maxQueued) {
       this.queue.shift();
       this.dropped += 1;
+      this.since.dropped += 1;
     }
   }
 
@@ -291,9 +323,10 @@ export class Sender {
     this.inflight = true;
     const intervals = this.queue.slice(0, this.maxQueued);
     const profile = this.profiles[0];
+    const resources = this.resources();
     const batch: AggregatesBatch = {
       protocol: PROTOCOL_VERSION,
-      agent: this.opts.agent,
+      agent: resources ? { ...this.opts.agent, resources } : this.opts.agent,
       instance: this.opts.instance,
       deploy: this.opts.deploy,
       // 1..maxQueued intervals by construction; the generated type is a union of tuples.
@@ -340,6 +373,9 @@ export class Sender {
         // Asked, so it is not asked again. Only on success, like the rest: a batch that never arrived
         // never asked, and a signal that has passed is one nobody will ever ask about (gh-409).
         this.triggers = [];
+        // Said, so it is not said twice. A counter that repeated itself would read as loss that keeps
+        // happening (gh-243).
+        this.since = { dropped: 0, failed: 0, rejected: 0 };
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants
@@ -354,6 +390,7 @@ export class Sender {
         this.queue = this.queue.filter((iv) => !intervals.includes(iv));
         if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
         this.rejected += 1;
+        this.since.rejected += 1;
         if (!this.warnedRejected) {
           this.warnedRejected = true;
           this.opts.log.warn(
@@ -364,6 +401,7 @@ export class Sender {
         return false;
       }
       this.failed += 1;
+      this.since.failed += 1;
       if (res.status === TOO_MANY_REQUESTS) {
         const wait = retryAfterMs(res.headers.get("retry-after"), this.now());
         if (wait !== undefined) {
@@ -381,6 +419,7 @@ export class Sender {
       return false;
     } catch (err) {
       this.failed += 1;
+      this.since.failed += 1;
       this.opts.log.debug(`send failed: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     } finally {

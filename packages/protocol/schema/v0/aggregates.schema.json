@@ -91,6 +91,10 @@
         "withholding": {
           "$ref": "#/$defs/Withholding",
           "description": "Absent means **this sender did not say**, not that it withholds nothing — the same reading as `observers`, and for the same reason."
+        },
+        "resources": {
+          "$ref": "#/$defs/AgentResources",
+          "description": "What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «recursos internos medidos»."
         }
       }
     },
@@ -631,6 +635,54 @@
           "type": "integer",
           "minimum": 1,
           "description": "How many consecutive intervals it stayed over. More than one is what makes it sustained rather than a spike (`product.md:114`)."
+        }
+      }
+    },
+    "AgentResources": {
+      "title": "AgentResources",
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The instrumentation's own resources. Every field is optional and **absent is not zero**: an older sender says nothing, and a cloud that read that as «nothing was lost» would be inventing the one answer this exists to stop it inventing (invariant 14). The counters are differences since the previous batch, like everything else here; the two that are instants say so.",
+      "properties": {
+        "droppedBatches": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Batches the instrumentation threw away because its queue was full, since the previous batch. This is telemetry that existed and is gone: the number that separates «nothing happened» from «nothing arrived»."
+        },
+        "rejectedBatches": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Batches the cloud refused as invalid, since the previous batch. Nothing broke: something was sent wrong."
+        },
+        "failedBatches": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Batches that could not be sent —network, timeout, a cloud that was not there— since the previous batch. Not the same as dropped: these are retried, and only become loss if the queue fills."
+        },
+        "internalErrors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Errors inside the instrumentation itself, since the previous batch. It disables itself after enough of them, and a sender that has gone quiet with these climbing is not a quiet service."
+        },
+        "bufferBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "What the black box's registers have allocated, right now. An instant, and arithmetic rather than a measurement: the rings are preallocated."
+        },
+        "hookMsPerRequest": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Estimated milliseconds of the instrumentation's own hooks per request. **An estimate**, sampled, and named as one: it is what invariant 3 budgets, and reporting it as an exact measurement would claim a precision the sampling does not have."
+        },
+        "shed": {
+          "type": "string",
+          "enum": ["nothing", "fine", "profile"],
+          "description": "What the instrumentation has given up because it was costing too much, cheapest loss first. `product.md:241` asks for both halves —«se autolimita» and «lo registra como pérdida de cobertura»— and this is the second. An enum and not free text: it is ours, and it has to be comparable between senders."
+        },
+        "shedReason": {
+          "type": "string",
+          "enum": ["latency", "memory"],
+          "description": "Why it gave ground. Absent when nothing was given up."
         }
       }
     }
