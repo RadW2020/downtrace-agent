@@ -46,6 +46,9 @@ export interface PendingCapture {
   environment?: string;
   method?: string;
   route?: string;
+  /** Dependency kind and target, when the capture is about a dependency rather than a route. */
+  kind?: string;
+  target?: string;
 }
 
 /**
@@ -83,6 +86,8 @@ export function capturesIn(body: string): PendingCapture[] {
     if (typeof c.environment === "string") pending.environment = c.environment;
     if (typeof c.method === "string") pending.method = c.method;
     if (typeof c.route === "string") pending.route = c.route;
+    if (typeof c.kind === "string") pending.kind = c.kind;
+    if (typeof c.target === "string") pending.target = c.target;
     out.push(pending);
   }
   return out;

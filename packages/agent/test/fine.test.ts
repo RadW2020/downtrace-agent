@@ -1,8 +1,14 @@
 import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
-import { enterRequest, recordOperationIn } from "../src/context.ts";
-import { DEFAULT_OPERATIONS, DEFAULT_REQUESTS, FINE_MAX_BYTES, FineRegister } from "../src/fine.ts";
+import { dependencyKey, enterRequest, recordOperationIn } from "../src/context.ts";
+import {
+  DEFAULT_DEPENDENCIES_PER_REQUEST,
+  DEFAULT_OPERATIONS,
+  DEFAULT_REQUESTS,
+  FINE_MAX_BYTES,
+  FineRegister,
+} from "../src/fine.ts";
 
 /**
  * The fine half of the black box. What these tests protect is the one thing that makes it worth its cost: the
@@ -118,6 +124,50 @@ describe("the fine register", () => {
     expect(DEFAULT_REQUESTS).toBeGreaterThanOrEqual(1024);
     expect(DEFAULT_OPERATIONS).toBeGreaterThanOrEqual(8192);
     expect(r.bytes()).toBeGreaterThan(512 * 1024);
+  });
+
+  // gh-397. A capture of a dependency has to know which requests touched it, and a fingerprint does not
+  // say: a Redis call or an outgoing HTTP call produces no operation here at all.
+  it("keeps which dependencies each request touched", () => {
+    const r = new FineRegister();
+    const from = r.openRequest();
+    r.request("GET", "/orders", 200, 0, 10, from, 0, [
+      dependencyKey("postgres", "db:5432"),
+      dependencyKey("redis", "cache:6379"),
+    ]);
+    r.request("GET", "/health", 200, 0, 1, r.openRequest(), 0, []);
+
+    const [orders, health] = r.snapshot().requests;
+    expect(orders?.dependencies).toEqual([dependencyKey("postgres", "db:5432"), dependencyKey("redis", "cache:6379")]);
+    expect(orders?.dependenciesTruncated).toBeUndefined();
+    expect(health?.dependencies).toEqual([]);
+  });
+
+  it("says so when a request touched more dependencies than it keeps", () => {
+    // Because the alternative is a request that looks like it never used the ninth one, and a gap read as
+    // a fact is what invariant 14 is about.
+    const r = new FineRegister();
+    const many = Array.from({ length: DEFAULT_DEPENDENCIES_PER_REQUEST + 1 }, (_, i) =>
+      dependencyKey("http", `service-${i}:443`),
+    );
+    r.request("GET", "/orders", 200, 0, 10, r.openRequest(), 0, many);
+
+    const kept = r.snapshot().requests[0];
+    expect(kept?.dependencies).toHaveLength(DEFAULT_DEPENDENCIES_PER_REQUEST);
+    expect(kept?.dependenciesTruncated).toBe(true);
+  });
+
+  it("does not let a lapped dependency ring make a live request look like it touched nothing", () => {
+    // The ring is as big as the requests it serves times what one may keep, so a request that is still
+    // readable always has its labels. Without that, the filter of a dependency capture would silently
+    // drop the oldest requests it should have kept.
+    const r = new FineRegister({ requests: 4, operations: 8 });
+    for (let i = 0; i < 50; i += 1) {
+      r.request("GET", `/r-${i}`, 200, 0, 1, r.openRequest(), 0, [dependencyKey("postgres", `db-${i}:5432`)]);
+    }
+    for (const request of r.snapshot().requests) {
+      expect(request.dependencies).toEqual([dependencyKey("postgres", `db-${request.route.slice(3)}:5432`)]);
+    }
   });
 
   // Invariant 5: what a query was **about** never reaches here. Only what it **is**.

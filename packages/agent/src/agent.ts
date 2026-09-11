@@ -478,6 +478,9 @@ export class Agent {
         ms,
         ctx?.fineFrom ?? this.fine.openRequest(),
         ctx?.fineOps ?? 0,
+        // The keys `work` is already built with: a capture of a dependency has to know which requests
+        // touched it, and the register holds only fingerprints, which do not say (gh-397).
+        ctx?.work?.keys(),
       );
     }
     if (ctx?.operations && this.overhead.keeping(Sheddable.Profile)) {

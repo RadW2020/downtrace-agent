@@ -74,8 +74,14 @@ export interface RequestContext {
 
 const storage = new AsyncLocalStorage<RequestContext>();
 
-/** Key of a dependency within one request: its kind and, for outgoing HTTP, the host. */
-function keyOf(kind: DependencyKind, target: string): string {
+/**
+ * Key of a dependency within one request: its kind and, for outgoing HTTP, the host.
+ *
+ * It is also the label the black box keeps per request and the one a capture of a dependency is matched
+ * against (gh-397). Exported so both sides build it here and not each in its own way — and the strings it
+ * makes are the ones `work` is already keyed by, so keeping them costs no allocation on the hot path.
+ */
+export function dependencyKey(kind: string, target: string): string {
   return target === "" ? kind : `${kind}\0${target}`;
 }
 
@@ -138,7 +144,7 @@ export function recordCallIn(
   if (ctx.excluded?.has(target)) return;
   const named = ctx.named ? ctx.named(target) : target;
   ctx.work ??= new Map();
-  const key = keyOf(kind, named);
+  const key = dependencyKey(kind, named);
   let entry = ctx.work.get(key);
   if (!entry) {
     entry = { kind, target: named, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };
@@ -160,7 +166,7 @@ export function recordWaitIn(ctx: RequestContext, kind: DependencyKind, target: 
   if (ctx.excluded?.has(target)) return;
   const named = ctx.named ? ctx.named(target) : target;
   ctx.work ??= new Map();
-  const key = keyOf(kind, named);
+  const key = dependencyKey(kind, named);
   let entry = ctx.work.get(key);
   if (!entry) {
     entry = { kind, target: named, calls: 0, ms: 0, maxMs: 0, errors: 0, waitMs: 0 };

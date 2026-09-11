@@ -1,3 +1,4 @@
+import { dependencyKey } from "./context.ts";
 import type { FineRequest, FineSnapshot } from "./fine.ts";
 import type { PendingCapture } from "./transport.ts";
 
@@ -18,6 +19,18 @@ import type { PendingCapture } from "./transport.ts";
 /** How many captures may be watched at once. Bounded like everything else the agent holds. */
 export const MAX_LIVE_CAPTURES = 4;
 
+/**
+ * What the order says to watch. A route, a dependency, or neither — and never both, because a capture is
+ * about one thing (`PendingCapture` in the response contract).
+ */
+export interface CaptureFootprint {
+  environment?: string;
+  method?: string;
+  route?: string;
+  kind?: string;
+  target?: string;
+}
+
 export interface LiveCapture {
   id: string;
   /** The effective start of observation: when this process began watching, not when it was accepted. */
@@ -26,6 +39,8 @@ export interface LiveCapture {
   endsAt: number;
   /** Reported to the cloud already, so the next batch does not say it twice. */
   reported: boolean;
+  /** What the cloud asked to watch. What the evidence is filtered by (gh-397). */
+  footprint: CaptureFootprint;
 }
 
 /** What the next batch says about the captures under way. */
@@ -53,11 +68,18 @@ export class Captures {
       if (this.live.size >= MAX_LIVE_CAPTURES) return;
       if (this.live.has(order.id)) continue;
       if (order.expiresAt <= now) continue;
+      const footprint: CaptureFootprint = {};
+      if (order.environment !== undefined) footprint.environment = order.environment;
+      if (order.method !== undefined) footprint.method = order.method;
+      if (order.route !== undefined) footprint.route = order.route;
+      if (order.kind !== undefined) footprint.kind = order.kind;
+      if (order.target !== undefined) footprint.target = order.target;
       this.live.set(order.id, {
         id: order.id,
         startedAt: now,
         endsAt: now + order.windowSeconds * 1000,
         reported: false,
+        footprint,
       });
     }
   }
@@ -114,17 +136,41 @@ export interface CaptureSlice {
 }
 
 export function sliceFor(capture: LiveCapture, snapshot: FineSnapshot): CaptureSlice {
+  const keep = matcher(capture.footprint);
   let observed = 0;
   let attached = 0;
+  let detailLost = 0;
+  let truncated = 0;
+  const requests: FineRequest[] = [];
   for (const r of snapshot.requests) {
+    if (!keep(r)) continue;
+    requests.push(r);
     if (r.startedAt >= capture.startedAt) observed++;
     else attached++;
+    if (r.detailLost) detailLost++;
+    if (r.truncated) truncated++;
   }
-  return {
-    requests: snapshot.requests,
-    observedRequests: observed,
-    attachedRequests: attached,
-    detailLost: snapshot.coverage.detailLost,
-    truncated: snapshot.coverage.truncated,
-  };
+  return { requests, observedRequests: observed, attachedRequests: attached, detailLost, truncated };
+}
+
+/**
+ * What the order asked for, as a question about one request.
+ *
+ * A capture of a route is the common case and matches on the template, and on the method when the order
+ * names one. A capture of a dependency matches on the label the register kept for each request. And an
+ * order that names neither — an environment on its own — is what it has always been: everything.
+ *
+ * A request whose dependency list did not fit **matches anyway**: what the register has is incomplete, and
+ * reading a gap as proof that the dependency was not used is the mistake invariant 14 is about.
+ */
+function matcher(footprint: CaptureFootprint): (r: FineRequest) => boolean {
+  const { method, route, kind, target } = footprint;
+  if (route !== undefined && route !== "") {
+    return (r) => r.route === route && (method === undefined || method === "" || r.method === method);
+  }
+  if ((kind !== undefined && kind !== "") || (target !== undefined && target !== "")) {
+    const label = dependencyKey(kind ?? "", target ?? "");
+    return (r) => r.dependenciesTruncated === true || r.dependencies.includes(label);
+  }
+  return () => true;
 }

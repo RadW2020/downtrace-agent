@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Captures, MAX_LIVE_CAPTURES, sliceFor } from "../src/captures.ts";
+import { Captures, type LiveCapture, MAX_LIVE_CAPTURES, sliceFor } from "../src/captures.ts";
+import { dependencyKey } from "../src/context.ts";
 import type { FineRequest, FineSnapshot } from "../src/fine.ts";
 import type { PendingCapture } from "../src/transport.ts";
 
@@ -74,27 +75,49 @@ describe("Captures", () => {
 });
 
 describe("what one capture saw", () => {
-  const request = (startedAt: number): FineRequest => ({
+  const request = (startedAt: number, over: Partial<FineRequest> = {}): FineRequest => ({
     method: "GET",
     route: "/orders",
     status: 200,
     startedAt,
     durationMs: 5,
     operations: [],
+    dependencies: [],
     truncated: false,
     detailLost: false,
+    ...over,
   });
-  const snapshot = (starts: number[]): FineSnapshot => ({
-    requests: starts.map(request),
-    coverage: { requestCapacity: 10, operationCapacity: 10, requests: starts.length, detailLost: 2, truncated: 1 },
+  const snapshot = (requests: FineRequest[], over: Partial<FineSnapshot["coverage"]> = {}): FineSnapshot => ({
+    requests,
+    coverage: {
+      requestCapacity: 10,
+      operationCapacity: 10,
+      requests: requests.length,
+      detailLost: requests.filter((r) => r.detailLost).length,
+      truncated: requests.filter((r) => r.truncated).length,
+      ...over,
+    },
+  });
+  const live = (over: Partial<LiveCapture> = {}): LiveCapture => ({
+    id: "c",
+    startedAt: 1_000,
+    endsAt: 2_000,
+    reported: true,
+    footprint: {},
+    ...over,
   });
 
   it("counts the two coverages apart, and never their total", () => {
     // `product.md:192`: what was observed from the effective start, and what was attached from detail that
     // was already being kept. One number would hide that half of it is older than the capture.
     const slice = sliceFor(
-      { id: "c", startedAt: 1_000, endsAt: 2_000, reported: true },
-      snapshot([500, 900, 1_000, 1_500]),
+      live(),
+      snapshot([
+        request(500, { detailLost: true }),
+        request(900, { detailLost: true, truncated: true }),
+        request(1_000),
+        request(1_500),
+      ]),
     );
     expect(slice.observedRequests).toBe(2);
     expect(slice.attachedRequests).toBe(2);
@@ -104,9 +127,70 @@ describe("what one capture saw", () => {
 
   it("is an answer even when nothing ran", () => {
     // «Una captura sin requests no prueba recuperación» (CAP-01): empty evidence is a result, silence is not.
-    const slice = sliceFor({ id: "c", startedAt: 1_000, endsAt: 2_000, reported: true }, snapshot([]));
+    const slice = sliceFor(live(), snapshot([]));
     expect(slice.requests).toEqual([]);
     expect(slice.observedRequests).toBe(0);
     expect(slice.attachedRequests).toBe(0);
+  });
+
+  // gh-397. The order says what to watch and this used to hand over the whole register: a capture of one
+  // route arrived carrying the name, the timing and the composition of every other route in the service,
+  // and the two coverages counted all of it.
+  //
+  // covers: ESC-08
+  it("hands over the route it was asked for, and counts only that one", () => {
+    const slice = sliceFor(
+      live({ footprint: { method: "GET", route: "/orders" } }),
+      snapshot([
+        request(900, { route: "/products" }),
+        request(950),
+        request(1_100),
+        request(1_200, { route: "/products" }),
+        request(1_300, { method: "POST" }),
+      ]),
+    );
+    expect(slice.requests.map((r) => `${r.method} ${r.route}`)).toEqual(["GET /orders", "GET /orders"]);
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 1]);
+  });
+
+  it("matches the route alone when the order does not name a method", () => {
+    const slice = sliceFor(
+      live({ footprint: { route: "/orders" } }),
+      snapshot([request(1_100), request(1_200, { method: "POST" }), request(1_300, { route: "/products" })]),
+    );
+    expect(slice.requests).toHaveLength(2);
+  });
+
+  it("hands over the requests that used the dependency it was asked about", () => {
+    const slice = sliceFor(
+      live({ footprint: { kind: "postgres", target: "db:5432" } }),
+      snapshot([
+        request(1_100, { dependencies: [dependencyKey("redis", "cache:6379")] }),
+        request(1_200, { dependencies: [dependencyKey("postgres", "db:5432"), dependencyKey("redis", "cache:6379")] }),
+        request(1_300, { dependencies: [] }),
+      ]),
+    );
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
+  });
+
+  it("keeps a request whose dependency list did not fit, because a gap is not a proof", () => {
+    // Invariant 14 in its smallest form: the register keeps up to eight dependencies per request, and a
+    // request that touched more cannot be shown **not** to have used the ninth.
+    const slice = sliceFor(
+      live({ footprint: { kind: "http", target: "provider:443" } }),
+      snapshot([
+        request(1_100, { dependencies: [dependencyKey("redis", "cache:6379")] }),
+        request(1_200, { dependencies: [dependencyKey("redis", "cache:6379")], dependenciesTruncated: true }),
+      ]),
+    );
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
+  });
+
+  it("hands over everything when the order names neither a route nor a dependency", () => {
+    const slice = sliceFor(
+      live({ footprint: { environment: "production" } }),
+      snapshot([request(1_100), request(1_200, { route: "/products" })]),
+    );
+    expect(slice.requests).toHaveLength(2);
   });
 });
