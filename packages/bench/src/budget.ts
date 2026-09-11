@@ -1,6 +1,11 @@
 /**
- * Executable form of invariant 3 (docs/invariants.md): what the agent may add
- * on top of the same app without it. Enforced by `make bench` in CI.
+ * Executable form of invariant 3 (docs/invariants.md): what the agent may add on top of the same app
+ * without it.
+ *
+ * Checked by running `make bench` on a quiet machine, **not on every change**: the benchmark left the
+ * pipeline when it turned out to be measuring the other CI jobs on the same VM (ADR 0032), and the tests
+ * that assert a rate or a duration left with it (ADR 0114). Until something brings it back, a change that
+ * doubles what the instrumentation costs gets in without anything going red.
  */
 export const BUDGET = {
   /** Added latency at p99, in milliseconds. */
