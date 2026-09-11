@@ -38,7 +38,19 @@ jobs:
         run: |
           set -euo pipefail
           published=0
-          for dir in packages/protocol packages/agent; do
+          # Enumerated from the workspace, never written out here: a hand-written list only publishes what
+          # somebody remembered to put in it, and on 2026-09-11 that was `@downtrace/mcp`, versioned to
+          # 0.1.0 by changesets and published by nobody, with both workflows green (gh-416). `private` is
+          # the same mark pnpm and changesets already read, so the three agree by construction.
+          for dir in $(node -e '
+            const fs = require("node:fs");
+            for (const name of fs.readdirSync("packages")) {
+              const path = `packages/${name}/package.json`;
+              if (!fs.existsSync(path)) continue;
+              if (JSON.parse(fs.readFileSync(path, "utf8")).private) continue;
+              console.log(`packages/${name}`);
+            }
+          '); do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
             if npm view "$name@$version" version >/dev/null 2>&1; then
