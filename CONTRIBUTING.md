@@ -12,7 +12,7 @@ Each commit here carries the subject of the change it brought over, and every pu
 
 `docs/adr/` carries the decision records for the code in this repository: what was decided, which alternatives lost, and what each decision costs. They cover the benchmark methodology and its statistics, how the agent observes the database driver, the protocol and the rule that governs how it may change.
 
-Two things to know before you open them. They are written in Spanish, which is the project's language for documents. And some cite tickets, pull requests or CI runs in the private repository, which you cannot open; the decision and its reasoning are complete without them.
+Three things to know before you open them. They are written in Spanish, which is the project's language for documents. Some cite tickets, pull requests or CI runs in the private repository, which you cannot open; the decision and its reasoning are complete without them. And the code here cites decision records by number — `(ADR 0032)` in a comment — that are **not all published**: a record that also describes the hosted backend, its storage or the machines that run CI stays private, and the number in the comment is then a pointer you cannot follow. That is deliberate, not an oversight. The sentence around it says what was decided; the record says why, and for those ones the why is ours.
 
 Decisions about the hosted backend are not published. Each record declares its own scope, so what you see here is the whole of what is public, not a summary of it.
 
