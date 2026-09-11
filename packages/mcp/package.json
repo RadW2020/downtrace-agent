@@ -1,6 +1,6 @@
 {
   "name": "@downtrace/mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Downtrace over MCP: the queries and operations of the product as tools a coding agent can discover and use. Speaks the public HTTP API, no dependencies.",
   "type": "module",
   "bin": {
