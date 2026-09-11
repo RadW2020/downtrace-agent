@@ -8,41 +8,15 @@ requireInCI("DATABASE_URL", DATABASE_URL);
 const log = (line: string): void => console.info(`[bench] ${line}`);
 
 /**
- * The reference app can fake a cold database: STARTUP_FAILURE_MS of 503s after
- * its first request. These tests drive the warmup gate with real processes.
+ * The reference app can fake a cold database: STARTUP_FAILURE_MS of 503s after its first request. These
+ * tests drive the warmup gate with real processes, and every assertion here is about **what the bench
+ * decides**, never about how long anything took: an app that never gets clean is not a measurement, it is
+ * a refusal, and a refusal reads the same on a quiet machine and on a busy one (gh-412).
+ *
+ * The case that does measure —waiting out a cold start and producing a clean round of a known length—
+ * lives in `bench.cold-start.measure.test.ts`.
  */
 describe.skipIf(!DATABASE_URL)("bench warmup gate (integration)", () => {
-  it("waits out a 4 s cold start and measures a clean round", { timeout: 120_000 }, async () => {
-    const report = await runBench({
-      log,
-      rounds: 1,
-      warmupCleanSec: 3,
-      warmupMaxSec: 30,
-      measureSec: 2,
-      rps: 100,
-      seed: 1,
-      agentPath: DEFAULT_AGENT_PATH,
-      appEnv: { STARTUP_FAILURE_MS: "4000" },
-    });
-    expect(report.rounds).toHaveLength(2);
-    for (const r of report.rounds) {
-      expect(r.warmup.clean, `${r.variant} warmup`).toBe(true);
-      // 4 failing seconds, then 3 clean ones; slices are not perfectly aligned to the wall clock.
-      expect(r.warmup.seconds, `${r.variant} warmup seconds`).toBeGreaterThanOrEqual(6);
-      expect(r.warmup.seconds, `${r.variant} warmup seconds`).toBeLessThanOrEqual(10);
-      expect(r.load.errors, `${r.variant} errors while measuring`).toBe(0);
-      expect(r.firstErrors).toBeUndefined();
-    }
-    // No assertion on the overhead verdict: one round of 2 s is 200 samples per variant, where the p99 rests on two
-    // of them and cannot resolve a 1 ms budget. What this test covers is the gate, so the assertion is that the
-    // bench measured both rounds instead of aborting on warmup.
-    //
-    // That used to be spelled `reason === undefined`, which worked only while nothing else could set one. Since
-    // gh-200 a pair whose two halves saw different neighbours is reported as not comparable, and on a CI machine
-    // with other jobs on it that is the normal answer — and a true one. What must not appear is the abort.
-    expect(report.reason ?? "").not.toContain("could not warm up");
-  });
-
   it("baseline that never gets clean: inconclusive, with what the app said", { timeout: 60_000 }, async () => {
     const report = await runBench({
       log,

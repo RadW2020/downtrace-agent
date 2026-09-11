@@ -47,6 +47,8 @@ La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y 
   espera de conexión con su hora. Si esas dos columnas se mueven entre las dos mitades de un par, ese par no es
   una comparación, y el veredicto lo dirá.
 
+Y **sus propios tests se reparten por la misma línea** (gh-412, ADR 0114). Los que comprueban qué decide el bench —que un agente que no entrega falla con su motivo, que un baseline que nunca se limpia da `inconclusive` con lo que dijo la app— corren en CI con el resto de la integración. Los que comprueban una **medida** —que se alcanza el ritmo pedido con un ±10 %, que un retraso de 200 ms se detecta, que un arranque frío de 4 s produce una ronda de entre 6 y 10 segundos— se llaman `*.measure.test.ts` y los lanza `make bench-measure`, en las mismas condiciones que el benchmark: máquina tranquila y `DATABASE_URL`. En CI fallaban por los vecinos, que es exactamente lo que el ADR 0032 sacó del pipeline.
+
 Y una limitación que conviene saber de antemano: el p99 de la propia aplicación de referencia es de unos 24 ms y
 se mueve varios milisegundos entre rondas, así que la línea de 1 ms del invariante 3 está por debajo de lo que
 este montaje resuelve. La CPU, con 3 puntos de presupuesto, sí es medible.
