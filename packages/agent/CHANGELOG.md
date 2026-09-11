@@ -1,5 +1,13 @@
 # @downtrace/agent
 
+## 0.6.1
+
+### Patch Changes
+
+- d68f87d: Refuse a publish that would ship broken entry points. These packages develop pointing at their sources and rely on `publishConfig` to rewrite `exports` and `bin` to `dist/`; npm does not apply `publishConfig` and pnpm does, so `npm publish` from the package directory ships a manifest naming files the tarball does not carry. That is how `@downtrace/mcp@0.1.0` went out unusable. A `prepublishOnly` guard now refuses that publish and says how to do it, and the tarball check verifies that every entry point a manifest names is inside the tarball.
+- Updated dependencies [d68f87d]
+  - @downtrace/protocol@0.7.1
+
 ## 0.6.0
 
 ### Minor Changes
