@@ -81,6 +81,29 @@ describe("the runs that motivated the rule", () => {
     expect(r.reason).toMatch(/one round dominates the tail \(1\/3/);
   });
 
+  /**
+   * gh-394. The relative bar —half the pooled difference— is set by the worst round, so a round that went
+   * wild raised it above the honest ones and the measured regression stopped being corroborated.
+   *
+   * Run 34531684366: the injected stall is +200 ms on 2 % of requests, and round 1 measured exactly that
+   * (209.76 against a baseline median of 28.1 is 181.66). Round 2 went to 1882.79. Half of the pooled
+   * difference is 770.6, so the honest round did not clear it and a fail became inconclusive.
+   */
+  it("integration run 34531684366: a wild round does not disqualify the honest one", () => {
+    const r = latencyStatus({
+      pooledBaseline: 28.1,
+      pooledAgent: 1569.296,
+      splitHalfNoise: 6.699,
+      baselineRounds: [31.18, 25.02],
+      agentRounds: [209.76, 1882.79],
+      budget: 1,
+    });
+    expect(r.delta).toBeCloseTo(1541.196, 2);
+    // Both rounds are three orders of magnitude over the budget: both corroborate.
+    expect(r.corroborating).toBe(2);
+    expect(r.status).toBe("fail");
+  });
+
   it("a tail regression in every round is still a fail", () => {
     const r = latencyStatus({
       pooledBaseline: 20,

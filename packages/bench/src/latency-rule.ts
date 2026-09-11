@@ -38,8 +38,9 @@ export interface LatencyRuleResult {
  * - **Noise** is the larger of the split-half estimate and the spread of the baseline's per-round p99s. The first
  *   measures sampling variation inside the pool; the second measures the runner drifting between rounds, which
  *   alternating rounds only cancel in part. Estimating only the first claims a precision the machine does not have.
- * - **Corroboration**: a fail also requires most agent rounds to show the difference. One round stalling for 200 ms
- *   queues enough requests to drag a pooled p99 on its own; a real regression shows up in round after round.
+ * - **Corroboration**: a fail also requires most agent rounds to show the difference **on their own** — each one
+ *   over the budget by more than the noise. One round stalling for 200 ms queues enough requests to drag a pooled
+ *   p99 by itself; a real regression shows up in round after round.
  */
 export function latencyStatus(input: LatencyRuleInput): LatencyRuleResult {
   const delta = input.pooledAgent - input.pooledBaseline;
@@ -51,9 +52,13 @@ export function latencyStatus(input: LatencyRuleInput): LatencyRuleResult {
   const baselineTypical = input.baselineRounds.length > 0 ? median(input.baselineRounds) : input.pooledBaseline;
   const roundDeltas = input.agentRounds.map((p99) => p99 - baselineTypical);
   const rounds = roundDeltas.length;
-  // Half the pooled difference: a round that carries less than that is not what the pooled number is made of.
-  const threshold = delta / 2;
-  const corroborating = roundDeltas.filter((d) => d >= threshold).length;
+  // The same bar the pooled difference has to clear, applied to each round: a round corroborates when it
+  // sees the regression on its own.
+  //
+  // It used to be half the pooled difference, and that bar is set by the **worst** round: one round going
+  // wild raised it above the honest ones and turned a measured fail into `inconclusive` (gh-394, ADR 0111).
+  const threshold = input.budget + noise;
+  const corroborating = roundDeltas.filter((d) => d > threshold).length;
   const majority = Math.floor(rounds / 2) + 1;
 
   const base = { delta, noise, noiseSource, roundDeltas, corroborating, rounds } as const;
