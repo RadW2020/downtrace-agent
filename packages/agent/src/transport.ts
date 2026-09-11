@@ -8,6 +8,7 @@ import {
   type DeployInfo,
   type InstanceInfo,
   type Interval,
+  type LocalTrigger,
   PROTOCOL_VERSION,
   type Profile,
 } from "@downtrace/protocol";
@@ -98,6 +99,8 @@ export const DEFAULT_MAX_QUEUED = 6;
 const MAX_CAPTURE_REPORTS = 16;
 /** As many signatures as the protocol accepts in one batch. */
 const MAX_EXCEPTIONS = 32;
+/** As many local asks as the protocol accepts, which is one per signal there is. */
+const MAX_TRIGGERS = 4;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 /**
@@ -131,6 +134,8 @@ export class Sender {
   private captureReports: CaptureProgress[] = [];
   /** What the process threw outside any request, waiting for a batch to carry it (ADR 0103). */
   private exceptions: CountedException[] = [];
+  /** What a local signal is asking for. Accumulates until a batch carries them (gh-409). */
+  private triggers: LocalTrigger[] = [];
   private inflight = false;
   private warnedAuth = false;
   sent = 0;
@@ -169,6 +174,18 @@ export class Sender {
       const seen = this.exceptions.find((x) => x.kind === e.kind && x.hash === e.hash);
       if (seen) seen.count += e.count;
       else if (this.exceptions.length < MAX_EXCEPTIONS) this.exceptions.push(e);
+    }
+  }
+
+  /**
+   * Queues what a local signal is asking for. Accumulates like the exceptions and not like the capture
+   * reports: a batch that does not land must not lose the ask, because the signal that made it may have
+   * passed by the time the next one goes out (gh-409).
+   */
+  enqueueTriggers(asks: LocalTrigger[]): void {
+    for (const ask of asks) {
+      if (this.triggers.some((t) => t.signal === ask.signal)) continue;
+      if (this.triggers.length < MAX_TRIGGERS) this.triggers.push(ask);
     }
   }
 
@@ -254,7 +271,11 @@ export class Sender {
    */
   private hasSomethingToSay(): boolean {
     return (
-      this.queue.length > 0 || this.profiles.length > 0 || this.captureReports.length > 0 || this.exceptions.length > 0
+      this.queue.length > 0 ||
+      this.profiles.length > 0 ||
+      this.captureReports.length > 0 ||
+      this.exceptions.length > 0 ||
+      this.triggers.length > 0
     );
   }
 
@@ -285,6 +306,8 @@ export class Sender {
       ...(this.captureReports.length > 0
         ? { captures: this.captureReports as NonNullable<AggregatesBatch["captures"]> }
         : {}),
+      // 1..4 by construction, like the rest.
+      ...(this.triggers.length > 0 ? { triggers: this.triggers as NonNullable<AggregatesBatch["triggers"]> } : {}),
     };
     const reported = this.captureReports.map((c) => c.id);
     const body = JSON.stringify(batch);
@@ -314,6 +337,9 @@ export class Sender {
         // heard, and the capture would look accepted-but-never-started for as long as that lasted.
         this.captureReports = [];
         this.exceptions = [];
+        // Asked, so it is not asked again. Only on success, like the rest: a batch that never arrived
+        // never asked, and a signal that has passed is one nobody will ever ask about (gh-409).
+        this.triggers = [];
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants

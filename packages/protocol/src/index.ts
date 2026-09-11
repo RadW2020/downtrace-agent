@@ -32,6 +32,7 @@ export type {
   InstanceInfo,
   Interval,
   LatencyHistogram,
+  LocalTrigger,
   ObserverState,
   Observers,
   Operation,

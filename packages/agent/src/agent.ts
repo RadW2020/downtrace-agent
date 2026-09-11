@@ -31,6 +31,7 @@ import { ReferenceRegister } from "./reference.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
+import { LocalTriggers } from "./trigger.ts";
 import { AGENT_VERSION } from "./version.ts";
 
 const REQUEST_START = "http.server.request.start";
@@ -60,6 +61,8 @@ export interface AgentDeps {
   fine?: FineRegister;
   /** The reference samples, so a test can make them small or make their selection deterministic. */
   reference?: ReferenceRegister;
+  /** The process's own health, so a test can drive the signal that asks for a capture. */
+  runtime?: RuntimeSampler;
   /** The overhead meter, so a test can sample every call and drive its clock. */
   overhead?: OverheadMeter;
   recorder?: Recorder | undefined;
@@ -116,11 +119,13 @@ export class Agent {
   private readonly fine: FineRegister;
   /** A few requests per endpoint, kept as something for a capture to compare against (gh-307). */
   private readonly reference: ReferenceRegister;
+  /** The local signals that ask for a capture when the process is in trouble (gh-409). */
+  private readonly triggers = new LocalTriggers();
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
   private readonly starts = new WeakMap<object, number>();
   private readonly contexts = new WeakMap<object, RequestContext>();
-  private readonly runtime = new RuntimeSampler();
+  private readonly runtime: RuntimeSampler;
   /** What the instrumentation costs, measured while it runs, and what it gives up when it costs too much. */
   private readonly overhead: OverheadMeter;
   /** All three exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
@@ -204,6 +209,7 @@ export class Agent {
     this.coarse = deps.coarse ?? new CoarseRegister();
     this.fine = deps.fine ?? new FineRegister();
     this.reference = deps.reference ?? new ReferenceRegister();
+    this.runtime = deps.runtime ?? new RuntimeSampler();
     this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
@@ -362,6 +368,11 @@ export class Agent {
         // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
         const runtime = this.runtime.rotate();
         this.sender.enqueue(runtime ? { ...interval, runtime } : interval);
+        // The same reading the batch carries, read once more by the side that can act on it. A process
+        // whose event loop is running late knows it long before any aggregate crosses the network, and by
+        // the time the cloud could notice, the detail that would explain it is overwritten (gh-409).
+        const ask = this.triggers.interval(runtime, Date.now());
+        if (ask) this.sender.enqueueTriggers([ask]);
       }
       const sent = await this.sender.flush(timeoutMs);
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).

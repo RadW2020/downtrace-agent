@@ -185,6 +185,17 @@ export interface AggregatesBatch {
    * @maxItems 32
    */
   exceptions?: ProcessException[];
+  /**
+   * Local signals that ask for a capture. `product.md:124` gives the instrumentation «disparar por señales locales»: it sees a process in trouble before any aggregate crosses the cloud, and asking in the batch costs no channel of its own — the answer already carries the orders (ADR 0071). Absent from every sender that predates it and from every batch with nothing to ask. The cloud decides: the same budget, cooldown and concurrency as any other capture (`product.md:122`), and a refusal is silence, because there is nothing the instrumentation would do differently.
+   *
+   * @maxItems 4
+   */
+  triggers?:
+    | []
+    | [LocalTrigger]
+    | [LocalTrigger, LocalTrigger]
+    | [LocalTrigger, LocalTrigger, LocalTrigger]
+    | [LocalTrigger, LocalTrigger, LocalTrigger, LocalTrigger];
 }
 export interface AgentInfo {
   name: string;
@@ -533,4 +544,29 @@ export interface ProcessException {
    * How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many.
    */
   count: number;
+}
+/**
+ * One local signal, sustained past its threshold. It asks for detail; it does not claim a cause (invariant 7).
+ */
+export interface LocalTrigger {
+  /**
+   * Which signal fired. An enum and not free text: the cloud files findings by footprint, and a trigger type nobody can compare is a footprint that never matches. `product.md:114` names the absolute-threshold signals; this is the first of them.
+   */
+  signal: "event-loop-delay";
+  /**
+   * Unix milliseconds when the signal was last seen over its threshold. Milliseconds and not a date string because that is how this contract writes an instant —an interval's `start`, a capture's `startedAt`— and the evidence, which writes dates, is a different payload with different readers.
+   */
+  observedAt: number;
+  /**
+   * What was measured: the p99 of the event loop delay over the interval that fired.
+   */
+  valueMs?: number;
+  /**
+   * The threshold it passed, sent with the value because a number without its threshold cannot be read by anyone who does not have this version of the instrumentation in front of them.
+   */
+  thresholdMs?: number;
+  /**
+   * How many consecutive intervals it stayed over. More than one is what makes it sustained rather than a spike (`product.md:114`).
+   */
+  intervals?: number;
 }

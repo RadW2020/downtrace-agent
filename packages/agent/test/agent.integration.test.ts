@@ -17,6 +17,7 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
+import { RuntimeSampler } from "../src/runtime.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
@@ -376,6 +377,46 @@ describe("agent v0 (integration)", () => {
     // to 1970 and makes every comparison between instances nonsense (gh-399).
     const dated = Date.parse(body.requests[0]?.startedAt ?? "");
     expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
+  });
+
+  // gh-409. The other direction of the control channel. `product.md:124` gives the instrumentation
+  // «disparar por señales locales»: a process whose event loop is running late knows it long before any
+  // aggregate crosses the network, and by then the detail that would explain it has been overwritten.
+  it("asks for a capture when a local signal stays over its threshold", async () => {
+    const batches: AggregatesBatch[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) batches.push(JSON.parse(String(init?.body)) as AggregatesBatch);
+      return new Response(JSON.stringify({ accepted: 1, inserted: 1 }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    // A runtime whose event loop is a third of a second late, interval after interval.
+    const stalling = new RuntimeSampler();
+    stalling.rotate = () => ({ eventLoopDelayMs: { p50: 2, p99: 330, max: 400 }, inFlightMax: 3 });
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl, runtime: stalling });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    // One request per flush, because an interval with no traffic carries no runtime health at all.
+    for (let i = 0; i < 3; i += 1) {
+      const request = { method: "GET", url: "/products" };
+      channel("http.server.request.start").publish({ request });
+      channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+      expect(await agent.flushNow()).toBe(true);
+    }
+
+    const asked = batches.filter((b) => b.triggers !== undefined);
+    // Not on the first interval: one bad interval is what a spike looks like, and the threshold is for a
+    // signal that stays (`product.md:114`).
+    expect(batches[0]?.triggers).toBeUndefined();
+    expect(asked, "the signal never asked for anything").not.toHaveLength(0);
+    const trigger = asked[0]?.triggers?.[0];
+    expect(trigger?.signal).toBe("event-loop-delay");
+    expect(trigger?.valueMs).toBe(330);
+    // The threshold travels with the value, or the number cannot be read by anyone who does not have this
+    // version of the instrumentation in front of them.
+    expect(trigger?.thresholdMs).toBeGreaterThan(0);
+    // And it asks once, not on every interval while the signal lasts.
+    expect(asked).toHaveLength(1);
   });
 
   // gh-307. A capture used to arrive with the detail of what went wrong and nothing to compare it
