@@ -394,6 +394,11 @@ export class Agent {
           startedAt: new Date(r.startedAt).toISOString(),
           durationMs: r.durationMs,
           operations: r.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
+          // On the request and not only in the totals, because an empty list without a mark reads as a
+          // request that ran nothing (invariant 14). Omitted when false: the contract says absent means
+          // false, and sending it on every request would pay for the normal case to say nothing (gh-396).
+          ...(r.detailLost ? { detailLost: true } : {}),
+          ...(r.truncated ? { truncated: true } : {}),
         })),
       });
     }

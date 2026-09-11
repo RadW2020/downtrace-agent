@@ -15,6 +15,7 @@ import { Agent, createAgent } from "../src/agent.ts";
 import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
 import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
+import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -375,6 +376,81 @@ describe("agent v0 (integration)", () => {
     // to 1970 and makes every comparison between instances nonsense (gh-399).
     const dated = Date.parse(body.requests[0]?.startedAt ?? "");
     expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
+  });
+
+  // gh-396. The register knows, request by request, whether its detail was overwritten, and the contract
+  // has a field for it on the request and not only in the totals. Nothing filled it: a request whose
+  // operations were gone arrived with an empty list and no mark, which reads as one that ran nothing.
+  it("says which request lost its detail, and not only how many did", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: unknown[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [{ id: "cap-3", windowSeconds: 0.05, expiresAt: new Date(Date.now() + 60_000).toISOString() }];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push(JSON.parse(String(init?.body)));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    // Two operations of room, so the second request's queries overwrite the first's.
+    const fine = new FineRegister({ requests: 8, operations: 2 });
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
+      log: quiet,
+      fetchImpl,
+      fine,
+    });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    for (const [n, url] of [
+      [1, "/first"],
+      [2, "/second"],
+    ] as const) {
+      const request = { method: "GET", url };
+      channel(REQUEST_START).publish({ request });
+      const ctx = currentContext();
+      if (ctx) {
+        for (let i = 0; i < 2; i += 1) {
+          // Relative to the request that owns them, which is what the register stores and the contract
+          // requires: an operation that started before its request would be rejected by the schema.
+          recordOperationIn(ctx, {
+            kind: "query",
+            fingerprint: { hash: `h${n}${i}`, text: "SELECT 1" },
+            startedAt: ctx.startedAt + i,
+            endedAt: ctx.startedAt + i + 1,
+          });
+        }
+      }
+      channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    }
+    expect(await agent.flushNow()).toBe(true);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0] as {
+      coverage: { detailLost: number; truncated: number };
+      requests: { route: string; operations: unknown[]; detailLost?: boolean; truncated?: boolean }[];
+    };
+    expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    const first = body.requests.find((r) => r.route === "/first");
+    const second = body.requests.find((r) => r.route === "/second");
+    // The first one's operations were overwritten: no list, and it says so instead of passing for a
+    // request that ran nothing (invariant 14).
+    expect(first?.operations).toEqual([]);
+    expect(first?.detailLost).toBe(true);
+    // The second kept its own.
+    expect(second?.operations).toHaveLength(2);
+    expect(second?.detailLost).toBeUndefined();
+    // And the marks add up to the totals, which are counted over the same requests.
+    expect(body.requests.filter((r) => r.detailLost).length).toBe(body.coverage.detailLost);
+    expect(body.requests.filter((r) => r.truncated).length).toBe(body.coverage.truncated);
   });
 
   // gh-399. Same journey, the other half of the clock: a request that runs **while** the window is open is
