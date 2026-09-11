@@ -20,7 +20,7 @@ Decisions about the hosted backend are not published. Each record declares its o
 
 - **Issues**: bugs, questions, unexpected overhead, a framework or driver that is not observed. These are read and answered here.
 - **Patches**: open an issue with the diff or a link to your branch. If it is right, it is applied upstream with attribution in the commit.
-- **Benchmarks that contradict ours**: the agent claims less than 1 ms added at p99, under 3 percentage points of CPU and under 64 MiB. `packages/bench` is how we measure it, and it runs in CI on every change. If you measure something else, that is a bug report we want.
+- **Benchmarks that contradict ours**: the agent claims less than 1 ms added at p99, under 3 percentage points of CPU and under 64 MiB. `packages/bench` is how we measure it. It is **not** run on every change: it is launched by hand on a quiet machine, because on a CI runner it measures the neighbours instead of the agent. Its README says how to run it and what makes a run worth trusting. If you measure something else, that is a bug report we want.
 
 ## Running the tests
 

@@ -14,7 +14,8 @@ This repository is a **read-only mirror** of the public packages of Downtrace, s
 | [`packages/agent`](packages/agent) | `@downtrace/agent` — the Node.js agent (`node --import @downtrace/agent/register`) |
 | [`packages/protocol`](packages/protocol) | `@downtrace/protocol` — the ingestion contract: JSON Schema, fixtures, generated types |
 | [`packages/reference-app`](packages/reference-app) | A reference backend with switchable regressions (N+1, slow dependency, aggressive retries, pool leak, new error) used as benchmark target and test bed |
-| [`packages/bench`](packages/bench) | The agent overhead benchmark: the agent must add < 1 ms at p99, < 3 pp of CPU and < 64 MiB, measured against the reference app on every change |
+| [`packages/mcp`](packages/mcp) | `@downtrace/mcp` — the same queries and operations as tools a coding agent can discover and use, over MCP |
+| [`packages/bench`](packages/bench) | The agent overhead benchmark: the agent must add < 1 ms at p99, < 3 pp of CPU and < 64 MiB, measured against the reference app. [Its README](packages/bench#readme) says how it is run and when its number is worth anything |
 
 ```sh
 pnpm install
