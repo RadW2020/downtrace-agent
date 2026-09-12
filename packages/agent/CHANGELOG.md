@@ -1,5 +1,13 @@
 # @downtrace/agent
 
+## 0.7.0
+
+### Minor Changes
+
+- 2257464: The instrumentation now sends `poolWaitMs` with every captured request: how long it waited for a connection from a pool before it could talk to the dependency at all. It already measured this per request and threw it away when the request ended, so a pool-saturation finding could say something was wrong and never how many requests it reached.
+  
+  Absent means the request asked no pool, which is not a wait of zero: zero is a request that asked and was served at once. Needs `@downtrace/protocol` 0.8.0, which the cloud has been reading since it shipped.
+
 ## 0.6.2
 
 ### Patch Changes
