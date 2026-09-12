@@ -27,6 +27,7 @@ import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel, ThrottleReasons } from "./overhead.ts";
+import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
@@ -120,6 +121,8 @@ export class Agent {
   private readonly fine: FineRegister;
   /** A few requests per endpoint, kept as something for a capture to compare against (gh-307). */
   private readonly reference: ReferenceRegister;
+  /** Empty unless a route is armed, which nothing does yet (gh-476). */
+  private readonly prearm: PrearmRegister;
   /** The local signals that ask for a capture when the process is in trouble (gh-409). */
   private readonly triggers = new LocalTriggers();
   /** How many internal errors have already been reported, so each is counted once (gh-243). */
@@ -212,6 +215,7 @@ export class Agent {
     this.coarse = deps.coarse ?? new CoarseRegister();
     this.fine = deps.fine ?? new FineRegister();
     this.reference = deps.reference ?? new ReferenceRegister();
+    this.prearm = new PrearmRegister();
     this.runtime = deps.runtime ?? new RuntimeSampler();
     this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
@@ -605,6 +609,19 @@ export class Agent {
         // wait of zero.
         poolWaitOf(ctx?.work),
       );
+      // And into the armed route's own reserve, if this route is one. Costs nothing for every other request:
+      // `observe` looks up the arm and returns. Nothing arms yet — that is gh-476 — so today this is always
+      // the lookup and no write (ADR 0122).
+      this.prearm.shed(!this.overhead.keeping(Sheddable.Fine));
+      this.prearm.observe({
+        method,
+        route: this.nameOf(route),
+        status: response?.statusCode ?? 0,
+        startedAt: startedWall,
+        durationMs: ms,
+        operations: [],
+        dependencies: [],
+      });
       // And the same request is offered to the reference samples. The operations are read back from the
       // ring **only if it takes it**, which after the first few is one request in `seen` (gh-307).
       this.reference.consider(method, route, response?.statusCode ?? 0, startedWall, ms, () =>

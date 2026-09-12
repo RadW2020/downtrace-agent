@@ -194,3 +194,51 @@ describe("what one capture saw", () => {
     expect(slice.requests).toHaveLength(2);
   });
 });
+
+// Where the reserve and the shared ring meet. From the instant a route was armed, its detail comes from the
+// reserve — the ring may have lost those requests to other routes' traffic and the reserve cannot (ADR 0122).
+// Before that instant there is only the ring, as always. No request appears twice.
+describe("evidence of an armed route", () => {
+  const capture: LiveCapture = {
+    id: "cap-1",
+    footprint: { environment: "production", method: "GET", route: "/cart" },
+    startedAt: 1_000,
+    endsAt: 9_000,
+    reported: false,
+  };
+  const fine = (startedAt: number): FineRequest => ({
+    method: "GET",
+    route: "/cart",
+    status: 200,
+    startedAt,
+    durationMs: 10,
+    operations: [],
+    dependencies: [],
+    truncated: false,
+    detailLost: false,
+  });
+
+  it("takes the armed window from the reserve and what came before from the ring", () => {
+    const snapshot = {
+      requests: [fine(900), fine(1_100), fine(1_200)],
+      coverage: { requestCapacity: 10, operationCapacity: 10, requests: 3, detailLost: 0, truncated: 0 },
+    } as unknown as FineSnapshot;
+
+    const slice = sliceFor(capture, snapshot, (r) => r, {
+      armedAt: 1_050,
+      // What the reserve kept: the same two the ring happens to still have, plus one it had already lost.
+      requests: [fine(1_100), fine(1_200), fine(1_300)],
+    });
+
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([900, 1_100, 1_200, 1_300]);
+  });
+
+  it("uses only the ring when no route is armed", () => {
+    const snapshot = {
+      requests: [fine(900), fine(1_100)],
+      coverage: { requestCapacity: 10, operationCapacity: 10, requests: 2, detailLost: 0, truncated: 0 },
+    } as unknown as FineSnapshot;
+
+    expect(sliceFor(capture, snapshot, (r) => r).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
+  });
+});

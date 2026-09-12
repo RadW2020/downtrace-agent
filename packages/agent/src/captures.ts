@@ -127,6 +127,15 @@ export class Captures {
  * start, and what was attached from detail that was already being kept. A single number would hide that half
  * of it is older than the capture.
  */
+/**
+ * What an armed route kept for itself, if this capture is about one. `armedAt` is when its arm began, which is
+ * the instant from which the reserve —and not the shared ring— is what this route's detail comes from.
+ */
+export interface PrearmReserve {
+  armedAt: number;
+  requests: FineRequest[];
+}
+
 export interface CaptureSlice {
   requests: FineRequest[];
   observedRequests: number;
@@ -144,21 +153,37 @@ export function sliceFor(
   capture: LiveCapture,
   snapshot: FineSnapshot,
   nameOf: (route: string) => string = (route) => route,
+  prearm?: PrearmReserve,
 ): CaptureSlice {
   const keep = matcher(capture.footprint, nameOf);
+  // Where the two registers meet. A route armed before this capture kept its own requests from `armedAt` on,
+  // and those are the authority for that window: the global ring may have lost them to other routes' traffic,
+  // and the reserve cannot (ADR 0122). Before `armedAt` there is only the ring, as always. A boundary in time
+  // rather than a comparison of fields: nothing has to guess whether two rows are the same request.
+  const armedAt = prearm?.armedAt ?? Number.POSITIVE_INFINITY;
   let observed = 0;
   let attached = 0;
   let detailLost = 0;
   let truncated = 0;
   const requests: FineRequest[] = [];
-  for (const r of snapshot.requests) {
-    if (!keep(r)) continue;
-    requests.push(r);
+  const count = (r: FineRequest) => {
     if (r.startedAt >= capture.startedAt) observed++;
     else attached++;
     if (r.detailLost) detailLost++;
     if (r.truncated) truncated++;
+  };
+  for (const r of snapshot.requests) {
+    if (!keep(r)) continue;
+    if (r.startedAt >= armedAt) continue;
+    requests.push(r);
+    count(r);
   }
+  for (const r of prearm?.requests ?? []) {
+    if (!keep(r)) continue;
+    requests.push(r);
+    count(r);
+  }
+  requests.sort((a, b) => a.startedAt - b.startedAt);
   return { requests, observedRequests: observed, attachedRequests: attached, detailLost, truncated };
 }
 
