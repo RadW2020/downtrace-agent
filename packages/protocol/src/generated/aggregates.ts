@@ -12,7 +12,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;

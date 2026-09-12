@@ -7,7 +7,7 @@ export interface CaptureEvidence {
   /**
    * Protocol version this payload conforms to. Same enum as a batch: every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0";
   /**
    * Which process observed this. Several instances of one deployment get the same order on purpose (ADR 0071), so the cloud has to be able to tell two answers apart.
    */
@@ -66,6 +66,10 @@ export interface CapturedRequest {
    */
   startedAt: string;
   durationMs: number;
+  /**
+   * How long this request waited for a connection from a pool before it could talk to the dependency at all. **Absent means this request asked no pool**, which is not a wait of zero: zero is a request that asked and was served at once. The pool-saturation trigger compares wait per request, so a route that never queues must not read as one that queues for nothing (invariant 14).
+   */
+  poolWaitMs?: number;
   /**
    * What it ran, in the order it started them. Empty means it ran nothing — unless `detailLost` says the list was overwritten, which is why that flag is on the request and not only in the totals.
    *

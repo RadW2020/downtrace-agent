@@ -11,7 +11,7 @@
     "protocol": {
       "type": "string",
       "description": "Protocol version this payload conforms to. Same enum as a batch: every published minor of v0 stays acceptable.",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0"]
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0"]
     },
     "instance": {
       "type": "object",
@@ -117,6 +117,11 @@
         "durationMs": {
           "type": "number",
           "minimum": 0
+        },
+        "poolWaitMs": {
+          "type": "number",
+          "minimum": 0,
+          "description": "How long this request waited for a connection from a pool before it could talk to the dependency at all. **Absent means this request asked no pool**, which is not a wait of zero: zero is a request that asked and was served at once. The pool-saturation trigger compares wait per request, so a route that never queues must not read as one that queues for nothing (invariant 14)."
         },
         "operations": {
           "type": "array",

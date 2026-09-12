@@ -75,6 +75,10 @@ describe("the ingest response schema", () => {
     // The response is only a contract from 0.7.0 on. A cloud speaking an earlier minor answered the same two
     // fields, which is why they are the required ones.
     expect(ACCEPTED_PROTOCOL_VERSIONS_V0).toContain("0.7.0");
-    expect(PROTOCOL_VERSION).toBe("0.7.0");
+    // And the newest published minor is the last of the list, which is what makes `PROTOCOL_VERSION` the one
+    // an up-to-date sender stamps. This used to pin the literal "0.7.0", which is a different claim — the
+    // version that introduced the response is not the version we are on — and it broke on the first bump
+    // after it (gh-467).
+    expect(PROTOCOL_VERSION).toBe(ACCEPTED_PROTOCOL_VERSIONS_V0.at(-1));
   });
 });
