@@ -1,5 +1,16 @@
 # @downtrace/agent
 
+## 0.8.0
+
+### Minor Changes
+
+- bef32b8: A route whose requests keep queueing for a database connection now arms itself: its fine detail stops being evictable by every other route's traffic for the next couple of minutes. Fifty milliseconds of pool wait per request, sustained across two intervals, over at least twenty requests.
+  
+  It asks the cloud for nothing — arming is silent and costs a few kilobytes — and it is read from the interval the agent already builds, so it costs nothing per request. Pool wait is the one saturation signal measured per request, so it is the one that can name the route that is suffering rather than the busiest one.
+- 2dbcdcd: A route can now be armed so that its fine detail survives other routes' traffic. The fine register is one ring shared by every route, so under load the detail of the route you care about disappears under everything else; an armed route gets slots of its own that nothing else can take.
+  
+  Nothing arms a route yet — the local signal that does is still to come — so in practice this holds nothing and costs a lookup per request. Preallocated and bounded, it respects the instrumentation's own budget: when the agent is already shedding fine detail, the reserve stops writing too.
+
 ## 0.7.0
 
 ### Minor Changes
