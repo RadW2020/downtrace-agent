@@ -17,8 +17,26 @@
 
 import type { LocalTrigger, RuntimeHealth } from "@downtrace/protocol";
 
-/** The signal this fires on. One for now; the other two of `product.md:114` are their own tickets. */
+/** The signal this asks for a capture on. Dependency timeouts, the third of `product.md:114`, is its own ticket. */
 export const EVENT_LOOP_DELAY = "event-loop-delay";
+
+/**
+ * How long a route's requests may spend, on average, waiting for a connection before the route is armed.
+ *
+ * A healthy pool hands one over at once, so fifty milliseconds per request means they are queueing for real.
+ * Conservative on purpose, like the event loop's quarter of a second: arming costs memory that other routes
+ * could have used, and a threshold that fires on a busy minute would spend it on nothing.
+ */
+export const POOL_WAIT_MS_PER_REQUEST = 50;
+
+/**
+ * Requests an endpoint needs in the interval before its average means anything. One request that queued for
+ * four seconds on a quiet route is one request, not a route in trouble — and the average would not say so.
+ */
+export const MIN_REQUESTS_TO_ARM = 20;
+
+/** How long an arm lasts. Long enough to hold the start of an incident, short enough to bound four of them. */
+export const ARM_FOR_MS = 2 * 60_000;
 
 /**
  * How late the event loop has to run, at the p99 of an interval, to count.
@@ -40,19 +58,79 @@ export interface TriggerOptions {
   thresholdMs?: number;
   sustainedIntervals?: number;
   cooldownMs?: number;
+  poolWaitMsPerRequest?: number;
+  minRequestsToArm?: number;
+}
+
+/** What the aggregator's interval says about one endpoint, of which this reads two things. */
+interface IntervalEndpoint {
+  method: string;
+  route: string;
+  count: number;
+  dependencies?: { waitMs?: number }[];
+}
+
+interface IntervalLike {
+  endpoints: IntervalEndpoint[];
 }
 
 export class LocalTriggers {
   private readonly thresholdMs: number;
   private readonly sustained: number;
   private readonly cooldownMs: number;
+  private readonly poolWaitPerRequest: number;
+  private readonly minRequests: number;
   private over = 0;
   private askedAt: number | undefined;
+  /** How many intervals in a row each route has been over its threshold. Cleared when one comes back clean. */
+  private readonly queueing = new Map<string, number>();
 
   constructor(options: TriggerOptions = {}) {
     this.thresholdMs = options.thresholdMs ?? THRESHOLD_MS;
     this.sustained = options.sustainedIntervals ?? SUSTAINED_INTERVALS;
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
+    this.poolWaitPerRequest = options.poolWaitMsPerRequest ?? POOL_WAIT_MS_PER_REQUEST;
+    this.minRequests = options.minRequestsToArm ?? MIN_REQUESTS_TO_ARM;
+  }
+
+  /**
+   * The routes whose requests keep queueing for a connection, which are the ones worth arming.
+   *
+   * Read from the interval the aggregator already built — each endpoint carries its request count and its
+   * dependencies, and each dependency the wait it accumulated — so this costs nothing on the hot path: it
+   * looks once per interval at a structure that exists either way.
+   *
+   * Only pool wait. It is the one signal of `product.md:114` measured per request and therefore already
+   * attributed to the route that caused it; the event loop and requests in flight belong to the process, and
+   * naming the busiest route would attribute a problem nobody measured (ATR-01, ADR 0112, ADR 0122).
+   *
+   * Arming is silent: this returns labels to arm and asks the cloud for nothing.
+   */
+  endpoints(interval: IntervalLike, _now: number): string[] {
+    const armed: string[] = [];
+    const seen = new Set<string>();
+    for (const e of interval.endpoints) {
+      const label = `${e.method} ${e.route}`;
+      seen.add(label);
+      // Absent is not zero, but here both answers arrive at the same place and only one of them is a rule:
+      // a route whose dependencies report no wait has nothing measured to arm on, and a route that waited
+      // nothing has nothing to arm on either. An earlier version carried a flag to tell them apart and it
+      // changed no outcome, so it is gone rather than left looking like it protects something.
+      let wait = 0;
+      for (const d of e.dependencies ?? []) wait += d.waitMs ?? 0;
+      if (e.count < this.minRequests || wait / e.count <= this.poolWaitPerRequest) {
+        // A good interval breaks the run, for the same reason it does for the event loop: what a threshold
+        // is for is a signal that stays.
+        this.queueing.delete(label);
+        continue;
+      }
+      const over = (this.queueing.get(label) ?? 0) + 1;
+      this.queueing.set(label, over);
+      if (over >= this.sustained) armed.push(label);
+    }
+    // A route that stopped appearing is a route that stopped serving: its run does not survive the silence.
+    for (const label of [...this.queueing.keys()]) if (!seen.has(label)) this.queueing.delete(label);
+    return armed;
   }
 
   /**

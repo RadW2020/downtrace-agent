@@ -33,7 +33,7 @@ import { ReferenceRegister } from "./reference.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
-import { LocalTriggers } from "./trigger.ts";
+import { ARM_FOR_MS, LocalTriggers } from "./trigger.ts";
 import { AGENT_VERSION } from "./version.ts";
 
 const REQUEST_START = "http.server.request.start";
@@ -383,6 +383,12 @@ export class Agent {
         // the time the cloud could notice, the detail that would explain it is overwritten (gh-409).
         const ask = this.triggers.interval(runtime, Date.now());
         if (ask) this.sender.enqueueTriggers([ask]);
+        // And the routes whose requests keep queueing for a connection get armed, which asks the cloud for
+        // nothing: it only keeps their detail out of reach of everyone else's traffic until the arm expires
+        // (ADR 0122). Read from the interval that was just built, so it costs nothing per request.
+        for (const label of this.triggers.endpoints(interval, Date.now())) {
+          this.prearm.arm(label, Date.now(), ARM_FOR_MS);
+        }
       }
       const sent = await this.sender.flush(timeoutMs);
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).

@@ -74,3 +74,51 @@ describe("the local trigger", () => {
     for (let i = 0; i < 10; i += 1) expect(t.interval({ rssMb: 100 }, 1_000 + i)).toBeUndefined();
   });
 });
+
+describe("the pool wait that arms a route", () => {
+  const endpoint = (route: string, count: number, waitMs: number | undefined) => ({
+    method: "GET",
+    route,
+    count,
+    errors: 0,
+    status: { success: count, redirect: 0, clientError: 0, serverError: 0 },
+    latency: { counts: [], sum: 0, max: 0 },
+    ...(waitMs === undefined
+      ? {}
+      : { dependencies: [{ kind: "postgres" as const, target: "db:5432", calls: count, waitMs }] }),
+  });
+  const interval = (endpoints: unknown[]) => ({ start: 0, durationMs: 10_000, endpoints }) as never;
+
+  // The only signal of `product.md:114` that can be attributed to a route: pool wait is measured per request,
+  // so saying «this route is queueing» is reading what was measured and not guessing (ADR 0122).
+  it("arms a route that keeps queueing for a connection", () => {
+    const t = new LocalTriggers();
+    // 100 requests waiting 8 s between them is 80 ms each: the pool is not serving them.
+    expect(t.endpoints(interval([endpoint("/cart", 100, 8_000)]), 1_000)).toEqual([]);
+    expect(t.endpoints(interval([endpoint("/cart", 100, 8_000)]), 11_000)).toEqual(["GET /cart"]);
+  });
+
+  // Sustained is the point: one bad interval between good ones is not a route in trouble.
+  it("forgets the run when an interval comes back clean", () => {
+    const t = new LocalTriggers();
+    t.endpoints(interval([endpoint("/cart", 100, 8_000)]), 1_000);
+    t.endpoints(interval([endpoint("/cart", 100, 10)]), 11_000);
+    expect(t.endpoints(interval([endpoint("/cart", 100, 8_000)]), 21_000)).toEqual([]);
+  });
+
+  // A quiet route where one request queued says nothing about the route. The average would be enormous and
+  // the evidence behind it would be a single request.
+  it("ignores a route with too few requests to mean anything", () => {
+    const t = new LocalTriggers();
+    t.endpoints(interval([endpoint("/rare", 5, 4_000)]), 1_000);
+    expect(t.endpoints(interval([endpoint("/rare", 5, 4_000)]), 11_000)).toEqual([]);
+  });
+
+  // Absent is not zero and it is not «a lot» either: a route whose dependencies report no wait has nothing
+  // measured to arm on (invariant 14).
+  it("does not arm on a route whose dependencies report no wait", () => {
+    const t = new LocalTriggers();
+    t.endpoints(interval([endpoint("/cart", 100, undefined)]), 1_000);
+    expect(t.endpoints(interval([endpoint("/cart", 100, undefined)]), 11_000)).toEqual([]);
+  });
+});
