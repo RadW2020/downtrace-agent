@@ -1,5 +1,15 @@
 # @downtrace/protocol
 
+## 0.8.0
+
+### Minor Changes
+
+- 74261e9: Protocol 0.8.0. A captured request may carry `poolWaitMs`: how long it waited for a connection from a pool before it could talk to the dependency at all. A consumer that only sees the total time cannot tell a slow database from one the request never got to talk to, and it is what the pool-saturation trigger compares.
+  
+  The field is optional and **absent means the request asked no pool**, which is not a wait of zero: zero is a request that asked and was served at once.
+  
+  The cloud reads it from this release; the instrumentation starts sending it in a later one, which is the order ADR 0008 requires.
+
 ## 0.7.1
 
 ### Patch Changes

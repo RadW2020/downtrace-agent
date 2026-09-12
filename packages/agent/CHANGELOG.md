@@ -1,5 +1,14 @@
 # @downtrace/agent
 
+## 0.6.2
+
+### Patch Changes
+
+- d592205: Fixes a comment in `src/coarse.ts` saying the coarse record exists to be frozen by a capture "which does not exist yet". Captures exist: the instrumentation receives the order, observes, and sends the evidence back. This is a public file, and that sentence was the first thing anyone opening the module read.
+- 2e960e3: The README's "What leaves your server" now lists what a capture sends, the reference samples that travel with it, and the instrumentation's own measured resources. The list was true and no longer complete, and an incomplete enumeration in the section somebody reads to answer exactly that question reads as a promise.
+- Updated dependencies [74261e9]
+  - @downtrace/protocol@0.8.0
+
 ## 0.6.1
 
 ### Patch Changes
