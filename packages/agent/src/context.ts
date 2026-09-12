@@ -175,6 +175,26 @@ export function recordWaitIn(ctx: RequestContext, kind: DependencyKind, target: 
   entry.waitMs += ms;
 }
 
+/**
+ * What this request spent waiting for a connection, across the pools it asked.
+ *
+ * `NaN` when it asked none, which is not a wait of zero: one request never queued and the other queued and was
+ * served at once. The register keeps the two apart because the pool-saturation trigger compares wait per
+ * request, and a route that never touches the pool must not count as one that waits nothing (gh-471).
+ *
+ * Only `postgres` reports a pool wait today — `pg.ts` is the one instrument that measures it — so this is
+ * that. A second kind that ever measures one joins this sum without changing what it means.
+ */
+export function poolWaitOf(work: Map<string, DependencyWork> | undefined): number {
+  if (!work) return Number.NaN;
+  let total = Number.NaN;
+  for (const entry of work.values()) {
+    if (entry.kind !== "postgres") continue;
+    total = Number.isNaN(total) ? entry.waitMs : total + entry.waitMs;
+  }
+  return total;
+}
+
 /** As above, against the request being served. */
 export function recordWait(kind: DependencyKind, target: string, ms: number): void {
   const ctx = storage.getStore();

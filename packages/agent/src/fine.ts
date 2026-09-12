@@ -50,7 +50,15 @@ const R_DEP_FROM = 7;
 const R_DEP_COUNT = 8;
 /** 1 when the request touched more distinct dependencies than were kept. */
 const R_DEP_TRUNCATED = 9;
-const R_FIELDS = 10;
+/**
+ * How long this request waited for a connection from a pool, in milliseconds.
+ *
+ * `NaN` when it asked no pool for one, which is **not** a wait of zero: zero is a request that asked and got
+ * one at once. A row is a `Float64Array` and every slot starts at zero, so the absence needs a value of its
+ * own or «did not ask» would read as «did not wait» (invariant 14, gh-471).
+ */
+const R_POOL_WAIT = 10;
+const R_FIELDS = 11;
 
 /** Fields of one operation row. */
 const O_FINGERPRINT = 0;
@@ -79,6 +87,11 @@ export interface FineRequest {
    */
   startedAt: number;
   durationMs: number;
+  /**
+   * What it spent waiting for a connection from a pool. Absent when it asked no pool: the pool-saturation
+   * trigger compares wait per request, and a request that never queued is not one that queued for nothing.
+   */
+  poolWaitMs?: number;
   /** In the order they started. */
   operations: FineOperation[];
   /**
@@ -204,6 +217,9 @@ export class FineRegister {
     opFrom: number,
     attempted: number,
     dependencies?: Iterable<string>,
+    // Positional like the rest, and a value rather than a flag: an options object here would allocate one
+    // per request on the hottest path the product has, which is what the register exists to stay off.
+    poolWaitMs: number = Number.NaN,
   ): void {
     // Bounded three ways: what the request ran, what a request is allowed to keep, and what was actually
     // written. The third is what stops a caller that reports more than it wrote from making the snapshot read
@@ -212,6 +228,7 @@ export class FineRegister {
     const at = (this.requestCursor % this.capacity) * R_FIELDS;
     this.requests[at + R_START] = startedAt;
     this.requests[at + R_DURATION] = durationMs;
+    this.requests[at + R_POOL_WAIT] = poolWaitMs;
     this.requests[at + R_STATUS] = status;
     this.requests[at + R_ROUTE] = this.intern(`${method} ${route}`, this.routes, this.routeIndex);
     this.requests[at + R_OP_FROM] = opFrom;
@@ -318,6 +335,9 @@ export class FineRegister {
         truncated: isTruncated,
         detailLost: lost,
         ...((this.requests[at + R_DEP_TRUNCATED] ?? 0) === 1 ? { dependenciesTruncated: true } : {}),
+        ...(Number.isNaN(this.requests[at + R_POOL_WAIT] ?? Number.NaN)
+          ? {}
+          : { poolWaitMs: this.requests[at + R_POOL_WAIT] }),
       });
     }
     return {

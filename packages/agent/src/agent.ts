@@ -14,7 +14,7 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { Captures, type LiveCapture, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
-import { type DependencyWork, enterRequest, type RequestContext } from "./context.ts";
+import { type DependencyWork, enterRequest, poolWaitOf, type RequestContext } from "./context.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
@@ -423,6 +423,9 @@ export class Agent {
           status: r.status,
           startedAt: new Date(r.startedAt).toISOString(),
           durationMs: r.durationMs,
+          // Omitted when the request asked no pool, which the contract reads as «this one did not queue» and
+          // not as «it queued for nothing» (gh-471).
+          ...(r.poolWaitMs === undefined ? {} : { poolWaitMs: r.poolWaitMs }),
           operations: r.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
           // On the request and not only in the totals, because an empty list without a mark reads as a
           // request that ran nothing (invariant 14). Omitted when false: the contract says absent means
@@ -597,6 +600,10 @@ export class Agent {
         // The keys `work` is already built with: a capture of a dependency has to know which requests
         // touched it, and the register holds only fingerprints, which do not say (gh-397).
         ctx?.work?.keys(),
+        // Measured already, on those same entries: `pg.ts` writes the wait into this request's own context and
+        // until gh-471 it died with the request. NaN when it asked no pool, which the row keeps apart from a
+        // wait of zero.
+        poolWaitOf(ctx?.work),
       );
       // And the same request is offered to the reference samples. The operations are read back from the
       // ring **only if it takes it**, which after the first few is one request in `seen` (gh-307).

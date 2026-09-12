@@ -316,3 +316,35 @@ describe("the agent's fine register", () => {
     expect(recorded?.operations).toEqual([]);
   });
 });
+
+describe("pool wait", () => {
+  // The wait for a connection is measured per request already —`pg.ts` records it into the request's own
+  // context— and until gh-471 it died with the request. The pool-saturation trigger compares wait per request
+  // against the reference's, so counting how many waited more needs the number per request (gh-471).
+  it("keeps the wait a request spent waiting for a connection", () => {
+    const r = new FineRegister();
+    r.request("GET", "/cart", 200, 1_000, 40, r.openRequest(), 0, undefined, 12.5);
+    r.request("GET", "/cart", 200, 1_100, 40, r.openRequest(), 0, undefined, 0);
+
+    const [waited, instant] = r.snapshot().requests;
+    expect(waited?.poolWaitMs).toBe(12.5);
+    // Zero is a measurement: this one asked the pool and got a connection at once.
+    expect(instant?.poolWaitMs).toBe(0);
+  });
+
+  // A request that never asked a pool for anything has no wait to report, and that is not a wait of zero.
+  // Absent and zero are different answers and the contract reads them differently (invariant 14).
+  it("says nothing when the request touched no pool", () => {
+    const r = new FineRegister();
+    r.request("GET", "/static", 200, 1_000, 3, r.openRequest(), 0);
+
+    expect(r.snapshot().requests[0]?.poolWaitMs).toBeUndefined();
+  });
+
+  // The row grew by one number, so the arithmetic of the memory budget has to still hold: the register is
+  // bounded by construction and that is the half of invariant 3 that checks itself (ADR 0067).
+  it("still fits the memory budget with the wait in every row", () => {
+    const r = new FineRegister();
+    expect(r.bytes()).toBeLessThanOrEqual(FINE_MAX_BYTES);
+  });
+});
