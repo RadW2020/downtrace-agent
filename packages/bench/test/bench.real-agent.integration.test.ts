@@ -36,7 +36,16 @@ describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
       "baseline",
       "agent",
     ]);
-    expect(report.rounds.every((r) => r.load.errors === 0)).toBe(true);
+    // Not «no round errored»: whether a shared runner keeps a reference app clean at 100 rps is a fact about
+    // the machine, and demanding it here cost a red on a PR that does not touch this package (gh-484). What the
+    // code decides is what gets asserted (ADR 0114): request errors in an agent round are a `fail` and in a
+    // baseline round leave no `pass`, decided in `verdict.ts` and proved in `verdict.test.ts`. This is the one
+    // thing those cannot see — that the errors the load generator counted reach the verdict at all.
+    const errored = report.rounds.filter((r) => r.load.errors > 0);
+    if (errored.length > 0) {
+      expect(report.verdict).not.toBe("pass");
+      expect(report.reason ?? "").toContain("request errors");
+    }
     expect(report.metrics.map((m) => m.metric)).toEqual(["p99Ms", "cpuPct", "rssMb"]);
     for (const r of report.rounds.filter((x) => x.variant === "agent")) expect(r.sink?.batches ?? 0).toBeGreaterThan(0);
     expect(report.rounds.filter((x) => x.variant === "baseline").every((x) => x.sink === undefined)).toBe(true);
