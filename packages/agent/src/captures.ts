@@ -148,12 +148,17 @@ export interface CaptureSlice {
  * `nameOf` is how a route is called outside this process: itself, or a digest of itself in minimal mode.
  * The order comes from the cloud, which only ever knew the outside name, so the comparison happens there
  * and not against what the register keeps (gh-395).
+ *
+ * `prearm` is **required**, and `null` is how a caller says there is no reserve. It was optional, and the one
+ * caller in production simply never passed it: the reserve filled up for an armed route and nothing ever read
+ * it, with a green test on each half and the wire between them cut (gh-498). An optional argument is an
+ * invitation to forget; a required one makes the compiler ask.
  */
 export function sliceFor(
   capture: LiveCapture,
   snapshot: FineSnapshot,
-  nameOf: (route: string) => string = (route) => route,
-  prearm?: PrearmReserve,
+  nameOf: (route: string) => string,
+  prearm: PrearmReserve | null,
 ): CaptureSlice {
   const keep = matcher(capture.footprint, nameOf);
   // Where the two registers meet. A route armed before this capture kept its own requests from `armedAt` on,

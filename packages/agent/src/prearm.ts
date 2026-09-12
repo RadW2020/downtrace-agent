@@ -15,6 +15,8 @@
  */
 
 /** How many routes may be armed at once. Four, like the captures a process may be observing (`captures.ts`). */
+import type { FineRequest } from "./fine.ts";
+
 export const DEFAULT_ARMED_ROUTES = 4;
 
 /**
@@ -43,7 +45,20 @@ const R_STATUS = 2;
 const R_OP_FROM = 3;
 const R_OP_COUNT = 4;
 const R_POOL_WAIT = 5;
-const R_FIELDS = 6;
+const R_DEP_FROM = 6;
+const R_DEP_COUNT = 7;
+const R_FIELDS = 8;
+
+/**
+ * Dependency labels kept per armed request. A capture can be about a dependency rather than a route, and
+ * `sliceFor` decides that by reading this: a reserve whose rows have no dependencies is a reserve that never
+ * matches such a capture. The reserve declared the field and dropped it, which is a silent wrong answer rather
+ * than a missing one (gh-498).
+ *
+ * Four is what the fine register keeps, for the same reason: a request touching more than four distinct
+ * dependencies is rare, and the cap is what keeps this bounded.
+ */
+const DEPS_PER_REQUEST = 4;
 
 const O_FINGERPRINT = 0;
 const O_START = 1;
@@ -94,6 +109,9 @@ export class PrearmRegister {
   private readonly opCapacity: number;
   private readonly requests: Float64Array;
   private readonly operations: Float64Array;
+  private readonly dependencies: Int32Array;
+  private readonly dependencyLabels: string[] = [];
+  private readonly dependencyIndex = new Map<string, number>();
   private readonly methods: string[] = [];
   private readonly fingerprints: string[] = [];
   private readonly fingerprintIndex = new Map<string, number>();
@@ -109,6 +127,7 @@ export class PrearmRegister {
     this.opCapacity = options.operations ?? DEFAULT_PREARM_OPERATIONS;
     this.requests = new Float64Array(this.routeCapacity * this.perRoute * R_FIELDS);
     this.operations = new Float64Array(this.opCapacity * O_FIELDS);
+    this.dependencies = new Int32Array(this.routeCapacity * this.perRoute * DEPS_PER_REQUEST);
     this.arms = new Array(this.routeCapacity).fill(undefined);
     this.methods = new Array(this.routeCapacity * this.perRoute).fill("");
   }
@@ -183,6 +202,15 @@ export class PrearmRegister {
     this.requests[at + R_OP_FROM] = from;
     this.requests[at + R_OP_COUNT] = kept;
     this.requests[at + R_POOL_WAIT] = r.poolWaitMs ?? Number.NaN;
+    const depAt = index * DEPS_PER_REQUEST;
+    let deps = 0;
+    for (const dependency of r.dependencies) {
+      if (deps >= DEPS_PER_REQUEST) break;
+      this.dependencies[depAt + deps] = this.dependencyLabel(dependency);
+      deps++;
+    }
+    this.requests[at + R_DEP_FROM] = depAt;
+    this.requests[at + R_DEP_COUNT] = deps;
     this.methods[index] = label;
     arm.written++;
   }
@@ -191,6 +219,35 @@ export class PrearmRegister {
    * What the reserve kept for this route, oldest first. Empty when the route is not armed, which is the
    * normal case and the reason this costs nothing in a process nobody has armed.
    */
+  /**
+   * What this route kept, in the shape a capture is assembled from, or `null` when it is not armed.
+   *
+   * The conversion is here and not at the call site because the two registers answer the same question and a
+   * capture must not have to know they are two. `truncated` and `detailLost` are false by construction: the
+   * reserve is bounded per route and nobody else writes over it, which is the reason it exists (ADR 0122).
+   */
+  reserveFor(method: string, route: string, now: number): { armedAt: number; requests: FineRequest[] } | null {
+    const label = `${method} ${route}`;
+    const armedAt = this.armedAt(label, now);
+    if (armedAt === undefined) return null;
+    const requests: FineRequest[] = this.requestsFor(label, now).map((r) => {
+      const out: FineRequest = {
+        method: r.method,
+        route: r.route,
+        status: r.status,
+        startedAt: r.startedAt,
+        durationMs: r.durationMs,
+        operations: r.operations,
+        dependencies: r.dependencies,
+        truncated: false,
+        detailLost: false,
+      };
+      if (r.poolWaitMs !== undefined && !Number.isNaN(r.poolWaitMs)) out.poolWaitMs = r.poolWaitMs;
+      return out;
+    });
+    return { armedAt, requests };
+  }
+
   requestsFor(label: string, now: number): PrearmRequest[] {
     const slot = this.slotOf(label, now);
     if (slot < 0) return [];
@@ -217,6 +274,12 @@ export class PrearmRegister {
         });
       }
       const wait = this.requests[at + R_POOL_WAIT] ?? Number.NaN;
+      const depFrom = this.requests[at + R_DEP_FROM] ?? 0;
+      const depCount = this.requests[at + R_DEP_COUNT] ?? 0;
+      const dependencies: string[] = [];
+      for (let i = 0; i < depCount; i += 1) {
+        dependencies.push(this.dependencyLabels[this.dependencies[depFrom + i] ?? 0] ?? "");
+      }
       out.push({
         method: space < 0 ? label : label.slice(0, space),
         route: space < 0 ? "" : label.slice(space + 1),
@@ -224,7 +287,7 @@ export class PrearmRegister {
         startedAt: this.requests[at + R_START] ?? 0,
         durationMs: this.requests[at + R_DURATION] ?? 0,
         operations,
-        dependencies: [],
+        dependencies,
         ...(Number.isNaN(wait) ? {} : { poolWaitMs: wait }),
       });
     }
@@ -233,7 +296,9 @@ export class PrearmRegister {
 
   /** Preallocated, so this is what it occupies armed or empty. */
   bytes(): number {
-    return this.requests.byteLength + this.operations.byteLength;
+    // Every array, including the dependency ring: a budget that leaves one out is a budget that is wrong by
+    // exactly the amount nobody is looking at (ADR 0067).
+    return this.requests.byteLength + this.operations.byteLength + this.dependencies.byteLength;
   }
 
   private slotOf(label: string, now: number): number {
@@ -242,6 +307,17 @@ export class PrearmRegister {
       if (arm && arm.label === label && arm.until > now) return i;
     }
     return -1;
+  }
+
+  /** The same interning as the fingerprints: a label is stored once and rows keep its index. */
+  private dependencyLabel(label: string): number {
+    let index = this.dependencyIndex.get(label);
+    if (index === undefined) {
+      index = this.dependencyLabels.length;
+      this.dependencyLabels.push(label);
+      this.dependencyIndex.set(label, index);
+    }
+    return index;
   }
 
   private fingerprint(hash: string): number {

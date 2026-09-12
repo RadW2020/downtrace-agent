@@ -287,6 +287,33 @@ export class FineRegister {
   }
 
   /** Everything the register holds, oldest request first. This is what a capture will freeze. */
+  /**
+   * The operations one request wrote, or the news that they are gone.
+   *
+   * Read from the range the request itself recorded, which is the only way to name them: the register keeps
+   * fingerprints and the row keeps a cursor into them. An operation is live exactly while the cursor has not
+   * lapped it, and checking the **oldest** is enough — they were written in order, so if the first survived
+   * they all did.
+   *
+   * Public because the prearmed reserve needs the same rows the ring just took (gh-498), and one walk beats
+   * two that have to agree about what «lost» means.
+   */
+  operationsAt(opFrom: number, opCount: number): { operations: FineOperation[]; lost: boolean } {
+    if (opCount > 0 && this.operationCursor - opFrom > this.opCapacity) {
+      return { operations: [], lost: true };
+    }
+    const operations: FineOperation[] = [];
+    for (let i = 0; i < opCount; i += 1) {
+      const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
+      operations.push({
+        hash: this.fingerprints[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
+        startMs: this.operations[opAt + O_START] ?? 0,
+        endMs: this.operations[opAt + O_END] ?? 0,
+      });
+    }
+    return { operations, lost: false };
+  }
+
   snapshot(): FineSnapshot {
     const live = Math.min(this.requestCursor, this.capacity);
     const from = this.requestCursor - live;
@@ -299,20 +326,8 @@ export class FineRegister {
       const opCount = this.requests[at + R_OP_COUNT] ?? 0;
       // An operation is live exactly while the cursor has not lapped it. Checking the **oldest** one is enough:
       // they were written in order, so if the first survived, all of them did.
-      const lost = opCount > 0 && this.operationCursor - opFrom > this.opCapacity;
-      const operations: FineOperation[] = [];
-      if (!lost) {
-        for (let i = 0; i < opCount; i += 1) {
-          const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
-          operations.push({
-            hash: this.fingerprints[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
-            startMs: this.operations[opAt + O_START] ?? 0,
-            endMs: this.operations[opAt + O_END] ?? 0,
-          });
-        }
-      } else {
-        detailLost += 1;
-      }
+      const { operations, lost } = this.operationsAt(opFrom, opCount);
+      if (lost) detailLost += 1;
       const isTruncated = (this.requests[at + R_TRUNCATED] ?? 0) === 1;
       if (isTruncated) truncated += 1;
       const depFrom = this.requests[at + R_DEP_FROM] ?? 0;

@@ -63,6 +63,13 @@ export interface AgentDeps {
   fine?: FineRegister;
   /** The reference samples, so a test can make them small or make their selection deterministic. */
   reference?: ReferenceRegister;
+  /**
+   * The prearmed reserve, so a test can arm a route and read what the agent put in it.
+   *
+   * It was the one register without this seam, and that is part of why nothing noticed that the agent fed it
+   * empty rows and never read them back: every piece had a test and the wiring had none (gh-498).
+   */
+  prearm?: PrearmRegister;
   /** The process's own health, so a test can drive the signal that asks for a capture. */
   runtime?: RuntimeSampler;
   /** The overhead meter, so a test can sample every call and drive its clock. */
@@ -215,7 +222,7 @@ export class Agent {
     this.coarse = deps.coarse ?? new CoarseRegister();
     this.fine = deps.fine ?? new FineRegister();
     this.reference = deps.reference ?? new ReferenceRegister();
-    this.prearm = new PrearmRegister();
+    this.prearm = deps.prearm ?? new PrearmRegister();
     this.runtime = deps.runtime ?? new RuntimeSampler();
     this.overhead = deps.overhead ?? new OverheadMeter();
     if (config.instrument.has("pg")) {
@@ -412,7 +419,16 @@ export class Agent {
    */
   private async deliverEvidence(done: LiveCapture[]): Promise<void> {
     for (const capture of done) {
-      const slice = sliceFor(capture, this.fine.snapshot(), (route) => this.nameOf(route));
+      // With the reserve, which is the whole point of having one: a route armed before this capture kept its
+      // requests out of reach of everyone else's traffic, and this is where the two registers meet (ADR 0122).
+      // It used to be left out — the argument was optional and this call simply did not pass it — so a capture
+      // of an armed route delivered only what the global ring happened to still hold (gh-498).
+      const slice = sliceFor(
+        capture,
+        this.fine.snapshot(),
+        (route) => this.nameOf(route),
+        this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(capture.footprint.route ?? ""), Date.now()),
+      );
       await this.sender.sendEvidence(capture.id, {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },
@@ -616,8 +632,9 @@ export class Agent {
         poolWaitOf(ctx?.work),
       );
       // And into the armed route's own reserve, if this route is one. Costs nothing for every other request:
-      // `observe` looks up the arm and returns. Nothing arms yet — that is gh-476 — so today this is always
-      // the lookup and no write (ADR 0122).
+      // `observe` looks up the arm and returns (ADR 0122). Routes are armed a few lines above, from the pool
+      // wait of the interval just built — this comment used to say nothing armed yet, which stopped being
+      // true when gh-476 landed and is how the rest of this went unnoticed (gh-498).
       this.prearm.shed(!this.overhead.keeping(Sheddable.Fine));
       this.prearm.observe({
         method,
@@ -625,8 +642,12 @@ export class Agent {
         status: response?.statusCode ?? 0,
         startedAt: startedWall,
         durationMs: ms,
-        operations: [],
-        dependencies: [],
+        // The same detail the ring was just given, read back from the range this request wrote: a row with
+        // no operations and no dependencies is a request with its evidence thrown away, which is the
+        // opposite of what a reserve is for. They used to be empty lists here (gh-498).
+        operations: this.fine.operationsAt(ctx?.fineFrom ?? 0, ctx?.fineOps ?? 0).operations,
+        dependencies: ctx?.work ? [...ctx.work.keys()] : [],
+        poolWaitMs: poolWaitOf(ctx?.work),
       });
       // And the same request is offered to the reference samples. The operations are read back from the
       // ring **only if it takes it**, which after the first few is one request in `seen` (gh-307).

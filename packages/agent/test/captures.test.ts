@@ -118,6 +118,8 @@ describe("what one capture saw", () => {
         request(1_000),
         request(1_500),
       ]),
+      (route) => route,
+      null,
     );
     expect(slice.observedRequests).toBe(2);
     expect(slice.attachedRequests).toBe(2);
@@ -127,7 +129,7 @@ describe("what one capture saw", () => {
 
   it("is an answer even when nothing ran", () => {
     // «Una captura sin requests no prueba recuperación» (CAP-01): empty evidence is a result, silence is not.
-    const slice = sliceFor(live(), snapshot([]));
+    const slice = sliceFor(live(), snapshot([]), (route) => route, null);
     expect(slice.requests).toEqual([]);
     expect(slice.observedRequests).toBe(0);
     expect(slice.attachedRequests).toBe(0);
@@ -148,6 +150,8 @@ describe("what one capture saw", () => {
         request(1_200, { route: "/products" }),
         request(1_300, { method: "POST" }),
       ]),
+      (route) => route,
+      null,
     );
     expect(slice.requests.map((r) => `${r.method} ${r.route}`)).toEqual(["GET /orders", "GET /orders"]);
     expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 1]);
@@ -157,6 +161,8 @@ describe("what one capture saw", () => {
     const slice = sliceFor(
       live({ footprint: { route: "/orders" } }),
       snapshot([request(1_100), request(1_200, { method: "POST" }), request(1_300, { route: "/products" })]),
+      (route) => route,
+      null,
     );
     expect(slice.requests).toHaveLength(2);
   });
@@ -169,6 +175,8 @@ describe("what one capture saw", () => {
         request(1_200, { dependencies: [dependencyKey("postgres", "db:5432"), dependencyKey("redis", "cache:6379")] }),
         request(1_300, { dependencies: [] }),
       ]),
+      (route) => route,
+      null,
     );
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
   });
@@ -182,6 +190,8 @@ describe("what one capture saw", () => {
         request(1_100, { dependencies: [dependencyKey("redis", "cache:6379")] }),
         request(1_200, { dependencies: [dependencyKey("redis", "cache:6379")], dependenciesTruncated: true }),
       ]),
+      (route) => route,
+      null,
     );
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
   });
@@ -190,6 +200,8 @@ describe("what one capture saw", () => {
     const slice = sliceFor(
       live({ footprint: { environment: "production" } }),
       snapshot([request(1_100), request(1_200, { route: "/products" })]),
+      (route) => route,
+      null,
     );
     expect(slice.requests).toHaveLength(2);
   });
@@ -239,6 +251,6 @@ describe("evidence of an armed route", () => {
       coverage: { requestCapacity: 10, operationCapacity: 10, requests: 2, detailLost: 0, truncated: 0 },
     } as unknown as FineSnapshot;
 
-    expect(sliceFor(capture, snapshot, (r) => r).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
+    expect(sliceFor(capture, snapshot, (r) => r, null).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
   });
 });
