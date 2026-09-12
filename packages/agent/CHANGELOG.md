@@ -1,5 +1,13 @@
 # @downtrace/agent
 
+## 0.8.1
+
+### Patch Changes
+
+- db6ccf3: The prearmed detail reaches the capture. Arming worked and nothing else did: the reserve was written with no
+  operations, no dependencies and no pool wait, and the one production call that assembles a capture never read
+  it. A route armed by pool wait kept rows that said nothing and that nobody looked at.
+
 ## 0.8.0
 
 ### Minor Changes
