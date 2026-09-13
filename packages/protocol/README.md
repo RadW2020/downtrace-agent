@@ -1,5 +1,7 @@
 # @downtrace/protocol
 
+> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+
 The ingestion contract between Downtrace agents and the Downtrace cloud, as a JSON Schema (draft 2020-12) plus the TypeScript types generated from it.
 
 - `schema/v0/aggregates.schema.json` — the contract for what an agent sends. Everything else derives from it.

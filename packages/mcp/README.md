@@ -1,5 +1,7 @@
 # @downtrace/mcp
 
+> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+
 Downtrace as tools a coding agent can discover and use: the queries and the operations, over MCP.
 
 `product.md` is explicit that this is not an optional integration — «a product that could only be operated from the interface would fail half of its users» — and that reading is not enough: «a report exporter does not satisfy it: an agent must be able to operate the product».

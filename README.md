@@ -1,5 +1,7 @@
 # Downtrace — open-source packages
 
+> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+
 > **Downtrace is a flight recorder for your backend.** It learns how your application normally behaves and, when something gets slower or breaks, captures what happened and tells you what changed.
 
 [![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
