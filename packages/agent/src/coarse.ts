@@ -27,7 +27,7 @@ export const DEFAULT_ROUTES = 128;
 /**
  * What the register may hold, in bytes, at its worst: every row taken, every slot allocated.
  *
- * Invariant 3 says the numbers are «un hecho ejecutable, no una cifra copiada en un documento». The latency and
+ * Invariant 3 says the numbers are «an executable fact, not a figure copied into a document». The latency and
  * CPU halves are what `make bench` measures; the memory half is arithmetic, and this is where it is asserted —
  * `bytes()` computes what is really allocated and a test holds it under this.
  */

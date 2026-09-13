@@ -1,7 +1,7 @@
 /**
  * The fine half of the black box: the last tens of seconds, request by request, operation by operation.
  *
- * `product.md:93` asks for «each request with its child operations, timings and order**». That last word is the
+ * `product.md:93` asks for «each request with its child operations, timings and order». That last word is the
  * whole reason this exists. The aggregates already say a route ran fifty-six queries; only a sequence with
  * starts and ends says whether they ran one after another or all at once, and that is the difference between
  * time added to the request and time the request spent waiting on something it had already asked for.

@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-338)
 
-`product.md:77`: «Errors and exceptions: type, sanitised message, stack signature**». No existía. Lo que
+`product.md:77`: «Errors and exceptions: type, sanitised message, stack signature». No existía. Lo que
 había eran contadores —errores por ruta, llamadas fallidas por dependencia—, que dicen **cuántos** y no
 **cuáles**. La diferencia entre «esta ruta empezó a fallar» y «esta ruta empezó a lanzar **esto**» es la que
 el producto vende.

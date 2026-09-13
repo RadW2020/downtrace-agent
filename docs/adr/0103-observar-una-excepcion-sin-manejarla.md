@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto
 
-`product.md:77` pide observar «errors and exceptions**». El cloud ya sabe recibirlas (ADR 0102); faltaba
+`product.md:77` pide observar «errors and exceptions». El cloud ya sabe recibirlas (ADR 0102); faltaba
 observarlas, y es la única observación de este producto que puede **cambiar lo que la aplicación habría
 hecho**: en Node, registrar un oyente de `uncaughtException` *maneja* la excepción, y una excepción
 manejada no mata el proceso.

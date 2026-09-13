@@ -4,7 +4,7 @@ import { ErrorFingerprintCache, errorFingerprint, stackSignature } from "../src/
 import { meaningful, sanitizeMessage } from "../src/sanitize.ts";
 
 /**
- * `product.md:77`: «Errors and exceptions: type, sanitised message, stack signature**». The instrumentation
+ * `product.md:77`: «Errors and exceptions: type, sanitised message, stack signature». The instrumentation
  * only ever counted them, which says how many and not which (gh-338, ADR 0083).
  */
 

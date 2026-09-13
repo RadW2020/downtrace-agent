@@ -563,7 +563,7 @@ export interface CaptureProgress {
   startedAt: number;
 }
 /**
- * Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errors and exceptions**», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).
+ * Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errors and exceptions», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).
  */
 export interface ProcessException {
   /**
