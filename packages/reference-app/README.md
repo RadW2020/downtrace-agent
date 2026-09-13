@@ -1,57 +1,57 @@
 # reference-app
 
-Backend Node de referencia con la forma de los backends del ICP: Express 5, PostgreSQL (`pg`), Redis (`ioredis`) y un proveedor externo simulado al que se hacen llamadas HTTP reales. Sus regresiones se activan y desactivan a voluntad y expone su propia verdad —qué hizo cada request— para que benchmarks, tests y evals tengan contra qué comparar. No incluye ni depende del agente.
+Reference Node backend with the shape of the ICP's backends: Express 5, PostgreSQL (`pg`), Redis (`ioredis`) and a simulated external provider that real HTTP calls go to. Its regressions are switched on and off at will, and it exposes its own truth —what each request did— so that benchmarks, tests and evals have something to compare against. It does not include the agent, nor depend on it.
 
-## Arrancar
+## Getting it up
 
 ```sh
-make dev            # Postgres 17 + Redis 8 en Docker y la app con recarga en :4000 (proveedor en :4001)
+make dev            # Postgres 17 + Redis 8 in Docker and the app with reload on :4000 (provider on :4001)
 make test-integration
 ```
 
-Configuración por entorno en `.env.example`; los valores por defecto coinciden con `docker-compose.yml`. Lo que el `.env.example` no cuenta:
+Configuration by environment in `.env.example`; the defaults match `docker-compose.yml`. What `.env.example` does not tell you:
 
-- `PORT=0` y `PROVIDER_PORT=0` eligen un puerto libre (así arranca la app el harness de bench); la app escucha solo en `127.0.0.1`.
-- `STARTUP_FAILURE_MS=<ms>` simula una base de datos fría: el tráfico de producto recibe 503 (`ColdStartError`) durante esos ms desde la primera request; `/__admin/*` no se ve afectado. 0 desactiva.
-- Un nombre desconocido en `REGRESSIONS` aborta el arranque. Un entero mal formado en cualquier variable cae al valor por defecto sin aviso.
-- Cada 5xx deja una línea JSON en stderr (`level`, `status`, `method`, `path`, `error`, `message`); el bench la copia en el motivo de su veredicto.
+- `PORT=0` and `PROVIDER_PORT=0` pick a free port (which is how the bench harness starts the app); the app listens only on `127.0.0.1`.
+- `STARTUP_FAILURE_MS=<ms>` simulates a cold database: product traffic gets a 503 (`ColdStartError`) for that many ms from the first request; `/__admin/*` is unaffected. 0 switches it off.
+- An unknown name in `REGRESSIONS` aborts start-up. A malformed integer in any variable falls back to the default without a warning.
+- Every 5xx leaves a JSON line on stderr (`level`, `status`, `method`, `path`, `error`, `message`); the bench copies it into the reason for its verdict.
 
 ## Endpoints
 
-| Ruta | Qué hace | Perfil normal |
+| Route | What it does | Normal profile |
 |---|---|---|
 | `GET /healthz` | `{status, version}` (`APP_VERSION`) | — |
-| `GET /products` | lista de productos | 1 query |
-| `GET /products/:id` | un producto | 1 query |
-| `GET /me` | usuario de `x-user-id` (por defecto 1), cacheado en Redis 300 s | miss: 1 query + 2 Redis · hit: 1 Redis |
-| `POST /checkout` | `{userId, items:[{productId, quantity}], coupon?}` → pedido pagado | **12 queries, 2 llamadas al proveedor, 3 Redis** |
+| `GET /products` | list of products | 1 query |
+| `GET /products/:id` | one product | 1 query |
+| `GET /me` | user from `x-user-id` (1 by default), cached in Redis for 300 s | miss: 1 query + 2 Redis · hit: 1 Redis |
+| `POST /checkout` | `{userId, items:[{productId, quantity}], coupon?}` → a paid order | **12 queries, 2 provider calls, 3 Redis** |
 
-## Regresiones
+## Regressions
 
-Se activan al arrancar con `REGRESSIONS=n_plus_one,slow_dependency` o en caliente con `PUT /__admin/regressions`:
+They are switched on at start-up with `REGRESSIONS=n_plus_one,slow_dependency`, or live with `PUT /__admin/regressions`:
 
 ```json
 { "slow_dependency": { "enabled": true, "params": { "delayMs": 300 } } }
 ```
 
-| Nombre | Efecto | Parámetros (defecto) |
+| Name | Effect | Parameters (default) |
 |---|---|---|
-| `n_plus_one` | checkout hace 4 queries por línea en vez de 3 para todo el pedido | — |
-| `slow_dependency` | el proveedor tarda `delayMs` más | `delayMs` (3000) |
-| `aggressive_retries` | llamadas al proveedor con timeout corto y reintentos sin backoff | `timeoutMs` (500), `retries` (3) |
-| `pool_leak` | una fracción de checkouts no devuelve su conexión al pool | `rate` (0.2) |
-| `new_error` | una fracción de `GET /products/:id` lanza `InventoryMismatchError` | `rate` (0.1) |
+| `n_plus_one` | checkout makes 4 queries per line instead of 3 for the whole order | — |
+| `slow_dependency` | the provider takes `delayMs` longer | `delayMs` (3000) |
+| `aggressive_retries` | provider calls with a short timeout and retries without backoff | `timeoutMs` (500), `retries` (3) |
+| `pool_leak` | a fraction of checkouts does not return its connection to the pool | `rate` (0.2) |
+| `new_error` | a fraction of `GET /products/:id` throws `InventoryMismatchError` | `rate` (0.1) |
 
-Las llamadas al proveedor ocurren dentro de la transacción a propósito: es una forma habitual en producción y es lo que convierte una dependencia lenta en presión sobre el pool.
+The provider calls happen inside the transaction on purpose: it is a common shape in production, and it is what turns a slow dependency into pressure on the pool.
 
-## Admin (`ADMIN_ENABLED=1`, por defecto)
+## Admin (`ADMIN_ENABLED=1`, the default)
 
-- `GET`/`PUT /__admin/regressions` — estado y parámetros.
-- `GET`/`PUT /__admin/provider` — `delayMs` manual y `failureRate` del proveedor.
-- `GET /__admin/process` — `cpu` (`process.cpuUsage()`), `memory` (`process.memoryUsage()`), `eventLoopUtilization`, `uptimeMs`; lo muestrea el benchmark de overhead.
-- `GET /__admin/stats` — por endpoint: requests, status por clase, `sqlQueries`, `providerCalls`, `providerRetries`, `redisOps`, `poolWaitMs`, `errors` por tipo, `totalDurationMs`.
+- `GET`/`PUT /__admin/regressions` — state and parameters.
+- `GET`/`PUT /__admin/provider` — manual `delayMs` and `failureRate` of the provider.
+- `GET /__admin/process` — `cpu` (`process.cpuUsage()`), `memory` (`process.memoryUsage()`), `eventLoopUtilization`, `uptimeMs`; the overhead benchmark samples it.
+- `GET /__admin/stats` — per endpoint: requests, status by class, `sqlQueries`, `providerCalls`, `providerRetries`, `redisOps`, `poolWaitMs`, `errors` by type, `totalDurationMs`.
 - `POST /__admin/stats/reset`.
-- `GET /__admin/db/checkpoints` — qué ha estado haciendo Postgres con sus checkpoints: `available: false` cuando la base no lo cuenta, y si no, los contadores. El banco lo lee alrededor de cada ronda porque no puede reconfigurar una base que no es suya, así que informa contra qué midió (gh-194).
-- `POST /__admin/db/reset` — deja la base en su tamaño de partida. El banco lo llama antes de cada ronda: compara rondas entre sí, y solo son comparables si empiezan iguales (ADR 0021).
+- `GET /__admin/db/checkpoints` — what Postgres has been doing with its checkpoints: `available: false` when the database does not count it, and otherwise the counters. The bench reads it around every round because it cannot reconfigure a database that is not its own, so it reports what it measured against (gh-194).
+- `POST /__admin/db/reset` — leaves the database at its starting size. The bench calls it before every round: it compares rounds with each other, and they are only comparable if they start alike (ADR 0021).
 
-El tráfico a `/__admin/*` no se contabiliza. Con `ADMIN_ENABLED=0` estas rutas no existen (404).
+Traffic to `/__admin/*` is not counted. With `ADMIN_ENABLED=0` these routes do not exist (404).

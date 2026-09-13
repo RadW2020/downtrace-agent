@@ -1,79 +1,79 @@
 # bench
 
-Generador de carga determinista y benchmark de overhead del agente sobre la app de referencia. Es la forma ejecutable del invariante 3: el agente añade < 1 ms en p99, < 3 puntos de CPU y < 64 MiB de RSS. Sin dependencias.
+Deterministic load generator and benchmark of the agent's overhead over the reference app. It is the executable form of invariant 3: the agent adds < 1 ms at p99, < 3 points of CPU and < 64 MiB of RSS. No dependencies.
 
-## Uso
+## Use
 
 ```sh
-make bench                                  # rondas 3, 200 rps, 3 s limpios de calentamiento + 20 s medición
+make bench                                  # 3 rounds, 200 rps, 3 clean seconds of warm-up + 20 s of measurement
 make bench BENCH_ARGS="--warmup 3 --warmup-max 30 --measure 12"
 pnpm --filter @downtrace/bench run load --url http://127.0.0.1:4000 --rps 100 --duration 10 --seed 1
 ```
 
-Necesita `DATABASE_URL` y `REDIS_URL` **exportadas**: el harness las exige por nombre y no lee ningún fichero de entorno, porque dos números medidos desde arranques distintos no se pueden restar (ADR 0023). Si tu Postgres no está en el puerto de siempre: `set -a; . packages/reference-app/.env; set +a` antes de `make bench`, o `make dev`. La app de referencia la arranca el propio harness en procesos hijos con puertos aleatorios.
+It needs `DATABASE_URL` and `REDIS_URL` **exported**: the harness demands them by name and reads no environment file, because two numbers measured from different start-ups cannot be subtracted (ADR 0023). If your Postgres is not on the usual port: `set -a; . packages/reference-app/.env; set +a` before `make bench`, or `make dev`. The reference app is started by the harness itself, in child processes with random ports.
 
-### Opciones
+### Options
 
-`bench` (todas opcionales; `make bench BENCH_ARGS="…"`):
+`bench` (all optional; `make bench BENCH_ARGS="…"`):
 
-| Bandera | Defecto | Qué es |
+| Flag | Default | What it is |
 |---|---|---|
-| `--rounds` | 3 | Rondas B/A; cada una arranca la app en un proceso nuevo |
-| `--rps` | 200 | Tasa fija del bucle abierto |
-| `--measure` | 20 | Segundos medidos por ronda |
-| `--warmup` | 3 | Segundos limpios consecutivos antes de medir |
-| `--warmup-max` | 30 | Tope de calentamiento; si la app no llega a estar limpia, el bench termina |
-| `--seed` | 42 | Semilla del tráfico, la misma para ambas variantes |
-| `--agent` | `packages/agent/src/register.ts` | Módulo que se carga con `--import` en la variante con agente (p. ej. `fixtures/slow-agent.ts`) |
-| `--out` | `bench-report.json` | Ruta del informe JSON |
+| `--rounds` | 3 | B/A rounds; each one starts the app in a fresh process |
+| `--rps` | 200 | Fixed rate of the open loop |
+| `--measure` | 20 | Seconds measured per round |
+| `--warmup` | 3 | Consecutive clean seconds before measuring |
+| `--warmup-max` | 30 | Cap on warm-up; if the app never gets clean, the bench ends |
+| `--seed` | 42 | Seed of the traffic, the same for both variants |
+| `--agent` | `packages/agent/src/register.ts` | Module loaded with `--import` in the variant with the agent (for example `fixtures/slow-agent.ts`) |
+| `--out` | `bench-report.json` | Path of the JSON report |
 
-La app se arranca con `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` y hereda el resto del entorno (`DATABASE_URL`, `REDIS_URL`); la variante con agente recibe además `DOWNTRACE_TOKEN=bench` y `DOWNTRACE_URL` hacia un sumidero local que cuenta los lotes.
+The app is started with `PORT=0 PROVIDER_PORT=0 ADMIN_ENABLED=1 REGRESSIONS=""` and inherits the rest of the environment (`DATABASE_URL`, `REDIS_URL`); the variant with the agent also gets `DOWNTRACE_TOKEN=bench` and a `DOWNTRACE_URL` pointing at a local sink that counts the batches.
 
-`load` (`pnpm --filter @downtrace/bench run load …`): `--url` (`http://127.0.0.1:4000`), `--rps` (200), `--duration` (10), `--seed` (42) y `--json` para el informe completo en vez de la tabla. Sale con 1 si alguna request falló.
+`load` (`pnpm --filter @downtrace/bench run load …`): `--url` (`http://127.0.0.1:4000`), `--rps` (200), `--duration` (10), `--seed` (42), and `--json` for the full report instead of the table. It exits with 1 if any request failed.
 
-## Cuándo vale su número
+## When its number is worth something
 
-**El benchmark no corre en CI** (ADR 0032). Se lanza a mano, y su número solo vale si se lanza bien:
+**The benchmark does not run in CI** (ADR 0032). It is launched by hand, and its number is only worth something if it is launched well:
 
-- **La máquina para él solo.** Es una medida comparativa: el baseline y la variante con agente tienen que ver la
-  misma máquina. Cualquier otra cosa que consuma CPU durante los veinte minutos —otro build, un contenedor
-  pesado, otra pestaña compilando— se reparte entre las rondas de forma desigual y sale como si fuera el agente.
-  Así se descubrió: midiendo en una VM donde corría el resto de CI, las siete peores esperas de conexión de una
-  tirada cayeron dentro de un job del runner vecino (gh-200).
-- **Contra un Postgres que no escriba a ráfagas.** El benchmark no es dueño de la base de datos —mide contra el `DATABASE_URL` que se le dé (ADR 0023)— y Postgres decide por su cuenta cuándo bajar páginas a disco: una tirada real lo vio escribir **26 segundos seguidos** dentro de una ventana de sesenta. El `docker-compose.yml` del repositorio ya reparte esa escritura (`checkpoint_completion_target=0.9`, `checkpoint_timeout=15min`, `max_wal_size=2GB`); si mides contra otro, ponle algo equivalente. Y mires contra el que mires, **la tabla dice cuántos checkpoints hubo en cada ronda y cuánto escribieron**, y un par cuyas mitades vieron cosas muy distintas sale `inconclusive`.
-- **En la arquitectura donde se despliega.** El ADR 0020 midió que las cifras de x86 nunca verificaron el
-  presupuesto: su ruido era de 3,998 ms contra un presupuesto de 1 ms. Un verde cómodo y falso.
-- **Leyendo el informe, no solo el veredicto.** La tabla por ronda dice la CPU ajena que vio cada una y la peor
-  espera de conexión con su hora. Si esas dos columnas se mueven entre las dos mitades de un par, ese par no es
-  una comparación, y el veredicto lo dirá.
+- **The machine to itself.** This is a comparative measurement: the baseline and the variant with the agent have
+  to see the same machine. Anything else consuming CPU during those twenty minutes —another build, a heavy
+  container, another tab compiling— is spread unevenly across the rounds and comes out looking like the agent.
+  That is how it was found: measuring on a VM that ran the rest of CI, the seven worst connection waits of one
+  run fell inside a job of the neighbouring runner (gh-200).
+- **Against a Postgres that does not write in bursts.** The benchmark does not own the database —it measures against whatever `DATABASE_URL` it is given (ADR 0023)— and Postgres decides on its own when to push pages to disk: one real run saw it write for **26 seconds straight** inside a window of sixty. The repository's `docker-compose.yml` already spreads that writing out (`checkpoint_completion_target=0.9`, `checkpoint_timeout=15min`, `max_wal_size=2GB`); if you measure against another one, give it something equivalent. And whichever you measure against, **the table says how many checkpoints there were in each round and how much they wrote**, and a pair whose halves saw very different things comes out `inconclusive`.
+- **On the architecture it is deployed on.** ADR 0020 measured that the x86 figures never verified the budget:
+  their noise was 3.998 ms against a budget of 1 ms. A comfortable, false green.
+- **Reading the report, not only the verdict.** The per-round table says how much foreign CPU each one saw and the
+  worst connection wait with its timestamp. If those two columns move between the two halves of a pair, that pair
+  is not a comparison, and the verdict will say so.
 
-Y **sus propios tests se reparten por la misma línea** (gh-412, ADR 0114). Los que comprueban qué decide el bench —que un agente que no entrega falla con su motivo, que un baseline que nunca se limpia da `inconclusive` con lo que dijo la app— corren en CI con el resto de la integración. Los que comprueban una **medida** —que se alcanza el ritmo pedido con un ±10 %, que un retraso de 200 ms se detecta, que un arranque frío de 4 s produce una ronda de entre 6 y 10 segundos— se llaman `*.measure.test.ts` y los lanza `make bench-measure`, en las mismas condiciones que el benchmark: máquina tranquila y `DATABASE_URL`. En CI fallaban por los vecinos, que es exactamente lo que el ADR 0032 sacó del pipeline.
+And **its own tests split along the same line** (gh-412, ADR 0114). The ones that check what the bench decides —that an agent which does not deliver fails with its reason, that a baseline which never gets clean gives `inconclusive` with what the app said— run in CI with the rest of the integration. The ones that check a **measurement** —that the requested rate is reached within ±10 %, that a 200 ms delay is detected, that a 4 s cold start produces a round of between 6 and 10 seconds— are called `*.measure.test.ts` and are launched by `make bench-measure`, under the same conditions as the benchmark: a quiet machine and `DATABASE_URL`. In CI they failed because of the neighbours, which is exactly what ADR 0032 took out of the pipeline.
 
-Y una limitación que conviene saber de antemano: el p99 de la propia aplicación de referencia es de unos 24 ms y
-se mueve varios milisegundos entre rondas, así que la línea de 1 ms del invariante 3 está por debajo de lo que
-este montaje resuelve. La CPU, con 3 puntos de presupuesto, sí es medible.
+And one limitation worth knowing in advance: the p99 of the reference application itself is around 24 ms and
+moves by several milliseconds between rounds, so the 1 ms line of invariant 3 is below what this setup resolves.
+CPU, with 3 points of budget, is measurable.
 
-## Cómo mide
+## How it measures
 
-- **Bucle abierto**: las requests salen a tasa fija con independencia de lo que tarde el servidor, y la latencia se mide desde el instante *programado* de envío. Un servidor que se retrasa aparece como cola, no se esconde tras un cliente más lento.
-- **Mismo tráfico**: la secuencia de endpoints e ids sale de una semilla; ambas variantes reciben exactamente las mismas requests.
-- **Rondas alternas** B/A/B/A/B/A, cada una en un proceso nuevo, para que el ruido de la máquina se reparta entre variantes.
-- **Calentamiento que termina limpio**: cada ronda recibe la carga un segundo por rodaja hasta encadenar `--warmup` segundos sin ninguna request fallida (3 por defecto), con tope `--warmup-max` (30). Una base de datos fría se espera, no se mide. Si la app no llega a estar limpia, el bench termina: `inconclusive` si era la ronda baseline, `fail` si era la del agente, y el motivo incluye las primeras líneas de error que la propia app escribió en stderr. La app de referencia simula ese arranque frío con `STARTUP_FAILURE_MS`.
-- **Latencia**: p99 sobre **todas las muestras agrupadas** de cada variante (5 × 2400 → ~120 valores deciden el p99). El **ruido** es el mayor de dos estimaciones (ADR 0010): el de mitades (barajar el baseline con semilla, partir en dos, |p99(A) − p99(B)|, máximo de 20 repeticiones), que mide la variabilidad de muestreo, y la **dispersión entre rondas** del baseline (máx − mín de sus p99), que mide la deriva de la máquina; el informe indica cuál mandó. Además, un `fail` de latencia exige **corroboración**: la mayoría de las rondas del agente deben mostrar al menos la mitad de la diferencia agrupada, para que un parón aislado no tumbe el veredicto. **CPU y RSS**: mediana por ronda y ruido máx − mín.
-- **Contra qué se midió**: cada ronda lee la CPU de **toda la máquina** durante su ventana y le resta la de todo lo que el benchmark ejecuta —la aplicación medida y el propio proceso, que lleva el generador de carga y el sumidero—; lo que queda es la **CPU ajena**, en la misma unidad que `cpuPct` (100 = un núcleo). Las rondas se alternan para que cada par vea la misma máquina, así que lo que invalida una comparación no es que hubiera vecinos —en una máquina compartida nunca son cero— sino que hubiera **vecinos distintos en cada mitad del par**: por encima de veinte puntos de diferencia, esa métrica sale `inconclusive` nombrando la ronda (ADR 0031). Nunca convierte un `fail` en `inconclusive`, y donde la CPU del host no se puede leer informa «?» sin degradar nada: no saber no es medir tranquilidad.
-- **Veredicto** por métrica: `ok` si Δ ≤ presupuesto; `fail` si **Δ − presupuesto > ruido**; `inconclusive` si Δ > presupuesto pero el exceso no supera el ruido — la máquina no puede resolver el presupuesto. Lo que tiene que superar al ruido es el **margen**, no Δ (ADR 0030): comparar Δ con el ruido responde a «¿existe el sobrecoste?», que no es lo que pregunta un presupuesto, y para la CPU se cumplía siempre. La tabla imprime el margen en su propia columna, porque es el número del que depende el resultado. `fail` → exit 1; lo demás → exit 0 (`inconclusive` avisa). Los **errores de request** mandan: en rondas del agente → `fail`; solo en baseline → `inconclusive` (nunca `pass` con datos rotos). El informe desglosa los errores por código (`502×3, timeout×86`).
-- **Informe**: `bench-report.json` y tabla Markdown por stdout. Ya no va a `$GITHUB_STEP_SUMMARY`: desde el ADR 0032 esto no corre en CI.
+- **Open loop**: requests go out at a fixed rate regardless of how long the server takes, and latency is measured from the *scheduled* instant of sending. A server falling behind appears as a queue; it does not hide behind a slower client.
+- **The same traffic**: the sequence of endpoints and ids comes from a seed; both variants receive exactly the same requests.
+- **Alternating rounds** B/A/B/A/B/A, each in a fresh process, so that the machine's noise is spread across variants.
+- **A warm-up that ends clean**: each round takes load one second per slice until it strings together `--warmup` seconds with no failed request (3 by default), capped by `--warmup-max` (30). A cold database is waited for, not measured. If the app never gets clean, the bench ends: `inconclusive` if it was the baseline round, `fail` if it was the agent's, and the reason includes the first error lines the app itself wrote to stderr. The reference app simulates that cold start with `STARTUP_FAILURE_MS`.
+- **Latency**: p99 over **all the pooled samples** of each variant (5 × 2400 → ~120 values decide the p99). The **noise** is the larger of two estimates (ADR 0010): the halves one (shuffle the baseline with a seed, split in two, |p99(A) − p99(B)|, maximum of 20 repetitions), which measures sampling variability, and the **spread between rounds** of the baseline (max − min of its p99s), which measures the drift of the machine; the report says which one ruled. On top of that, a latency `fail` demands **corroboration**: most of the agent's rounds have to show at least half of the pooled difference, so that an isolated stall does not bring down the verdict. **CPU and RSS**: median per round and noise as max − min.
+- **What it was measured against**: every round reads the CPU of **the whole machine** during its window and subtracts that of everything the benchmark runs —the application being measured and its own process, which carries the load generator and the sink—; what is left is the **foreign CPU**, in the same unit as `cpuPct` (100 = one core). Rounds alternate so that each pair sees the same machine, so what invalidates a comparison is not that there were neighbours —on a shared machine there never are none— but that there were **different neighbours in each half of the pair**: above twenty points of difference, that metric comes out `inconclusive` naming the round (ADR 0031). It never turns a `fail` into an `inconclusive`, and where the host CPU cannot be read it reports «?» without degrading anything: not knowing is not measuring quiet.
+- **Verdict** per metric: `ok` if Δ ≤ budget; `fail` if **Δ − budget > noise**; `inconclusive` if Δ > budget but the excess does not exceed the noise — the machine cannot resolve the budget. What has to exceed the noise is the **margin**, not Δ (ADR 0030): comparing Δ with the noise answers "does the overhead exist?", which is not what a budget asks, and for CPU it was always satisfied. The table prints the margin in its own column, because it is the number the result depends on. `fail` → exit 1; anything else → exit 0 (`inconclusive` warns). **Request errors** rule: in the agent's rounds → `fail`; in the baseline only → `inconclusive` (never a `pass` on broken data). The report breaks the errors down by code (`502×3, timeout×86`).
+- **Report**: `bench-report.json` and a Markdown table on stdout. It no longer goes to `$GITHUB_STEP_SUMMARY`: since ADR 0032 this does not run in CI.
 
-### Qué cuesta cada observador
+### What each observer costs
 
-`make bench-instruments` mide el coste de cada observador **por separado**, ejecutando el benchmark una vez por configuración: sin nada, y luego añadiendo runtime, Postgres, HTTP saliente y Redis uno a uno. La columna marginal es la diferencia con la fila anterior, es decir, lo que cuesta ese observador solo.
+`make bench-instruments` measures the cost of each observer **separately**, running the benchmark once per configuration: with nothing, and then adding runtime, Postgres, outgoing HTTP and Redis one at a time. The marginal column is the difference from the row above, that is, what that observer alone costs.
 
-El presupuesto del invariante 3 es un número para el agente entero, así que cuando empiece a apretar la única pregunta útil será cuál pagar y cuál no, y eso no se responde con un total.
+The budget of invariant 3 is one number for the whole agent, so when it starts to bite the only useful question will be which one to pay for and which not, and that is not answered with a total.
 
-Cada paso compara **dos configuraciones del agente cara a cara**, no cada una contra el vacío: medir por separado y restar diferencia dos mediciones independientes y duplica la incertidumbre. La comparación es **pareada ronda a ronda**, porque las rondas se alternan en el tiempo y cada par vio la misma máquina. Que una fila sea una medición o la máquina teniendo un mal rato lo decide un **test de permutación** sobre los signos de esas diferencias —bajo la hipótesis de que el observador no cuesta nada, cuál de los dos lados salió más alto es una moneda al aire—: exacto hasta 20 rondas enumerando las 2ⁿ reasignaciones, muestreado con la semilla por encima. No supone normalidad, que las diferencias de un benchmark no tienen. El nivel es 0,05 **repartido entre las comparaciones de la tirada** (Bonferroni, ADR 0027), porque con cinco comparaciones a la vez que una salga resuelta por azar deja de ser improbable. Con cinco pasos la puerta es 0,01, y como el p más pequeño que alcanzan n diferencias es 2/2ⁿ, hacen falta **al menos ocho rondas** para que algo pueda resolverse: por eso ese es el valor por defecto, y por eso la herramienta aborta antes de gastar la máquina si le pides menos. Donde la tabla dice que no se resuelve, la máquina no ha medido ese observador y el número no significa nada. El informe imprime además **las diferencias por ronda**, para que la siguiente duda se resuelva releyendo y no midiendo.
+Each step compares **two configurations of the agent head to head**, not each one against nothing: measuring separately and subtracting differences two independent measurements and doubles the uncertainty. The comparison is **paired round by round**, because the rounds alternate in time and each pair saw the same machine. Whether a row is a measurement or the machine having a bad moment is decided by a **permutation test** over the signs of those differences —under the hypothesis that the observer costs nothing, which of the two sides came out higher is a coin toss—: exact up to 20 rounds by enumerating the 2ⁿ reassignments, sampled with the seed above that. It assumes no normality, which the differences of a benchmark do not have. The level is 0.05 **split across the comparisons of the run** (Bonferroni, ADR 0027), because with five comparisons at once, one of them coming out resolved by chance stops being improbable. With five steps the gate is 0.01, and since the smallest p that n differences can reach is 2/2ⁿ, **at least eight rounds** are needed for anything to be resolvable: that is why that is the default, and why the tool aborts before spending the machine if you ask for fewer. Where the table says something does not resolve, the machine has not measured that observer and the number means nothing. The report also prints **the differences per round**, so that the next doubt is resolved by re-reading and not by measuring.
 
-**Ninguna cifra publicada de este reparto es citable.** Las tiradas anteriores al ADR 0027 usaban una puerta que no aguantaba sus propias comparaciones, y rehaciendo la aritmética sobre ellas no se resuelve ninguna fila (gh-187). Lo que sí está medido, en un banco controlado y no aquí, es que el agente sin ningún observador cuesta unos 2,4 µs de CPU por request —el 1,6 % del presupuesto a 200 rps— (gh-171). El reparto por observador vuelve a tener cifras cuando se ejecute bajo la puerta nueva en una máquina tranquila.
+**No published figure of this breakdown is citable.** The runs before ADR 0027 used a gate that did not hold up its own comparisons, and redoing the arithmetic over them resolves no row at all (gh-187). What is measured, on a controlled bench and not here, is that the agent with no observers at all costs about 2.4 µs of CPU per request —1.6 % of the budget at 200 rps— (gh-171). The per-observer breakdown gets figures again when it is run under the new gate on a quiet machine.
 
-No corre en CI: es una ejecución completa del benchmark por instrumento, y es una herramienta para decidir, no un guardarraíl.
+It does not run in CI: it is a full run of the benchmark per instrument, and it is a tool for deciding, not a guardrail.
 
-El presupuesto vive en `src/budget.ts`. `fixtures/slow-agent.ts` es un agente falso que retrasa 200 ms una de cada 50 requests (una regresión de cola, la que vigila el p99): prueba que el benchmark sabe fallar también en máquinas ruidosas.
+The budget lives in `src/budget.ts`. `fixtures/slow-agent.ts` is a fake agent that delays one request in every 50 by 200 ms (a tail regression, the kind the p99 watches): it proves that the benchmark knows how to fail on noisy machines too.
