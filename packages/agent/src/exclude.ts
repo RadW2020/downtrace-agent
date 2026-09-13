@@ -2,7 +2,7 @@
  * What the user asked not to be looked at.
  *
  * `product.md:104` gives the operator two controls over what leaves their server, and this is the first:
- * «el usuario puede excluir endpoints o dependencias completas». Excluding is **not observing** — the
+ * «the user can exclude endpoints or whole dependencies». Excluding is **not observing** — the
  * alternative, observing and then dropping, costs the same and buys nothing, because what the cloud needs
  * to know is *how many* are missing, and that is counted either way (gh-361, ADR 0101).
  *

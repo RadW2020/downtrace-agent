@@ -4,7 +4,7 @@ import { ErrorFingerprintCache, errorFingerprint, stackSignature } from "../src/
 import { meaningful, sanitizeMessage } from "../src/sanitize.ts";
 
 /**
- * `product.md:77`: «Errores y excepciones: **tipo, mensaje saneado, firma del stack**». The instrumentation
+ * `product.md:77`: «Errors and exceptions: type, sanitised message, stack signature**». The instrumentation
  * only ever counted them, which says how many and not which (gh-338, ADR 0083).
  */
 
@@ -122,8 +122,8 @@ describe("the signature", () => {
 });
 
 /**
- * `product.md:104`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
- * un mensaje de error que no encaja en los formatos conocidos viaja solo como tipo y firma, sin texto».
+ * `product.md:104`: «when something cannot be processed with guarantees, it is omitted rather than risked: (…) an
+ * error message that does not fit the known formats travels only as type and signature, without text».
  *
  * It is the only line of the document that says how the product behaves when it is not sure, and until
  * gh-343 it behaved the other way: it sent whatever survived (ADR 0084).

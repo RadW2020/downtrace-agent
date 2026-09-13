@@ -6,7 +6,7 @@ import { FineRegister } from "../src/fine.ts";
 import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
 
 /**
- * `product.md:241`: «si detecta que ella misma añade latencia, **se autolimita**». Two words carry it:
+ * `product.md:241`: «if it detects that it is itself adding latency, it throttles itself**». Two words carry it:
  * *detects* needs a measurement that did not exist, and *self-limits* needs somewhere to give ground that is
  * not the product itself (gh-271, ADR 0080).
  */
@@ -176,8 +176,8 @@ describe("giving ground", () => {
     expect(m.m.state().shed).toBe(Sheddable.Nothing);
   });
 
-  // The fourth promise of `product.md:241`, which shares the machinery: «si se acerca a su presupuesto de
-  // memoria, reduce la ventana de detalle y **lo registra como pérdida de cobertura**».
+  // The fourth promise of `product.md:241`, which shares the machinery: «if it approaches its memory budget, it
+  // reduces the detail window and records it as a loss of coverage**».
   it("gives up the detail for memory too, with its own reason", () => {
     const { m } = meter(0.001);
     m.shedForMemory();

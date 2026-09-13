@@ -100,7 +100,7 @@ export interface CapturedOperation {
   endMs: number;
 }
 /**
- * A few requests of each endpoint kept as something to compare the captured ones against. `product.md:100`: «Comparar requests degradadas con requests de referencia exige conservar ambas; el detalle fino de hace una hora ya no existe». Being earlier does not certify health, which is why every field here is about how they were chosen and none of them says «healthy».
+ * A few requests of each endpoint kept as something to compare the captured ones against. `product.md:100`: «Comparing degraded requests against reference requests requires keeping both; the fine detail of an hour ago no longer exists». Being earlier does not certify health, which is why every field here is about how they were chosen and none of them says «healthy».
  */
 export interface ReferenceSamples {
   /**

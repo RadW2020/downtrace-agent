@@ -43,8 +43,8 @@ const SHUTDOWN_FLUSH_MS = 1_000;
 /**
  * When the two registers together get this close to their budgets, the detail goes first.
  *
- * `product.md:241`: «si se acerca a su presupuesto de memoria, reduce la ventana de detalle y lo registra
- * como pérdida de cobertura». Three of the sixty-four mebibytes invariant 3 allows, which is what the two
+ * `product.md:241`: «if it approaches its memory budget, it reduces the detail window and records it as a loss of
+ * coverage». Three of the sixty-four mebibytes invariant 3 allows, which is what the two
  * registers reserve between them (ADR 0067, 0068); this trips at four fifths of it.
  */
 const MEMORY_HIGH_WATER_BYTES = Math.floor(3 * 1024 * 1024 * 0.8);
@@ -90,7 +90,7 @@ export interface AgentStats {
   disabled: boolean;
   /**
    * What the instrumentation has given up because it was costing too much, and why. `product.md:241` asks
-   * for both: «se autolimita» and «lo registra como pérdida de cobertura» (gh-271).
+   * for both: «it throttles itself» and «records it as a loss of coverage» (gh-271).
    */
   shed: SheddableLevel;
   shedReason: string;
@@ -412,8 +412,8 @@ export class Agent {
   /**
    * Freezes what the black box holds for each capture whose window closed, and sends it.
    *
-   * A capture that saw nothing sends **empty** evidence and not silence: «una captura sin requests no
-   * prueba recuperación» (CAP-01), and the cloud already knows how to answer that. Failures are logged and
+   * A capture that saw nothing sends **empty** evidence and not silence: «a capture with no requests does not prove
+   * recovery» (CAP-01), and the cloud already knows how to answer that. Failures are logged and
    * dropped — a `409` is another instance having been quicker, and nothing here is worth retrying after its
    * window has closed (gh-379).
    */
@@ -466,8 +466,8 @@ export class Agent {
   /**
    * The samples a capture carries, with how they were chosen.
    *
-   * `product.md:100`: «Cada muestra identifica su referencia y cómo se seleccionó; ser anterior no
-   * acredita salud». The second half is the cloud's to say; the first is this (gh-307).
+   * `product.md:100`: «Every sample identifies its reference and how it was selected; being earlier does not certify
+   * health». The second half is the cloud's to say; the first is this (gh-307).
    */
   private referenceFor(): NonNullable<CaptureEvidence["reference"]> {
     const snapshot = this.reference.snapshot();
@@ -503,7 +503,7 @@ export class Agent {
   /**
    * What this instrumentation costs and what it has lost, for the next batch.
    *
-   * `product.md:239` asks for it by name —«recursos internos medidos»— and the reason it matters is one
+   * `product.md:239` asks for it by name —«measured internal resources»— and the reason it matters is one
    * distinction: a cloud that sees nothing has to be able to tell «nothing happened» from «this
    * instrumentation has been throwing batches away» (invariant 14).
    *

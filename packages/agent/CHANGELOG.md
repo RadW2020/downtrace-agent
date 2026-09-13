@@ -59,8 +59,7 @@
   rather than a comment claiming it.
 - ac19643: Errors get an identity, not just a tally.
   
-  `product.md` asks the instrumentation to observe «errores y excepciones: tipo, mensaje saneado, firma del
-  stack», and it only ever counted them. A Postgres query that fails now records an `error` operation beside
+  `product.md` asks the instrumentation to observe «errors and exceptions: type, sanitised message, stack signature», and it only ever counted them. A Postgres query that fails now records an `error` operation beside
   its `query` one, with the type, the sanitised message and the top frames of the stack — file and line kept,
   directory dropped.
   
@@ -138,7 +137,7 @@
   service that does not use Redis and one that uses it unwatched look identical (COB-01, invariant 14).
 - ddaedc1: The instrumentation measures what it costs while it runs, and gives ground when it costs too much.
   
-  `product.md:241` promised «si detecta que ella misma añade latencia, se autolimita» and nothing measured the
+  `product.md:241` promised «if it detects that it is itself adding latency, it throttles itself» and nothing measured the
   time spent in the hooks. Now one hook in sixty-four is timed — the others cost an increment and a comparison,
   because measuring the cost cannot be the cost — and when the estimate crosses half of what invariant 3 allows,
   the fine detail goes first, then the profile, and never the aggregate. `AgentStats` gains `shed`,

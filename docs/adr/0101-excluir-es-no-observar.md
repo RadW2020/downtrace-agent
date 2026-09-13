@@ -4,8 +4,8 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto
 
-`product.md:104` da al operador dos controles sobre lo que sale de su servidor. Éste es el primero: «el
-usuario puede excluir endpoints o dependencias completas». El otro —el modo mínimo— necesita decidir qué
+`product.md:104` da al operador dos controles sobre lo que sale de su servidor. Éste es el primero: «the user can
+exclude endpoints or whole dependencies». El otro —el modo mínimo— necesita decidir qué
 enseña una ruta sin nombre, y es el gh-367.
 
 El cloud ya sabe leerlo desde el gh-360: un lote declara **cuántos** endpoints y dependencias retiene su

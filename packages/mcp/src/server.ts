@@ -5,8 +5,8 @@ import { type Tool, toolNamed, tools } from "./tools.ts";
 /**
  * Downtrace as tools a coding agent can discover and use.
  *
- * `product.md:196`: «un exportador de informes no la satisface: un agente debe poder **operar** el producto,
- * no solo leer lo que otro extrajo». So the operations are here too, with the same permissions, attribution
+ * `product.md:196`: «a report exporter does not satisfy it: an agent must be able to operate the product, not only
+ * read what somebody else extracted». So the operations are here too, with the same permissions, attribution
  * and idempotency they have over HTTP — this server is a client of the public API and gets no shortcut
  * (ADR 0078, gh-281).
  */

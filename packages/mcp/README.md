@@ -2,7 +2,7 @@
 
 Downtrace as tools a coding agent can discover and use: the queries and the operations, over MCP.
 
-`product.md` is explicit that this is not an optional integration — «un producto que solo pudiera operarse desde la interfaz fallaría a la mitad de sus usuarios» — and that reading is not enough: «un exportador de informes no la satisface: un agente debe poder **operar** el producto».
+`product.md` is explicit that this is not an optional integration — «a product that could only be operated from the interface would fail half of its users» — and that reading is not enough: «a report exporter does not satisfy it: an agent must be able to operate the product».
 
 ## Running it
 

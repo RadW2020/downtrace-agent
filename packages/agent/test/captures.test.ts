@@ -128,7 +128,7 @@ describe("what one capture saw", () => {
   });
 
   it("is an answer even when nothing ran", () => {
-    // «Una captura sin requests no prueba recuperación» (CAP-01): empty evidence is a result, silence is not.
+    // «A capture with no requests does not prove recovery» (CAP-01): empty evidence is a result, silence is not.
     const slice = sliceFor(live(), snapshot([]), (route) => route, null);
     expect(slice.requests).toEqual([]);
     expect(slice.observedRequests).toBe(0);

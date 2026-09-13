@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { EVENT_LOOP_DELAY, LocalTriggers, SUSTAINED_INTERVALS, THRESHOLD_MS } from "../src/trigger.ts";
 
 /**
- * The local signal that asks for a capture. `product.md:124` gives this to the instrumentation —«disparar
- * por señales locales»— and `product.md:114` says what kind of signal it is: an absolute threshold,
+ * The local signal that asks for a capture. `product.md:124` gives this to the instrumentation —«trigger on local
+ * signals»— and `product.md:114` says what kind of signal it is: an absolute threshold,
  * **sustained**, not a spike.
  */
 
@@ -40,7 +40,7 @@ describe("the local trigger", () => {
   });
 
   it("does not ask again while it is cooling down, however long the signal lasts", () => {
-    // «Tras una captura hay un periodo de enfriamiento para la misma huella» (`product.md:122`). Here it
+    // «After a capture there is a cooldown period for the same fingerprint» (`product.md:122`). Here it
     // is local, because a signal that lasts ten minutes would otherwise ask on every interval.
     const t = new LocalTriggers();
     let asks = 0;

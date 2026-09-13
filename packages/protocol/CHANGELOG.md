@@ -59,7 +59,7 @@
 - 82b845a: An operation may carry a `class` — `select`, `insert`, `update`, `delete`, `other` — and never together with
   a `text`.
   
-  `product.md` says a query the normaliser does not understand travels «solo como hash y clase», and without
+  `product.md` says a query the normaliser does not understand travels «only as hash and class», and without
   the class an omitted text is indistinguishable from one the user chose to suppress. Its presence is the
   reason the text is absent, so no separate flag is needed; the two together are rejected, being two answers to
   one question.

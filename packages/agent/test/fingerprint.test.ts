@@ -175,8 +175,8 @@ describe("normalizeQuery, against literals that try to survive", () => {
   });
 });
 
-// `product.md:104`: «cuando algo no puede procesarse con garantías, se omite en lugar de arriesgarse: una
-// consulta que el normalizador no entiende viaja solo como hash y clase» (gh-347).
+// `product.md:104`: «when something cannot be processed with guarantees, it is omitted rather than risked: a query
+// the normaliser does not understand travels only as hash and class» (gh-347).
 describe("a query the scanner does not understand", () => {
   const understood = (sql: string) => fingerprintOf(sql).class === undefined;
 

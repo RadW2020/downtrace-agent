@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto
 
-`product.md:104` promete un **modo mínimo** «en el que ningún texto libre sale del servidor». La plantilla
+`product.md:104` promete a minimal mode in which no free text leaves the server». La plantilla
 de ruta es texto libre del servidor del usuario **y** es la mitad de la identidad de un endpoint: el cloud
 agrupa por (método, ruta) y el esquema la exige con `minLength: 1`. Así que algo tiene que viajar, y ese
 algo es un hash.

@@ -4,12 +4,11 @@ Estado: aceptado · Fecha: 2026-09-11 · Alcance: público
 
 ## Contexto
 
-`product.md:262` pone en la primera versión «redacción de la narración y propuesta de hipótesis marcadas,
-con plantilla de reserva». La plantilla existe y va primero a propósito (ADR 0079). Faltaba el modelo.
+`product.md:262` pone en la primera versión «Writing the narration and proposing marked hypotheses, with a fallback
+template». La plantilla existe y va primero a propósito (ADR 0079). Faltaba el modelo.
 
-Y `product.md:174` pone el límite: un modelo «puede redactar la narración a partir del informe (…) **No
-puede producir métricas**, cambiar el estado de una hipótesis ni convertir una correlación en causa
-confirmada». Un producto cuyo trabajo es no afirmar de más no puede cumplir esa frase pidiéndosela a un
+Y `product.md:174` pone el límite: un modelo «may write the narration from the report (…) It cannot produce metrics,
+change the state of a hypothesis or turn a correlation into a confirmed cause». Un producto cuyo trabajo es no afirmar de más no puede cumplir esa frase pidiéndosela a un
 modelo.
 
 ## Decisión
@@ -43,8 +42,7 @@ narración dentro, un modelo que fallara una vez cambiaría la versión de un in
 movido, y una operación que llevara la anterior se rechazaría sin motivo.
 
 **Sin clave no hay cliente.** `narrate.New` devuelve nil, y nil significa que no hay modelo. Es el estado
-por defecto de este cloud y lo que hace cierto `product.md:63`: «los resultados no dependen de un modelo
-de lenguaje».
+por defecto de este cloud y lo que hace cierto `product.md:63`: «the results do not depend on a language model».
 
 ## Alternativas
 

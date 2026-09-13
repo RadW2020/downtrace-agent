@@ -5,9 +5,8 @@ Estado: aceptado · Fecha: 2026-09-11 · Alcance: público
 ## Contexto
 
 El ADR 0115 dejó al modelo redactando la narración, con su salida verificada cifra a cifra contra el
-informe. `product.md:174` le permite una segunda cosa: «proponer hipótesis que las reglas no
-contemplaban, **marcadas como propuestas por el modelo y en estado *no evaluada*** hasta que las reglas
-las contrasten con la evidencia», y le prohíbe tres: producir métricas, cambiar el estado de una
+informe. `product.md:174` le permite una segunda cosa: «propose hypotheses the rules did not consider, marked as
+proposed by the model and in the *not evaluated* state until the rules check them against the evidence», y le prohíbe tres: producir métricas, cambiar el estado de una
 hipótesis y convertir una correlación en causa confirmada.
 
 La verificación de la narración no sirve aquí. Una cifra del texto se ata a un campo del informe porque

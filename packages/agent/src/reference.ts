@@ -1,11 +1,10 @@
 /**
  * The third register of the black box: a few requests per endpoint, kept as something to compare against.
  *
- * `product.md:100` is the whole of it: «Comparar requests degradadas con requests de referencia exige
- * conservar ambas; el detalle fino de hace una hora ya no existe. Por eso la instrumentación conserva,
- * por endpoint y versión, un pequeño número acotado de requests representativas de la referencia
- * utilizada (…) Cada muestra identifica su referencia y **cómo se seleccionó**; ser anterior no acredita
- * salud».
+ * `product.md:100` is the whole of it: «Comparing degraded requests against reference requests requires keeping
+ * both; the fine detail of an hour ago no longer exists. That is why the instrumentation keeps, per endpoint and
+ * version, a small bounded number of requests representative of the reference in use (…) Every sample identifies its
+ * reference and how it was selected; being earlier does not certify health».
  *
  * The selection is the whole design. Keeping the fastest requests would bias every later comparison —any
  * degradation would look worse than it is— and keeping the last ones is cheap and can land on a strange

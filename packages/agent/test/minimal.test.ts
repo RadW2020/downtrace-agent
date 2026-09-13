@@ -80,7 +80,7 @@ async function bodyOf(over: Partial<AgentConfig>): Promise<string> {
 }
 
 /**
- * `product.md:104`: «un modo mínimo en el que **ningún texto libre sale del servidor**».
+ * `product.md:104`: «a minimal mode in which no free text leaves the server**».
  *
  * What counts as free text was decided by inventory rather than by memory — every string a real batch
  * carries, sorted into what the operator wrote and what is ours — and this asks the question of the bytes

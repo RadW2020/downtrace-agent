@@ -8,8 +8,7 @@ El canal de control iba en una sola dirección: el cloud pedía capturas y la in
 (ADR 0071, 0098, 0073). El único origen vivo era *pedida*, por una persona. Los otros dos estaban
 reservados en la tabla desde el principio y nadie los escribía.
 
-`product.md:124` reparte el trabajo al revés de como estaba: la instrumentación «dispara por señales
-locales». Y tiene la información: un proceso cuyo event loop va tarde lo sabe mucho antes de que ningún
+`product.md:124` reparte el trabajo al revés de como estaba: la instrumentación «triggers on local signals». Y tiene la información: un proceso cuyo event loop va tarde lo sabe mucho antes de que ningún
 agregado cruce la red, y para cuando el cloud pudiera notarlo el detalle que lo explicaría está
 sobrescrito. El registro fino guarda decenas de segundos.
 
@@ -28,8 +27,8 @@ un intervalo malo entre dos buenos es un pico. Un intervalo bueno reinicia la cu
 
 **La huella de una señal de proceso es el entorno y el disparador, sin ruta.** El event loop no es de
 ninguna ruta, y nombrar la más ocupada sería atribuirle un problema que nadie ha medido (ATR-01). Eso
-obliga a que el disparador sea una columna de la huella, que es lo que `product.md:122` ya decía —«se
-deduplican por huella (endpoint, **tipo de disparador**, dependencia implicada)»— y que hasta ahora
+obliga a que el disparador sea una columna de la huella, que es lo que `product.md:122` ya decía —«are deduplicated by
+fingerprint (endpoint, trigger type, dependency involved))»— y que hasta ahora
 sobraba porque todas las capturas las pedía una persona.
 
 **Un rechazo es silencio.** No hay canal para decirle que no a una instrumentación y no haría nada
@@ -60,8 +59,8 @@ impedir.
 
 ## Consecuencias
 
-- CAP-01 sale de la lista de compromisos sin cubrir: 21 de 24. La cláusula que faltaba —«una captura
-  solicitada compite por el mismo presupuesto que las automáticas»— tiene ahora las dos mitades y un test
+- CAP-01 sale de la lista de compromisos sin cubrir: 21 de 24. La cláusula que faltaba —«a requested capture competes
+for the same budget as the automatic ones»— tiene ahora las dos mitades y un test
   en el store que las hace competir.
 - Una captura automática es de entorno, así que su evidencia es el registro entero. Es lo que se quiere
   cuando el event loop está bloqueado: lo interesante es el proceso, no una ruta. Está acotada por el

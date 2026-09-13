@@ -7,8 +7,8 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 `product.md:104` es la única línea del documento que dice **cómo se comporta el producto cuando no está
 seguro**:
 
-> Cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: una consulta que el
-> normalizador no entiende viaja solo como hash y clase; un mensaje de error que no encaja en los formatos
+> Cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**:  a query the normaliser does
+> not understand travels only as hash and class; un mensaje de error que no encaja en los formatos
 > conocidos viaja solo como tipo y firma, **sin texto**.
 
 El ADR 0083 añadió las firmas de error y **siempre mandaba el mensaje saneado**. Hasta aquí el producto se

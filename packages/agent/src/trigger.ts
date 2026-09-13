@@ -1,7 +1,7 @@
 /**
  * The local signals that ask for a capture.
  *
- * `product.md:124` splits the work: the instrumentation «dispara por señales locales», the cloud does
+ * `product.md:124` splits the work: the instrumentation «triggers on local signals», the cloud does
  * what needs to see the whole fleet. This is the first half — a process whose event loop is running late
  * knows it long before any aggregate crosses the network, and by the time the cloud could notice, the
  * detail that would explain it has been overwritten.
@@ -10,9 +10,8 @@
  * the same budget, cooldown and concurrency as any other capture (`product.md:122`). A refusal is
  * silence, because there is nothing this side would do differently.
  *
- * The shape of the rule comes from `product.md:114`: «Los que usan umbrales absolutos pueden evaluar
- * desde las primeras observaciones suficientes: timeouts de una dependencia, espera de pool o retraso
- * del event loop **sostenidos** por encima del umbral».
+ * The shape of the rule comes from `product.md:114`: «Those using absolute thresholds can evaluate from the first
+ * sufficient observations: dependency timeouts, pool wait or event loop delay sustained above the threshold».
  */
 
 import type { LocalTrigger, RuntimeHealth } from "@downtrace/protocol";

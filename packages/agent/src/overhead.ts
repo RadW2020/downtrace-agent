@@ -1,7 +1,7 @@
 /**
  * What the instrumentation costs, measured while it runs — and what it gives up when it costs too much.
  *
- * `product.md:241`: «si detecta que ella misma añade latencia, **se autolimita**». Two words carry the whole
+ * `product.md:241`: «if it detects that it is itself adding latency, it throttles itself**». Two words carry the whole
  * design: *detects* needs a measurement that did not exist, and *self-limits* needs somewhere to give ground
  * that is not the product itself (ADR 0080, gh-271).
  *

@@ -74,7 +74,7 @@ describe("the capture evidence schema", () => {
   });
 
   /**
-   * `product.md:100`: «Cada muestra identifica su referencia y **cómo se seleccionó**». A sample whose
+   * `product.md:100`: «Every sample identifies its reference and how it was selected**». A sample whose
    * selection nobody stated cannot support a comparison, so the field is required and its values are an
    * enum: a free string would let a sender write «representative» and mean anything (gh-307).
    */

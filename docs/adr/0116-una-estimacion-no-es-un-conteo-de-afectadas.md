@@ -10,10 +10,9 @@ requests con sus operaciones, filtrada por la huella que se pidió y con sus dos
 
 IMP-01 (`product.md:112`) dice qué se puede hacer con eso, y la parte difícil no es contar:
 
-> Solo llama *afectadas* a las requests que cumplen un criterio de degradación explícito y cuyo conteo
-> puede sostener con la evidencia disponible; **publica ese criterio, su denominador y la cobertura** (…)
-> Si el conteo procede de una muestra o de una aproximación, **se presenta como estimación con su método
-> y límites**; si no puede estimarse, queda desconocido.
+> It calls *affected* only the requests that meet an explicit degradation criterion and whose count it can sustain
+> with the available evidence; it publishes that criterion, its denominator and the coverage (…) If the count comes
+> from a sample or from an approximation, it is presented as an estimate with its method and limits**; si no puede estimarse, queda desconocido.
 
 ## Decisión
 

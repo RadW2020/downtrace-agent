@@ -4,8 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-285)
 
-`product.md:251`, fila de runtime: «Node.js | Go como segundo runtime; **el protocolo es independiente del
-lenguaje**». Casi lo era. `agent.runtime` es un enum de dos y nada más presupone el lenguaje, salvo
+`product.md:251`, fila de runtime: «Node.js | Go as a second runtime; the protocol is language-independent**». Casi lo era. `agent.runtime` es un enum de dos y nada más presupone el lenguaje, salvo
 `RuntimeHealth` — y peor de lo que el tiquet decía: no exigía `eventLoopDelayMs`, **exigía los seis campos**.
 
 Un runtime de Go tiene recolección de basura, montículo y conjunto residente. No tiene event loop. Con esa

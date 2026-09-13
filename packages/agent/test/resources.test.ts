@@ -7,8 +7,8 @@ import type { Logger } from "../src/log.ts";
 import { Sender } from "../src/transport.ts";
 
 /**
- * What the instrumentation says about itself. `product.md:239`: «La instrumentación mide y envía sus
- * propios recursos internos (…) Eso es lo que se ve en el estado del proyecto».
+ * What the instrumentation says about itself. `product.md:239`: «The instrumentation measures and sends its own
+ * internal resources (…) That is what is seen in the state of the project».
  *
  * The point of the numbers is one distinction: a cloud that sees nothing has to be able to tell «nothing
  * happened» from «this instrumentation has been throwing batches away for two hours» (invariant 14).

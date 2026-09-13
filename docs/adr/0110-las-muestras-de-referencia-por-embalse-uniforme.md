@@ -4,12 +4,11 @@ Estado: aceptado · Fecha: 2026-09-11 · Alcance: público
 
 ## Contexto
 
-`product.md:100`: «Comparar requests degradadas con requests de referencia exige conservar ambas; el
-detalle fino de hace una hora ya no existe. Por eso la instrumentación conserva, por endpoint y versión,
-un pequeño número acotado de requests representativas de la referencia utilizada, renovadas sin
-incorporar automáticamente el comportamiento de un incidente abierto (REF-01), que viajan con cada
-captura (…) Cada muestra identifica su referencia y **cómo se seleccionó**; ser anterior no acredita
-salud».
+`product.md:100`: «Comparing degraded requests against reference requests requires keeping both; the fine detail of
+an hour ago no longer exists. That is why the instrumentation keeps, per endpoint and version, a small bounded number
+of requests representative of the reference in use, renewed without automatically incorporating the behaviour of an
+open incident (REF-01), which travel with every capture (…) Every sample identifies its reference and how it was
+selected; being earlier does not certify health».
 
 La captura ya trae el detalle de lo que va mal (gh-398) y el cloud ya lo lee y atribuye (gh-403). Lo que
 falta es contra qué comparar. Y el criterio de selección no es un detalle de implementación: es lo que
@@ -60,8 +59,8 @@ algo que la instrumentación ya puede deducir de lo que le piden.
 - El modo mínimo alcanza a las muestras: la ruta sale retenida por la misma función que el resto (ADR
   0105).
 - El cloud las guarda tal como llegan y **no las re-describe**: las enseña bajo `fromService` —cada
-  muestra lleva una ruta que escribió el servicio— con la frase que el producto exige, que ser anterior no
-  acredita salud.
+  muestra lleva una ruta que escribió el servicio— con la frase que el producto exige, que being earlier does not
+certify health.
 - Lo que no se hace todavía: comparar las muestras con las requests capturadas. La atribución ya sabe
   medir las dos (ADR 0109); publicar la comparación es decidir un método de poblaciones, y eso es otro
   tiquet.

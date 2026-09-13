@@ -1,8 +1,8 @@
 /**
  * The reserve a prearmed route keeps for itself.
  *
- * `product.md:102` promises that a soft signal makes the instrumentation «deja de sobrescribir el detalle fino
- * del endpoint afectado y extiende su ventana». For that to mean anything there has to be a level below the
+ * `product.md:102` promises that a soft signal makes the instrumentation «it stops overwriting the fine detail of
+ * the affected endpoint and extends its window». For that to mean anything there has to be a level below the
  * maximum, and there is not: `FineRegister` is **one global ring with one cursor** (`fine.ts`), so under load a
  * route's detail disappears under the traffic of every other route — and not because anything was shed, since
  * the `OverheadMeter` only gives up detail for its own cost, never for volume.

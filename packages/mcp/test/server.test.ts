@@ -5,7 +5,7 @@ import { createServer, PROTOCOL_VERSION, SERVER_NAME } from "../src/server.ts";
 import { tools } from "../src/tools.ts";
 
 /**
- * `product.md:196`: «un agente debe poder **operar** el producto, no solo leer lo que otro extrajo»
+ * `product.md:196`: «an agent must be able to operate the product, not only read what somebody else extracted»
  * (gh-281, ADR 0078).
  */
 

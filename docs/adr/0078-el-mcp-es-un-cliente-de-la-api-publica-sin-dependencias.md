@@ -4,10 +4,10 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-281)
 
-`product.md:260` pone «herramientas para agentes (por ejemplo MCP)» en la primera versión, y `product.md:264`
-lo saca explícitamente de lo que se posterga: «un producto que solo pudiera operarse desde la interfaz
-fallaría a la mitad de sus usuarios». `product.md:196` fija el listón: «un exportador de informes no la
-satisface: un agente debe poder **operar** el producto». No había ni una línea.
+`product.md:260` pone «agent tools (MCP, for example))» en la primera versión, y `product.md:264`
+lo saca explícitamente de lo que se posterga: «a product that could only be operated from the interface would fail
+half of its users». `product.md:196` fija el listón: «a report exporter does not satisfy it: an agent must be able to
+operate the product». No había ni una línea.
 
 El propio tiquet había puesto una condición —«el MCP se hace cuando la API cubra el recorrido»— y ya se
 cumple: con el gh-280 entró el tramo de investigar, que era el último.

@@ -4,9 +4,9 @@ Estado: aceptado · Fecha: 2026-09-11 · Alcance: público
 
 ## Contexto
 
-`product.md:239` promete que la instrumentación «mide y envía sus propios recursos internos: memoria de
-sus buffers, tiempo en sus hooks, lotes enviados, descartados y rechazados, evidencia perdida por
-presupuesto. **Eso es lo que se ve en el estado del proyecto**».
+`product.md:239` promete que la instrumentación «measures and sends its own internal resources: memory of its buffers,
+time in its hooks, batches sent, dropped and rejected, evidence lost to budget. That is what is seen in the state of
+the project**».
 
 Los medía —`AgentStats` los tenía todos— y no los mandaba. El punto ciego que eso deja es el peor que
 este producto puede tener: **el cloud no podía distinguir «no ha pasado nada» de «la instrumentación

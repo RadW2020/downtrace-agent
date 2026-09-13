@@ -4,7 +4,7 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto
 
-`product.md:104` promete un **modo mínimo** «en el que ningún texto libre sale del servidor». Antes de
+`product.md:104` promete a minimal mode in which no free text leaves the server». Antes de
 decidir qué apagar había que saber qué sale, y eso no se decide de memoria: con `DOWNTRACE_INSPECT` sobre
 la app de referencia se listó **cada cadena** que un lote lleva hoy y se ordenó por quién la escribió.
 

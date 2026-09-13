@@ -4,9 +4,8 @@ Estado: aceptado · Fecha: 2026-09-10 · Alcance: público
 
 ## Contexto (gh-271)
 
-`product.md:241` promete cuatro cosas y dos no existían: «si detecta que ella misma añade latencia, **se
-autolimita**» y «si se acerca a su presupuesto de memoria, **reduce la ventana de detalle** y lo registra
-como pérdida de cobertura».
+`product.md:241` promete cuatro cosas y dos no existían: «if it detects that it is itself adding latency, it throttles
+itself**» y «if it approaches its memory budget, it reduces the detail window and records it as a loss of coverage».
 
 Lo que había eran topes predimensionados —500 rutas, cola de 6, 1024 caracteres, desactivación al décimo
 error—, que es lo que pide el invariante 3 y **ninguno reacciona a nada**. Y nada medía lo que la

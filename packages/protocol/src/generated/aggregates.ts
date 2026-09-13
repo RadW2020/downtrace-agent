@@ -186,7 +186,7 @@ export interface AggregatesBatch {
    */
   exceptions?: ProcessException[];
   /**
-   * Local signals that ask for a capture. `product.md:124` gives the instrumentation «disparar por señales locales»: it sees a process in trouble before any aggregate crosses the cloud, and asking in the batch costs no channel of its own — the answer already carries the orders (ADR 0071). Absent from every sender that predates it and from every batch with nothing to ask. The cloud decides: the same budget, cooldown and concurrency as any other capture (`product.md:122`), and a refusal is silence, because there is nothing the instrumentation would do differently.
+   * Local signals that ask for a capture. `product.md:124` gives the instrumentation «trigger on local signals»: it sees a process in trouble before any aggregate crosses the cloud, and asking in the batch costs no channel of its own — the answer already carries the orders (ADR 0071). Absent from every sender that predates it and from every batch with nothing to ask. The cloud decides: the same budget, cooldown and concurrency as any other capture (`product.md:122`), and a refusal is silence, because there is nothing the instrumentation would do differently.
    *
    * @maxItems 4
    */
@@ -233,7 +233,7 @@ export interface Withholding {
   dependencies?: number;
 }
 /**
- * What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «recursos internos medidos».
+ * What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «measured internal resources».
  */
 export interface AgentResources {
   /**
@@ -261,7 +261,7 @@ export interface AgentResources {
    */
   hookMsPerRequest?: number;
   /**
-   * What the instrumentation has given up because it was costing too much, cheapest loss first. `product.md:241` asks for both halves —«se autolimita» and «lo registra como pérdida de cobertura»— and this is the second. An enum and not free text: it is ours, and it has to be comparable between senders.
+   * What the instrumentation has given up because it was costing too much, cheapest loss first. `product.md:241` asks for both halves —«it throttles itself» and «records it as a loss of coverage»— and this is the second. An enum and not free text: it is ours, and it has to be comparable between senders.
    */
   shed?: "nothing" | "fine" | "profile";
   /**
@@ -545,7 +545,7 @@ export interface Operation {
    */
   distinct?: number;
   /**
-   * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «solo como hash y clase», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
+   * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «only as hash and class», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
    */
   class?: "select" | "insert" | "update" | "delete" | "other";
 }
@@ -563,7 +563,7 @@ export interface CaptureProgress {
   startedAt: number;
 }
 /**
- * Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errores **y excepciones**», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).
+ * Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errors and exceptions**», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).
  */
 export interface ProcessException {
   /**

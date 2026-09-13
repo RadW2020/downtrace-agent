@@ -13,8 +13,8 @@
 /**
  * How much of a sanitised message has to still be words for it to be worth sending.
  *
- * `product.md:104`: «cuando algo no puede procesarse con garantías, **se omite en lugar de arriesgarse**: […]
- * un mensaje de error que no encaja en los formatos conocidos viaja solo como tipo y firma, sin texto».
+ * `product.md:104`: «when something cannot be processed with guarantees, it is omitted rather than risked: (…) an
+ * error message that does not fit the known formats travels only as type and signature, without text».
  *
  * There is no catalogue of «known formats» to check against, and there does not need to be one: the signal is
  * how much sense survives the sanitising. A message that comes out mostly `?` tells a reader nothing and only

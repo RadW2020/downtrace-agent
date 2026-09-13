@@ -4,7 +4,7 @@ import type { Fingerprint } from "./fingerprint.ts";
 /**
  * What the process threw outside any request, and how often.
  *
- * `product.md:77` asks for «errores **y excepciones**», and these are the second word: an exception nobody
+ * `product.md:77` asks for «errors and exceptions**», and these are the second word: an exception nobody
  * caught, and a promise rejected with no `catch`. They have no route — they happen outside a request's
  * life, or after it ended — so they travel on the batch and not in the profile (ADR 0102).
  *

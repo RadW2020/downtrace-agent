@@ -380,7 +380,7 @@ describe("agent v0 (integration)", () => {
   });
 
   // gh-409. The other direction of the control channel. `product.md:124` gives the instrumentation
-  // «disparar por señales locales»: a process whose event loop is running late knows it long before any
+  // «trigger on local signals»: a process whose event loop is running late knows it long before any
   // aggregate crosses the network, and by then the detail that would explain it has been overwritten.
   it("asks for a capture when a local signal stays over its threshold", async () => {
     const batches: AggregatesBatch[] = [];
@@ -420,9 +420,8 @@ describe("agent v0 (integration)", () => {
   });
 
   // gh-307. A capture used to arrive with the detail of what went wrong and nothing to compare it
-  // against. `product.md:100`: «la instrumentación conserva, por endpoint y versión, un pequeño número
-  // acotado de requests representativas de la referencia utilizada (…) Cada muestra identifica su
-  // referencia y cómo se seleccionó».
+  // against. `product.md:100`: «the instrumentation keeps, per endpoint and version, a small bounded number of
+  // requests representative of the reference in use (…) Every sample identifies its reference and how it was selected».
   it("sends reference samples with a capture, and says how they were chosen", async () => {
     const REQUEST_START = "http.server.request.start";
     const RESPONSE_FINISH = "http.server.response.finish";
@@ -634,7 +633,7 @@ describe("agent v0 (integration)", () => {
     const reporting = batches.filter((b) => b.captures !== undefined);
     expect(reporting).toHaveLength(1);
   });
-  // `product.md:104`: «el usuario puede excluir endpoints o dependencias completas». Excluding is not
+  // `product.md:104`: «the user can exclude endpoints or whole dependencies». Excluding is not
   // observing, and what is withheld is declared so that less arriving reads as a choice (gh-361, ADR 0101).
   it("does not observe an endpoint the operator excluded, and says how many", async () => {
     const sink = await startSink();

@@ -4,7 +4,7 @@ import { meaningful, sanitizeMessage } from "./sanitize.ts";
 /**
  * Turns a thrown thing into what it *is*, without what it was *about*.
  *
- * `product.md:77` asks for three things — «tipo, mensaje saneado, firma del stack» — and the instrumentation
+ * `product.md:77` asks for three things — «type, sanitised message, stack signature» — and the instrumentation
  * only ever counted errors. Counting says how many; this says which, which is the difference between «this
  * route started failing» and «this route started throwing **this**» (gh-338).
  *
