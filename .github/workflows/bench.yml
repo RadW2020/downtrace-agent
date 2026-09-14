@@ -33,6 +33,9 @@ on:
       - "packages/bench/**"
       - "packages/reference-app/**"
       - "pnpm-lock.yaml"
+      # Changing how it measures is a reason to measure again. This is the path the file has in the
+      # mirror, where it runs; its source lives in the monorepo under .github/mirror/.
+      - ".github/workflows/bench.yml"
 
 concurrency:
   # Two benchmarks measuring at the same time would measure each other. Never cancelled: a half-run measurement
