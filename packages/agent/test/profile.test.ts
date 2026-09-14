@@ -268,3 +268,41 @@ describe("ProfileAggregator, with the text suppressed", () => {
     expect(stripText(bare)).toEqual(stripText(labelled));
   });
 });
+
+describe("the window a profile stays open", () => {
+  const op = (hash: string): OperationWork => ({
+    kind: "query",
+    hash,
+    text: "SELECT 1",
+    count: 1,
+    totalMs: 1,
+    errors: 0,
+  });
+
+  // The cadence is production's unless somebody shortened it, and shortening it is the whole point of gh-565:
+  // the profile is what the report's diff compares, and two windows that never close inside a test leave the
+  // diff out of reach of any end-to-end walk.
+  it("rotates on the window it was given and not on the default minute", () => {
+    let at = 1_000_000;
+    const p = new ProfileAggregator({ now: () => at, windowMs: 2_000 });
+    p.record("GET", "/orders", [op("h1")]);
+
+    at += 1_999;
+    expect(p.rotate(), "closed before its window was up").toBeNull();
+    at += 1;
+    const profile = p.rotate();
+    expect(profile, "did not close when its window was up").not.toBeNull();
+    expect(profile?.endpoints[0]?.route).toBe("/orders");
+  });
+
+  // And with nothing said, nothing changes: a minute, which is what ADR 0017 fixed and what production runs on.
+  it("is a minute when none is given", () => {
+    let at = 1_000_000;
+    const p = new ProfileAggregator({ now: () => at });
+    p.record("GET", "/orders", [op("h1")]);
+    at += PROFILE_WINDOW_MS - 1;
+    expect(p.rotate()).toBeNull();
+    at += 1;
+    expect(p.rotate()).not.toBeNull();
+  });
+});

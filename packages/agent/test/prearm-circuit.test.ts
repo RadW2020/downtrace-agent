@@ -6,6 +6,7 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, dependencyKey, recordCall, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import { PrearmRegister } from "../src/prearm.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 /**
  * The wire between the two halves of prearming, which was cut.
@@ -112,6 +113,7 @@ describe("what the agent puts in the reserve", () => {
         inspect: undefined,
         debug: false,
         intervalMs: 60_000,
+        profileMs: PROFILE_WINDOW_MS,
         // `http` and not an empty set: a request context is only opened when something is going to record
         // into it, and without one there is no detail to put in the reserve. Instrumenting outgoing HTTP
         // subscribes to channels and patches nothing, so it costs this test nothing.

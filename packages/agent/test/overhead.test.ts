@@ -4,6 +4,7 @@ import { createAgent } from "../src/agent.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 /**
  * `product.md:241`: «if it detects that it is itself adding latency, it throttles itself». Two words carry it:
@@ -26,6 +27,7 @@ const config = () => ({
   inspect: undefined,
   debug: false,
   intervalMs: 60_000,
+  profileMs: PROFILE_WINDOW_MS,
   instrument: new Set<never>(),
 });
 

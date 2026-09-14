@@ -11,7 +11,11 @@ import { type Method, OTHER_ROUTE } from "./routes.ts";
  * (ADR 0017, invariant 8).
  */
 
-/** One minute, the cadence the ADR fixed. */
+/**
+ * One minute, the cadence the ADR fixed, and the default a process runs on. `DOWNTRACE_PROFILE_MS` can shorten
+ * it for a process that has to be observed in less time than that; the number here is what production uses and
+ * ADR 0017 still holds it (gh-565).
+ */
 export const PROFILE_WINDOW_MS = 60_000;
 
 /** Fingerprints kept per endpoint. Plus the bucket, this is the schema's `maxItems: 64`. */
@@ -22,6 +26,8 @@ export const OTHER_OPERATION = "(other)";
 
 export interface ProfileOptions {
   now?: (() => number) | undefined;
+  /** How long a window stays open. `PROFILE_WINDOW_MS` unless the operator shortened it (gh-565). */
+  windowMs?: number | undefined;
   maxRoutes?: number | undefined;
   maxOperations?: number | undefined;
   /** Off suppresses the normalised text and nothing else: the hash is the identity (invariant 5). */
@@ -42,9 +48,11 @@ export class ProfileAggregator {
   private readonly maxRoutes: number;
   private readonly maxOperations: number;
   private readonly sendText: boolean;
+  private readonly windowMs: number;
 
   constructor(opts: ProfileOptions = {}) {
     this.now = opts.now ?? Date.now;
+    this.windowMs = opts.windowMs && opts.windowMs > 0 ? opts.windowMs : PROFILE_WINDOW_MS;
     this.maxRoutes = opts.maxRoutes ?? DEFAULT_MAX_ROUTES;
     this.maxOperations = opts.maxOperations ?? DEFAULT_MAX_OPERATIONS;
     this.sendText = opts.sendText ?? true;
@@ -82,13 +90,13 @@ export class ProfileAggregator {
   }
 
   /**
-   * Closes the window and returns the profile, or null when the minute is not up or nothing happened in it.
+   * Closes the window and returns the profile, or null when the window is not up or nothing happened in it.
    *
    * A quiet minute still resets the window: an empty profile says nothing the absence of one does not.
    */
   rotate(): Profile | null {
     const now = this.now();
-    if (now - this.windowStart < PROFILE_WINDOW_MS) return null;
+    if (now - this.windowStart < this.windowMs) return null;
     return this.close(now);
   }
 

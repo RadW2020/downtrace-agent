@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import type { AgentConfig } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 import { Sender } from "../src/transport.ts";
 
 /**
@@ -136,6 +137,7 @@ describe("what the agent adds about itself", () => {
         inspect: undefined,
         debug: false,
         intervalMs: 60_000,
+        profileMs: PROFILE_WINDOW_MS,
         instrument: new Set(),
         minimal: false,
         excludeEndpoints: [],

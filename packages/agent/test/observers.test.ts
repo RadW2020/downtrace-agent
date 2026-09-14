@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Agent } from "../src/agent.ts";
 import type { AgentConfig } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 
@@ -18,6 +19,7 @@ function config(instrument: string[]): AgentConfig {
     inspect: undefined,
     debug: false,
     intervalMs: 60_000,
+    profileMs: PROFILE_WINDOW_MS,
     instrument: new Set(instrument),
   } as AgentConfig;
 }

@@ -38,6 +38,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
+| `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
 | `DOWNTRACE_INSPECT` | no | `stderr` or a file path: writes every batch exactly as it would be sent. With it set, `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` become optional |

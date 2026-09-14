@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { configFromEnv, DEFAULT_INTERVAL_MS, detectVersion, INSTRUMENTS, parseInstruments } from "../src/config.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 describe("configFromEnv", () => {
   it("is disabled without token or url, with a precise reason", () => {
@@ -18,6 +19,7 @@ describe("configFromEnv", () => {
       version: "unknown",
       debug: false,
       intervalMs: DEFAULT_INTERVAL_MS,
+      profileMs: PROFILE_WINDOW_MS,
     });
   });
 
@@ -86,5 +88,38 @@ describe("DOWNTRACE_QUERY_TEXT", () => {
   it("treats anything else as leaving it on, rather than guessing", () => {
     expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "no" })).toBe(true);
     expect(queryTextOf({ ...base, DOWNTRACE_QUERY_TEXT: "" })).toBe(true);
+  });
+});
+
+describe("the profile's cadence", () => {
+  const base = { DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "https://cloud.example" };
+  const read = (env: Record<string, string>) => {
+    const out = configFromEnv({ ...base, ...env });
+    if (!out.ok) throw new Error(out.reason);
+    return out.config;
+  };
+
+  // Production does not move. ADR 0017 fixed the minute because the profile's rows count against the project's
+  // daily budget, and gh-565 made it overridable without touching the number.
+  it("is a minute when nobody says otherwise", () => {
+    expect(read({}).profileMs).toBe(PROFILE_WINDOW_MS);
+  });
+
+  it("takes the value it is given", () => {
+    expect(read({ DOWNTRACE_PROFILE_MS: "2000", DOWNTRACE_INTERVAL_MS: "1000" }).profileMs).toBe(2000);
+  });
+
+  // The floor is the aggregation interval, and it is derived rather than chosen: the profile rotates on each
+  // flush, so a window shorter than the interval that feeds it closes on the very same flush as one equal to
+  // it. A number below that is not a faster cadence, it is a number that says nothing.
+  it("is never shorter than the interval that feeds it", () => {
+    const c = read({ DOWNTRACE_PROFILE_MS: "500", DOWNTRACE_INTERVAL_MS: "1000" });
+    expect(c.profileMs).toBe(c.intervalMs);
+  });
+
+  it("falls back to the default when the value is not a positive whole number", () => {
+    for (const value of ["", "abc", "0", "-1", "1500.5"]) {
+      expect(read({ DOWNTRACE_PROFILE_MS: value }).profileMs, value).toBe(PROFILE_WINDOW_MS);
+    }
   });
 });

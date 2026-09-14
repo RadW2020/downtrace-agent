@@ -9,6 +9,7 @@ import {
   FINE_MAX_BYTES,
   FineRegister,
 } from "../src/fine.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 /**
  * The fine half of the black box. What these tests protect is the one thing that makes it worth its cost: the
@@ -297,6 +298,7 @@ describe("the agent's fine register", () => {
         inspect: undefined,
         debug: false,
         intervalMs: 60_000,
+        profileMs: PROFILE_WINDOW_MS,
         instrument: new Set(),
       },
       { fine, log: silent },

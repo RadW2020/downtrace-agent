@@ -17,6 +17,7 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 import { RuntimeSampler } from "../src/runtime.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -79,6 +80,7 @@ function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     inspect: undefined,
     debug: false,
     intervalMs: 60_000,
+    profileMs: PROFILE_WINDOW_MS,
     instrument: new Set(),
     ...extra,
   };

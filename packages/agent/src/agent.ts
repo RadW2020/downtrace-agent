@@ -252,7 +252,10 @@ export class Agent {
       this.errors = new ErrorFingerprintCache();
       // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
       // «send my routes but not my queries» is a real thing to want — and this turns it off as well.
-      this.profile = new ProfileAggregator({ sendText: config.queryText && !config.minimal });
+      this.profile = new ProfileAggregator({
+        sendText: config.queryText && !config.minimal,
+        windowMs: config.profileMs,
+      });
     }
     this.sender =
       deps.sender ??

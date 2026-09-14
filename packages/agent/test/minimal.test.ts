@@ -8,6 +8,7 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordCallIn, recordOperationIn } from "../src/context.ts";
 import type { Logger } from "../src/log.ts";
 import { withheldName } from "../src/minimal.ts";
+import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -39,6 +40,7 @@ function config(over: Partial<AgentConfig> = {}): AgentConfig {
     inspect: undefined,
     debug: false,
     intervalMs: 60_000,
+    profileMs: PROFILE_WINDOW_MS,
     instrument: new Set(["pg"]),
     minimal: false,
     excludeEndpoints: [],

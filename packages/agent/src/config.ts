@@ -1,4 +1,5 @@
 import { patternsOf } from "./exclude.ts";
+import { PROFILE_WINDOW_MS } from "./profile.ts";
 
 export interface AgentConfig {
   token: string;
@@ -9,6 +10,15 @@ export interface AgentConfig {
   debug: boolean;
   /** Aggregation interval; 10 s in production. */
   intervalMs: number;
+  /**
+   * How long a profile window stays open; one minute in production, the cadence ADR 0017 fixed and which this
+   * does not move. It is a setting for the same reason the interval above is one: what cannot be accelerated
+   * cannot be tested end to end, and the profile is what the report's diff compares (gh-565).
+   *
+   * Never below `intervalMs`. The profile rotates on each flush, so a window shorter than the interval that
+   * feeds it closes on the very same flush as one equal to it — below that the number stops meaning anything.
+   */
+  profileMs: number;
   /** Which observers are on. `DOWNTRACE_INSTRUMENT` takes `all`, `none`, or a list like `pg,http`. */
   instrument: ReadonlySet<Instrument>;
   /**
@@ -75,6 +85,12 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
   }
 
   const interval = Number(env.DOWNTRACE_INTERVAL_MS);
+  const intervalMs = Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS;
+  const profile = Number(env.DOWNTRACE_PROFILE_MS);
+  // Shortening it multiplies the profile rows in proportion, and those count against the project's daily
+  // budget (invariant 8). The floor is not a number chosen here: it is the interval, because below it the
+  // setting changes nothing.
+  const profileMs = Number.isInteger(profile) && profile > 0 ? Math.max(profile, intervalMs) : PROFILE_WINDOW_MS;
   return {
     ok: true,
     config: {
@@ -83,7 +99,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       environment: clamp(env.DOWNTRACE_ENV ?? env.NODE_ENV ?? "production", 64),
       version: detectVersion(env),
       debug: env.DOWNTRACE_DEBUG === "1" || env.DOWNTRACE_DEBUG === "true",
-      intervalMs: Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS,
+      intervalMs,
+      profileMs,
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
       minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
