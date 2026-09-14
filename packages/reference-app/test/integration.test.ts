@@ -125,7 +125,11 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     expect(regressed.redisOps).toBe(base.redisOps);
   });
 
-  it("slow_dependency (300 ms) raises checkout median by ≥ 500 ms while /products stays within 20 ms", {
+  // Both halves are differences between two medians taken on the same machine minutes apart, which is what
+  // keeps them out of ADR 0114's «una aserción sobre una medida»: a loaded machine slows both sides of a
+  // difference. The second used to be an absolute ±20 ms, which is not a difference but a measurement, and
+  // said what it means only on a quiet machine (gh-562).
+  it("slow_dependency (300 ms) raises the checkout median by ≥ 500 ms and leaves /products alone", {
     timeout: 30_000,
   }, async () => {
     const baseCheckout = await median(5, () => api.checkout());
@@ -135,8 +139,15 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     const slowCheckout = await median(5, () => api.checkout());
     const slowProducts = await median(5, () => api.get("/products"));
 
-    expect(slowCheckout - baseCheckout).toBeGreaterThanOrEqual(500);
-    expect(Math.abs(slowProducts - baseProducts)).toBeLessThanOrEqual(20);
+    const onCheckout = slowCheckout - baseCheckout;
+    expect(onCheckout, "the injected delay did not reach checkout").toBeGreaterThanOrEqual(500);
+    // Targeted: the route that does not call the provider must move by a fraction of what the one that does
+    // moved. Stated against the delay that was actually injected rather than against a number of
+    // milliseconds, so it says the same thing on a machine under load as on an idle one.
+    expect(
+      Math.abs(slowProducts - baseProducts),
+      `/products moved with checkout: the delay is not targeted (checkout moved ${onCheckout.toFixed(0)} ms)`,
+    ).toBeLessThan(onCheckout / 5);
   });
 
   it("aggressive_retries under a slow dependency: ≥ 3 retries and a 502", async () => {

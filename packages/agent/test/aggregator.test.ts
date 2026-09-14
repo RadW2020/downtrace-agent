@@ -59,14 +59,18 @@ describe("IntervalAggregator", () => {
     expect(sum(interval?.endpoints.map((e) => e.count) ?? [])).toBe(600);
   });
 
-  it("handles 10 000 events in well under 50 ms", () => {
+  // The half of this that is about the code. What it used to also assert — that ten thousand events take less
+  // than 50 ms — is a measurement, so it moved to `aggregator.measure.test.ts` whole and with its number
+  // (ADR 0114, gh-562). Splitting the file costs one file and loses no check.
+  it("counts ten thousand events into the endpoints they belong to", () => {
     const agg = new IntervalAggregator();
     const routes = ["/a", "/b/:id", "/c", "/d", "/e"];
-    const start = performance.now();
     for (let i = 0; i < 10_000; i++) agg.record("GET", routes[i % 5] ?? "/a", 200 + (i % 3) * 100, (i % 500) / 3);
-    const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(50);
-    expect(sum(agg.rotate()?.endpoints.map((e) => e.count) ?? [])).toBe(10_000);
+    const interval = must(agg.rotate(), "interval");
+    expect(interval.endpoints).toHaveLength(routes.length);
+    expect(sum(interval.endpoints.map((e) => e.count))).toBe(10_000);
+    // Evenly, which is what says they went to the right one and not all to the first.
+    for (const e of interval.endpoints) expect(e.count).toBe(2_000);
   });
 });
 
