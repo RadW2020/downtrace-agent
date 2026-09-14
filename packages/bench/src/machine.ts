@@ -27,14 +27,25 @@ export interface Host {
   cpu: string | null;
 }
 
+/**
+ * Tells a real processor name from the platform not having one to give.
+ *
+ * Empty in some containers, where `cpus()` reports nothing at all rather than reporting a machine. On the
+ * `aarch64` mirror runner (ADR 0134) it is not empty: Node's `os.cpus()[0].model` there is the literal string
+ * "unknown", which reads as a processor *called* "unknown" unless it is caught here — the two are not the same
+ * as `subject.ts` documents for the rest of the report (gh-576).
+ */
+export function knownCpuModel(model: string | undefined): string | null {
+  const trimmed = typeof model === "string" ? model.trim() : "";
+  return trimmed === "" || trimmed.toLowerCase() === "unknown" ? null : trimmed;
+}
+
 /** Never throws: a benchmark that cannot say what machine it ran on still has to run and say so. */
 export function hostOf(): Host {
-  const first = cpus()[0];
   return {
     cores: availableParallelism(),
     memoryMb: Math.round(totalmem() / 1024 / 1024),
-    // Empty in some containers, where `cpus()` reports nothing at all rather than reporting a machine.
-    cpu: typeof first?.model === "string" && first.model.trim() !== "" ? first.model.trim() : null,
+    cpu: knownCpuModel(cpus()[0]?.model),
   };
 }
 

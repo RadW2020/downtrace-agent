@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hostOf, type MachineCpu, otherCpuPct, parseProcStat } from "../src/machine.ts";
+import { hostOf, knownCpuModel, type MachineCpu, otherCpuPct, parseProcStat } from "../src/machine.ts";
 
 /**
  * The benchmark shares a machine with the rest of CI, and its round collapses lined up one-to-one with the
@@ -77,6 +77,28 @@ describe("what counts as this benchmark", () => {
     const appAndGenerator = otherCpuPct(busy, 40 + 35, 1000);
     expect(appOnly).toBeCloseTo(60, 5);
     expect(appAndGenerator).toBeCloseTo(25, 5);
+  });
+});
+
+// The `aarch64` mirror runner does not go silent about the processor, it names it "unknown" — a platform
+// answer that reads as a processor *called* "unknown" unless it is caught (gh-576).
+describe("knownCpuModel", () => {
+  it("is null when the platform names no processor at all", () => {
+    expect(knownCpuModel(undefined)).toBeNull();
+    expect(knownCpuModel("")).toBeNull();
+    expect(knownCpuModel("   ")).toBeNull();
+  });
+
+  it('is null for the literal string "unknown", in any case, because that is Node\'s word for not knowing', () => {
+    expect(knownCpuModel("unknown")).toBeNull();
+    expect(knownCpuModel("Unknown")).toBeNull();
+    expect(knownCpuModel("UNKNOWN")).toBeNull();
+    expect(knownCpuModel("  unknown  ")).toBeNull();
+  });
+
+  it("keeps a real name untouched, trimmed", () => {
+    expect(knownCpuModel("AMD EPYC 7763 64-Core Processor")).toBe("AMD EPYC 7763 64-Core Processor");
+    expect(knownCpuModel("  Apple M2  ")).toBe("Apple M2");
   });
 });
 
