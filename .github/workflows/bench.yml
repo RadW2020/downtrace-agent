@@ -1,13 +1,42 @@
-# EXPERIMENT BRANCH — not the canonical copy. Validating whether a free arm64 runner can measure the
-# instrumentation's overhead. The canonical file will live in the private monorepo under .github/mirror/.
+# Measures the instrumentation's overhead in the public mirror, where GitHub gives public repositories arm64
+# runners at no cost: the architecture this is deployed on, on a machine with nothing else running on it. That
+# is the one thing the benchmark always needed and the machine it used to run on could not give it (ADR 0032).
+#
+# This is not a gate. The mirror syncs after a merge, so no pull request waits for this. What it buys back is
+# the time series ADR 0032 wrote off: a change that doubles what the instrumentation costs now shows up
+# somewhere instead of nowhere.
+#
+# Kept in the private monorepo under .github/mirror/ and copied by mirror.yml; do not edit it in the mirror.
 name: bench
 
 on:
+  # A campaign is launched by hand and says its own configuration, so a run that is not comparable with the
+  # series is at least explicit about why.
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: B/A rounds
+        default: "9"
+      measure:
+        description: Seconds measured per round
+        default: "60"
+      rps:
+        description: Requests per second
+        default: "200"
   push:
-    branches: [bench-arm-check]
+    branches: [main, bench-arm-check]
+    # Only what can move the number. The mirror also syncs when an ADR turns public, and measuring that would
+    # put a point on the series that no change explains.
+    paths:
+      - "packages/agent/**"
+      - "packages/protocol/**"
+      - "packages/bench/**"
+      - "packages/reference-app/**"
+      - "pnpm-lock.yaml"
 
 concurrency:
-  # Two benchmarks measuring at the same time would measure each other.
+  # Two benchmarks measuring at the same time would measure each other. Never cancelled: a half-run measurement
+  # is not a cheaper measurement, it is none.
   group: bench
   cancel-in-progress: false
 
@@ -16,8 +45,6 @@ permissions:
 
 jobs:
   bench:
-    # arm64, which is the architecture this is deployed on, and a machine of its own: free for public
-    # repositories, 4 vCPU. The point of measuring here is that nothing else is on it.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
@@ -29,20 +56,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # A measurement that does not say what machine made it is a number with no owner (gh-525), and here the
+      # machine is not ours: it is whatever the runner pool handed out this time.
       - name: What machine this is
         run: |
           echo "cores: $(nproc) · $(uname -srm)"
-          grep -m1 'model name\|Model' /proc/cpuinfo || true
+          grep -m1 -i 'model name\|^Model' /proc/cpuinfo || true
           free -m | head -2
-          uptime
 
       # Not a `services:` block on purpose: a service container cannot take arguments, and this Postgres needs
       # the checkpoint settings that keep it from writing for twenty-six seconds in the middle of a round
       # (gh-194). They are written in the compose file and nowhere else, so this reads them from there.
       - name: Postgres and Redis, with the settings the measurement needs
-        run: |
-          docker compose -f packages/reference-app/docker-compose.yml up -d --wait
-          docker compose -f packages/reference-app/docker-compose.yml ps
+        run: docker compose -f packages/reference-app/docker-compose.yml up -d --wait
 
       # The harness demands DATABASE_URL and REDIS_URL by name and reads no environment file, because two
       # numbers measured from different start-ups cannot be subtracted (ADR 0023).
@@ -50,12 +76,19 @@ jobs:
         env:
           DATABASE_URL: postgres://downtrace:downtrace@127.0.0.1:5432/downtrace
           REDIS_URL: redis://127.0.0.1:6379
-        run: pnpm --filter @downtrace/bench run bench --rounds 3 --measure 20 --rps 200
+          ROUNDS: ${{ inputs.rounds || '9' }}
+          MEASURE: ${{ inputs.measure || '60' }}
+          RPS: ${{ inputs.rps || '200' }}
+        run: |
+          pnpm --filter @downtrace/bench run bench \
+            --rounds "$ROUNDS" --measure "$MEASURE" --rps "$RPS"
 
+      # The verdict is already in the job summary and the annotations; this is the evidence behind it. Where it
+      # is kept for longer than an artifact lives is the open question the spec has to answer.
       - name: Keep the report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-report
+          name: bench-report-${{ github.run_id }}
           path: packages/bench/bench-report.json
           if-no-files-found: warn
