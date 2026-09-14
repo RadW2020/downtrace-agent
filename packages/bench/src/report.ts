@@ -2,9 +2,9 @@ import { appendFile, writeFile } from "node:fs/promises";
 import type { LoadReport } from "./load.ts";
 import type { PoolWait, ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
+import { type BenchSubject, describeSubject } from "./subject.ts";
 import type { MetricVerdict, Verdict } from "./verdict.ts";
 import type { WarmupResult } from "./warmup.ts";
-
 export type Variant = "baseline" | "agent";
 
 export interface RoundResult {
@@ -47,6 +47,8 @@ export interface BenchReport {
   generatedAt: string;
   node: string;
   platform: string;
+  /** What was measured: version, commit, whether the tree was clean and where the code came from (gh-525). */
+  subject: BenchSubject;
   config: BenchConfig;
   rounds: RoundResult[];
   metrics: MetricVerdict[];
@@ -60,6 +62,8 @@ const ICON: Record<MetricVerdict["status"], string> = { ok: "✅", fail: "❌", 
 export function toMarkdown(r: BenchReport): string {
   const lines = [
     `### Agent overhead benchmark — **${r.verdict.toUpperCase()}**`,
+    "",
+    describeSubject(r.subject),
     "",
     `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (after ${r.config.warmupCleanSec}s clean warmup, max ${r.config.warmupMaxSec}s) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,

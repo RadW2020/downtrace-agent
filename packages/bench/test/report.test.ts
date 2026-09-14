@@ -8,6 +8,13 @@ const report: BenchReport = {
   generatedAt: "2026-09-03T00:00:00.000Z",
   node: "v24.0.0",
   platform: "linux-x64",
+  subject: {
+    agentPath: "packages/agent/src/register.ts",
+    version: "0.8.1",
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    dirty: false,
+    source: "working-tree",
+  },
   config: {
     rounds: 1,
     warmupCleanSec: 1,

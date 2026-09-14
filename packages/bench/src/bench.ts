@@ -5,6 +5,7 @@ import { otherCpuPct, readCpuTime } from "./machine.ts";
 import { checkpointsSince, ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
+import { subjectOf } from "./subject.ts";
 import {
   type Aborted,
   applyCheckpointStorms,
@@ -22,6 +23,11 @@ import {
 import { runWarmup, type WarmupResult } from "./warmup.ts";
 
 export const DEFAULT_AGENT_PATH = fileURLToPath(new URL("../../agent/src/register.ts", import.meta.url));
+
+/** The repository this package lives in, so a path inside it is recorded relative and carries no home directory. */
+function repoRoot(): string {
+  return fileURLToPath(new URL("../../..", import.meta.url));
+}
 
 export interface BenchOptions {
   rounds?: number | undefined;
@@ -214,6 +220,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     generatedAt: new Date().toISOString(),
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
+    subject: subjectOf(config.agentPath ?? DEFAULT_AGENT_PATH, repoRoot()),
     config,
     rounds,
     metrics,
