@@ -604,8 +604,26 @@ describe("agent v0 (integration)", () => {
     expect(await agent.flushNow()).toBe(true);
 
     expect(evidence, "no evidence was sent").toHaveLength(1);
-    const body = evidence[0] as { coverage: { observedRequests: number; attachedRequests: number } };
-    expect([body.coverage.observedRequests, body.coverage.attachedRequests]).toEqual([1, 1]);
+    const body = evidence[0] as {
+      startedAt?: string;
+      endedAt?: string;
+      coverage: { observedRequests: number; attachedRequests: number };
+      // The agent sends them at the top level; `fromService` is how the cloud wraps them afterwards.
+      requests?: { route?: string; startedAt?: string }[];
+    };
+    // A request counts as observed when its own instant is at or after the capture's start, so a mismatch
+    // here is always a statement about three instants. Printing them costs nothing when the test passes and
+    // is the whole diagnosis when it does not: this failed once inside `make preflight` with [0, 2], and the
+    // bare difference said nothing about which of the three had moved (gh-538).
+    const instants = JSON.stringify({
+      captureStarted: body.startedAt,
+      captureEnded: body.endedAt,
+      requests: (body.requests ?? []).map((r) => ({ route: r.route, startedAt: r.startedAt })),
+    });
+    expect(
+      [body.coverage.observedRequests, body.coverage.attachedRequests],
+      `observed/attached did not match the two requests published. Instants: ${instants}`,
+    ).toEqual([1, 1]);
   });
 
   it("does not say the same start twice", async () => {
