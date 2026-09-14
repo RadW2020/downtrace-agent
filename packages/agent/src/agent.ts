@@ -56,6 +56,12 @@ const SIGNALS = ["SIGTERM", "SIGINT"] as const;
  */
 const EPOCH = performance.timeOrigin;
 
+/**
+ * The clock in production. `EPOCH + performance.now()` and not `Date.now()`: it is the one the fine register
+ * already dates requests with, and an instant that is compared with those has to come from the same place.
+ */
+const defaultNow = () => EPOCH + performance.now();
+
 export interface AgentDeps {
   /** The coarse register, so a test can drive its clock. */
   coarse?: CoarseRegister;
@@ -82,6 +88,19 @@ export interface AgentDeps {
   handleSignals?: boolean | undefined;
   /** The `pg` module, so a test can hand it one that cannot be instrumented. Same seam `instrumentPg` has. */
   pgModule?: unknown;
+  /**
+   * The clock every **instant** this agent produces comes from, so a test can place one exactly.
+   *
+   * Absolute, in milliseconds, and derived from `performance` rather than from `Date`: durations are measured
+   * with `performance.now()`, which counts from the start of the process and is the only one that cannot jump,
+   * and an instant has to be absolute or two instances cannot be read side by side (ADR 0107, gh-399).
+   *
+   * One and not two. A capture's start used to be read with `Date.now()` while the requests it is compared
+   * against were dated with this one; the two agree when the process starts and drift apart afterwards, so
+   * inside a millisecond there was no order between them — and a request that happened during a capture was
+   * counted as one from before it (gh-538).
+   */
+  now?: () => number;
 }
 
 export interface AgentStats {
@@ -120,6 +139,8 @@ export class Agent {
   readonly instance: InstanceInfo;
   private readonly agentInfo: AgentInfo;
   private readonly pgModule: unknown;
+  /** Every instant this agent produces. See `AgentDeps.now`: one clock, not two (gh-538). */
+  private readonly now: () => number;
   private readonly log: Logger;
   private readonly recorder: Recorder;
   /** The coarse half of the black box: the last few minutes, second by second. */
@@ -186,6 +207,7 @@ export class Agent {
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
     this.config = config;
     this.pgModule = deps.pgModule;
+    this.now = deps.now ?? defaultNow;
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
     this.log = deps.log ?? createLogger(config.debug);
@@ -323,7 +345,7 @@ export class Agent {
     // the cloud settles the race with a `409` on the second evidence (gh-379).
     this.sender.onCaptures = (pending) =>
       this.guard(() => {
-        this.captures.accept(pending, Date.now());
+        this.captures.accept(pending, this.now());
         this.renewReference();
       });
     this.sender.onReported = (ids) => this.guard(() => this.captures.reported(ids));
@@ -388,19 +410,19 @@ export class Agent {
         // The same reading the batch carries, read once more by the side that can act on it. A process
         // whose event loop is running late knows it long before any aggregate crosses the network, and by
         // the time the cloud could notice, the detail that would explain it is overwritten (gh-409).
-        const ask = this.triggers.interval(runtime, Date.now());
+        const ask = this.triggers.interval(runtime, this.now());
         if (ask) this.sender.enqueueTriggers([ask]);
         // And the routes whose requests keep queueing for a connection get armed, which asks the cloud for
         // nothing: it only keeps their detail out of reach of everyone else's traffic until the arm expires
         // (ADR 0122). Read from the interval that was just built, so it costs nothing per request.
-        for (const label of this.triggers.endpoints(interval, Date.now())) {
-          this.prearm.arm(label, Date.now(), ARM_FOR_MS);
+        for (const label of this.triggers.endpoints(interval, this.now())) {
+          this.prearm.arm(label, this.now(), ARM_FOR_MS);
         }
       }
       const sent = await this.sender.flush(timeoutMs);
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
       // Leaving hands over everything under way, because partial evidence is an answer and silence is not.
-      await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(Date.now()));
+      await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(this.now()));
       this.renewReference();
       return sent;
     } catch (err) {
@@ -427,13 +449,13 @@ export class Agent {
         capture,
         this.fine.snapshot(),
         (route) => this.nameOf(route),
-        this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(capture.footprint.route ?? ""), Date.now()),
+        this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(capture.footprint.route ?? ""), this.now()),
       );
       await this.sender.sendEvidence(capture.id, {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },
         startedAt: new Date(capture.startedAt).toISOString(),
-        endedAt: new Date(Date.now()).toISOString(),
+        endedAt: new Date(this.now()).toISOString(),
         coverage: {
           observedRequests: slice.observedRequests,
           attachedRequests: slice.attachedRequests,
@@ -614,7 +636,7 @@ export class Agent {
       // from the start of the process and is the only one that cannot jump; an **instant** has to be
       // absolute or two instances cannot be read side by side, and the capture's own start —which comes
       // from the cloud's clock— cannot be compared with it at all (gh-399).
-      const startedWall = startedAt === undefined ? Date.now() - ms : EPOCH + startedAt;
+      const startedWall = startedAt === undefined ? this.now() - ms : EPOCH + startedAt;
       this.fine.request(
         method,
         route,

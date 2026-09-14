@@ -96,6 +96,35 @@ async function hit(url: string, path: string): Promise<number> {
   return res.status;
 }
 
+/**
+ * The agent's clock, driven from here. Absolute milliseconds and derived from `performance`, which is what
+ * `AgentDeps.now` promises and what the fine register dates requests with (ADR 0107).
+ *
+ * It replaces six `setTimeout`s. Three of them were waiting for the scheduler to separate two instants that
+ * came from two different clocks, and one of those three had already been widened once for the same reason —
+ * which is a sleep bought twice to hide a mismatch in production code, not a slow test (gh-538). The other
+ * three were waiting for a capture window to close, and a window closes when the clock says so.
+ */
+function testClock() {
+  const real = () => performance.timeOrigin + performance.now();
+  let at = real();
+  return {
+    now: () => at,
+    /** Moves the agent's present forward, which is how a capture window closes with nobody waiting. */
+    advance: (ms: number) => {
+      at += ms;
+    },
+    /**
+     * Puts the agent's present at the real instant of this line. Everything published before it is strictly
+     * earlier and everything after is strictly later — in the agent's own clock, which is the only one that
+     * can order them.
+     */
+    here: () => {
+      at = real();
+    },
+  };
+}
+
 describe("agent v0 (integration)", () => {
   it("aggregates 100 Express requests into one valid batch with 3 normalised endpoints", async () => {
     const sink = await startSink();
@@ -338,9 +367,11 @@ describe("agent v0 (integration)", () => {
       return new Response(null, { status: 202 });
     }) as unknown as typeof fetch;
 
+    const clock = testClock();
     const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
       log: quiet,
       fetchImpl,
+      now: clock.now,
     });
     cleanups.push(() => agent.stop());
     agent.start();
@@ -348,13 +379,12 @@ describe("agent v0 (integration)", () => {
     const request = { method: "GET", url: "/products/7" };
     channel(REQUEST_START).publish({ request });
     channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
-    // A gap wide enough for the two clocks to be told apart: the capture's start is a whole millisecond
-    // (`Date.now()`) and a request's is a fraction of one, so inside the same millisecond which came first
-    // is not a question the measurement can answer.
-    await new Promise((r) => setTimeout(r, 20));
+    // The request is behind us now, in the same clock the capture's start will come from.
+    clock.here();
     // The first flush carries the batch and brings the order back.
     expect(await agent.flushNow()).toBe(true);
-    await new Promise((r) => setTimeout(r, 80));
+    // The window is 50 ms and this is what passes them.
+    clock.advance(60);
     // The second reports the start and, the window having closed, hands the evidence over.
     expect(await agent.flushNow()).toBe(true);
 
@@ -439,7 +469,8 @@ describe("agent v0 (integration)", () => {
       return new Response(null, { status: 202 });
     }) as unknown as typeof fetch;
 
-    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl });
+    const clock = testClock();
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl, now: clock.now });
     cleanups.push(() => agent.stop());
     agent.start();
 
@@ -455,7 +486,7 @@ describe("agent v0 (integration)", () => {
     const during = { method: "GET", url: "/products/9" };
     channel(REQUEST_START).publish({ request: during });
     channel(RESPONSE_FINISH).publish({ request: during, response: { statusCode: 500 } });
-    await new Promise((r) => setTimeout(r, 80));
+    clock.advance(60); // the 50 ms window, closed
     expect(await agent.flushNow()).toBe(true);
 
     expect(evidence, "no evidence was sent").toHaveLength(1);
@@ -505,10 +536,12 @@ describe("agent v0 (integration)", () => {
 
     // Two operations of room, so the second request's queries overwrite the first's.
     const fine = new FineRegister({ requests: 8, operations: 2 });
+    const clock = testClock();
     const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
       log: quiet,
       fetchImpl,
       fine,
+      now: clock.now,
     });
     cleanups.push(() => agent.stop());
     agent.start();
@@ -535,7 +568,7 @@ describe("agent v0 (integration)", () => {
       channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
     }
     expect(await agent.flushNow()).toBe(true);
-    await new Promise((r) => setTimeout(r, 80));
+    clock.advance(60); // the 50 ms window, closed
     expect(await agent.flushNow()).toBe(true);
 
     expect(evidence, "no evidence was sent").toHaveLength(1);
@@ -583,24 +616,27 @@ describe("agent v0 (integration)", () => {
       return new Response(null, { status: 202 });
     }) as unknown as typeof fetch;
 
-    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl });
+    const clock = testClock();
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl, now: clock.now });
     cleanups.push(() => agent.stop());
     agent.start();
 
     const before = { method: "GET", url: "/products/1" };
     channel(REQUEST_START).publish({ request: before });
     channel(RESPONSE_FINISH).publish({ request: before, response: { statusCode: 200 } });
-    await new Promise((r) => setTimeout(r, 20));
+    // The line that decides the whole test, and it is now a statement instead of a wait: everything above
+    // happened before this instant and everything below after it, measured in the clock the capture's start
+    // comes from. There is one, so the order is a fact and not a race (gh-538).
+    clock.here();
     // This flush brings the order back and the window opens.
     expect(await agent.flushNow()).toBe(true);
 
     const during = { method: "GET", url: "/products/2" };
     channel(REQUEST_START).publish({ request: during });
     channel(RESPONSE_FINISH).publish({ request: during, response: { statusCode: 200 } });
-    // Wide enough that a loaded machine cannot close the window inside the flush that opened it: with a
-    // shorter one the evidence went out before the second request, and the test read that as the bug it
-    // is meant to catch.
-    await new Promise((r) => setTimeout(r, 700));
+    // The 600 ms window, passed without waiting for it. A loaded machine used to close it inside the flush
+    // that opened it, and the test read that as the bug it is meant to catch.
+    clock.advance(700);
     expect(await agent.flushNow()).toBe(true);
 
     expect(evidence, "no evidence was sent").toHaveLength(1);
@@ -624,6 +660,63 @@ describe("agent v0 (integration)", () => {
       [body.coverage.observedRequests, body.coverage.attachedRequests],
       `observed/attached did not match the two requests published. Instants: ${instants}`,
     ).toEqual([1, 1]);
+  });
+
+  // The rule the whole of gh-538 comes down to, and the one no sleep can check: **every instant this agent
+  // produces comes from one clock**. The capture's start used to be read with `Date.now()` while the requests
+  // it is compared against were dated with `performance.timeOrigin + performance.now()`; the two agree when
+  // the process starts and drift apart afterwards, so inside a millisecond there was no order between them.
+  //
+  // Stated by putting the agent's clock an hour ahead of the wall clock. Nothing else moves, and everything
+  // the agent stamps has to move with it — an instant that stays behind is an instant read somewhere else.
+  //
+  // covers: CAP-01
+  it("takes every instant it stamps from its own clock, not from the wall clock", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { startedAt?: string; endedAt?: string }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [{ id: "cap-5", windowSeconds: 0.05, expiresAt: new Date(Date.now() + 3_600_000 + 60_000).toISOString() }];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push(JSON.parse(String(init?.body)) as { startedAt?: string; endedAt?: string });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const HOUR = 3_600_000;
+    let at = performance.timeOrigin + performance.now() + HOUR;
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl, now: () => at });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const request = { method: "GET", url: "/products/3" };
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    expect(await agent.flushNow()).toBe(true);
+    at += 60; // the 50 ms window
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const started = Date.parse(String(evidence[0]?.startedAt));
+    const ended = Date.parse(String(evidence[0]?.endedAt));
+    const wall = Date.now();
+    // Half an hour of slack: what is being told apart is an hour of offset, not a millisecond of drift, and a
+    // tighter bound here would be a test about the machine's speed instead of about where the number came from.
+    expect(
+      started - wall,
+      `the capture's start was read from the wall clock: ${evidence[0]?.startedAt}`,
+    ).toBeGreaterThan(HOUR / 2);
+    expect(ended - wall, `the capture's end was read from the wall clock: ${evidence[0]?.endedAt}`).toBeGreaterThan(
+      HOUR / 2,
+    );
+    // And the end is after the start by the window the clock was advanced, which is the pair being coherent
+    // rather than merely both being large.
+    expect(ended).toBeGreaterThanOrEqual(started);
   });
 
   it("does not say the same start twice", async () => {
