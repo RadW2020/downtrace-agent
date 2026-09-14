@@ -1,0 +1,61 @@
+# EXPERIMENT BRANCH — not the canonical copy. Validating whether a free arm64 runner can measure the
+# instrumentation's overhead. The canonical file will live in the private monorepo under .github/mirror/.
+name: bench
+
+on:
+  push:
+    branches: [bench-arm-check]
+
+concurrency:
+  # Two benchmarks measuring at the same time would measure each other.
+  group: bench
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # arm64, which is the architecture this is deployed on, and a machine of its own: free for public
+    # repositories, 4 vCPU. The point of measuring here is that nothing else is on it.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: What machine this is
+        run: |
+          echo "cores: $(nproc) · $(uname -srm)"
+          grep -m1 'model name\|Model' /proc/cpuinfo || true
+          free -m | head -2
+          uptime
+
+      # Not a `services:` block on purpose: a service container cannot take arguments, and this Postgres needs
+      # the checkpoint settings that keep it from writing for twenty-six seconds in the middle of a round
+      # (gh-194). They are written in the compose file and nowhere else, so this reads them from there.
+      - name: Postgres and Redis, with the settings the measurement needs
+        run: |
+          docker compose -f packages/reference-app/docker-compose.yml up -d --wait
+          docker compose -f packages/reference-app/docker-compose.yml ps
+
+      # The harness demands DATABASE_URL and REDIS_URL by name and reads no environment file, because two
+      # numbers measured from different start-ups cannot be subtracted (ADR 0023).
+      - name: Measure
+        env:
+          DATABASE_URL: postgres://downtrace:downtrace@127.0.0.1:5432/downtrace
+          REDIS_URL: redis://127.0.0.1:6379
+        run: pnpm --filter @downtrace/bench run bench --rounds 3 --measure 20 --rps 200
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report
+          path: packages/bench/bench-report.json
+          if-no-files-found: warn
