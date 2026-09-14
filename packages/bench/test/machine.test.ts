@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type MachineCpu, otherCpuPct, parseProcStat } from "../src/machine.ts";
+import { hostOf, type MachineCpu, otherCpuPct, parseProcStat } from "../src/machine.ts";
 
 /**
  * The benchmark shares a machine with the rest of CI, and its round collapses lined up one-to-one with the
@@ -77,5 +77,22 @@ describe("what counts as this benchmark", () => {
     const appAndGenerator = otherCpuPct(busy, 40 + 35, 1000);
     expect(appOnly).toBeCloseTo(60, 5);
     expect(appAndGenerator).toBeCloseTo(25, 5);
+  });
+});
+
+describe("which machine measured", () => {
+  it("says the cores and the memory, because the runner pool decides them and not us", () => {
+    const host = hostOf();
+    // What a CPU percentage is a percentage of: a report that does not say it cannot be compared with another.
+    expect(host.cores).toBeGreaterThan(0);
+    expect(Number.isInteger(host.cores)).toBe(true);
+    expect(host.memoryMb).toBeGreaterThan(0);
+    expect(Number.isInteger(host.memoryMb)).toBe(true);
+  });
+
+  it("says null for a processor it cannot name, rather than an empty string that reads as one", () => {
+    const host = hostOf();
+    // Null and not "": «we could not tell» has to be distinguishable from a name, here as everywhere else.
+    expect(host.cpu === null || (typeof host.cpu === "string" && host.cpu.length > 0)).toBe(true);
   });
 });

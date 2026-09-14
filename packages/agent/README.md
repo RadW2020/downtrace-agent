@@ -266,7 +266,7 @@ you would give an application log.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
 - At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.
 - Query texts are normalised once per distinct text and cached, so repeating the same query costs a map lookup, not a re-parse.
-- Measured overhead budget: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB. Checked with `make bench` on a quiet machine, not on every change.
+- Measured overhead budget: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB. Measured after every merge that can move it, on a machine with nothing else on it, and by hand with `make bench`; never as a gate before a merge.
 - Nothing has to be taken on trust: `DOWNTRACE_INSPECT` writes the exact batch, and needs no account.
 
 ## Requirements

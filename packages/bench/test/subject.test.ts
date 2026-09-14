@@ -69,4 +69,23 @@ describe("what a measurement measured", () => {
     expect(line).toContain("clean tree");
     expect(line).toContain("working tree");
   });
+
+  it("names the commit the tree was copied from, because its own resolves nowhere upstream", async () => {
+    const dir = await repo();
+    const upstream = "71cde46b9f2a4c1d8e3f05a6b7c8d9e0f1a2b3c4";
+    const s = subjectOf(join(dir, "packages", "agent", "src", "register.ts"), dir, upstream);
+    expect(s.sourceCommit).toBe(upstream);
+    // The tree's own commit is still its own: the copy does not overwrite the identity of what ran.
+    expect(s.commit).not.toBe(upstream);
+    expect(describeSubject(s)).toContain("copied from 71cde46b9f2a");
+  });
+
+  it("leaves the field out where there is no upstream, because absent reads as «does not apply»", async () => {
+    const dir = await repo();
+    const s = subjectOf(join(dir, "packages", "agent", "src", "register.ts"), dir);
+    // Not null: null is this interface's word for «we could not tell», and a local run is not that.
+    expect("sourceCommit" in s).toBe(false);
+    expect(JSON.parse(JSON.stringify(s))).not.toHaveProperty("sourceCommit");
+    expect(describeSubject(s)).not.toContain("copied from");
+  });
 });

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { availableParallelism, cpus, totalmem } from "node:os";
 
 /**
  * What the rest of the machine was doing while the benchmark measured.
@@ -11,6 +12,31 @@ import { readFile } from "node:fs/promises";
  * Linux only, by reading /proc/stat. Anywhere else this reports that it does not know, which is not the same as
  * reporting a quiet machine.
  */
+
+/**
+ * Which machine measured. Since the benchmark moved to a runner pool (ADR 0134) the hardware is handed out per
+ * run and nobody here chooses it: a series whose machine changed without saying so would be worse than no
+ * series, because the change would read as the instrumentation getting more expensive.
+ */
+export interface Host {
+  /** Cores this process may actually use, which is what a CPU percentage is a percentage of. */
+  cores: number;
+  /** Total memory of the machine, in MiB. */
+  memoryMb: number;
+  /** What the kernel calls the processor, or null where it does not say. Null is «we could not tell». */
+  cpu: string | null;
+}
+
+/** Never throws: a benchmark that cannot say what machine it ran on still has to run and say so. */
+export function hostOf(): Host {
+  const first = cpus()[0];
+  return {
+    cores: availableParallelism(),
+    memoryMb: Math.round(totalmem() / 1024 / 1024),
+    // Empty in some containers, where `cpus()` reports nothing at all rather than reporting a machine.
+    cpu: typeof first?.model === "string" && first.model.trim() !== "" ? first.model.trim() : null,
+  };
+}
 
 export interface CpuTime {
   busyJiffies: number;

@@ -1,0 +1,161 @@
+# Measures the instrumentation's overhead in the public mirror, where GitHub gives public repositories arm64
+# runners at no cost: the architecture this is deployed on, on a machine with nothing else running on it. That
+# is the one thing the benchmark always needed and the machine it used to run on could not give it (ADR 0032).
+#
+# This is not a gate. The mirror syncs after a merge, so no pull request waits for this. What it buys back is
+# the time series ADR 0032 wrote off: a change that doubles what the instrumentation costs now shows up
+# somewhere instead of nowhere.
+#
+# Kept in the private monorepo under .github/mirror/ and copied by mirror.yml; do not edit it in the mirror.
+name: bench
+
+on:
+  # A campaign is launched by hand and says its own configuration, so a run that is not comparable with the
+  # series is at least explicit about why.
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: B/A rounds
+        default: "9"
+      measure:
+        description: Seconds measured per round
+        default: "60"
+      rps:
+        description: Requests per second
+        default: "200"
+  push:
+    branches: [main]
+    # Only what can move the number. The mirror also syncs when an ADR turns public, and measuring that would
+    # put a point on the series that no change explains.
+    paths:
+      - "packages/agent/**"
+      - "packages/protocol/**"
+      - "packages/bench/**"
+      - "packages/reference-app/**"
+      - "pnpm-lock.yaml"
+      # Changing how it measures is a reason to measure again. This is the path the file has in the
+      # mirror, where it runs; its source lives in the monorepo under .github/mirror/.
+      - ".github/workflows/bench.yml"
+
+concurrency:
+  # Two benchmarks measuring at the same time would measure each other. Never cancelled: a half-run measurement
+  # is not a cheaper measurement, it is none.
+  group: bench
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      # To keep the report on the series branch. Nothing else in this repository is written by this job, and a
+      # push with this token starts no workflow, so the series cannot feed itself.
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # A measurement that does not say what machine made it is a number with no owner (gh-525), and here the
+      # machine is not ours: it is whatever the runner pool handed out this time.
+      - name: What machine this is
+        run: |
+          echo "cores: $(nproc) · $(uname -srm)"
+          grep -m1 -i 'model name\|^Model' /proc/cpuinfo || true
+          free -m | head -2
+
+      # The commit this tree carries is the mirror's, and it does not exist in the repository where the
+      # instrumentation is written. The sync leaves the monorepo's sha as a trailer on that same commit, so the
+      # report can name both and whoever reads one can reach the other without knowing how the mirror works.
+      - name: Which commit of the monorepo this is
+        id: source
+        run: |
+          set -euo pipefail
+          sha=$(git log -1 --format=%B | sed -n 's/^Downtrace-Source:[[:space:]]*\([0-9a-f]\{7,40\}\)[[:space:]]*$/\1/p' | head -1 || true)
+          if [ -z "$sha" ]; then echo "note: this commit carries no Downtrace-Source trailer, so the report names only the mirror"; fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # Not a `services:` block on purpose: a service container cannot take arguments, and this Postgres needs
+      # the checkpoint settings that keep it from writing for twenty-six seconds in the middle of a round
+      # (gh-194). They are written in the compose file and nowhere else, so this reads them from there.
+      - name: Postgres and Redis, with the settings the measurement needs
+        run: docker compose -f packages/reference-app/docker-compose.yml up -d --wait
+
+      # The harness demands DATABASE_URL and REDIS_URL by name and reads no environment file, because two
+      # numbers measured from different start-ups cannot be subtracted (ADR 0023).
+      - name: Measure
+        env:
+          DATABASE_URL: postgres://downtrace:downtrace@127.0.0.1:5432/downtrace
+          REDIS_URL: redis://127.0.0.1:6379
+          ROUNDS: ${{ inputs.rounds || '9' }}
+          MEASURE: ${{ inputs.measure || '60' }}
+          RPS: ${{ inputs.rps || '200' }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          args=(--rounds "$ROUNDS" --measure "$MEASURE" --rps "$RPS")
+          if [ -n "$SOURCE_COMMIT" ]; then args+=(--source-commit "$SOURCE_COMMIT"); fi
+          pnpm --filter @downtrace/bench run bench "${args[@]}"
+
+      # The artifact of a run expires, and a series that expires is not a series. Every run therefore leaves its
+      # report on a branch that holds nothing else, named so that two of them can be found and compared. It runs
+      # even when the verdict was `fail`: a measurement that crossed the budget is the one worth keeping.
+      - name: Keep the report where the series lives
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIES_BRANCH: bench-reports
+          SOURCE_COMMIT: ${{ steps.source.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          report=packages/bench/bench-report.json
+          if [ ! -f "$report" ]; then echo "no report was written, so there is nothing to keep"; exit 0; fi
+
+          # The name and the message come out of the report itself: composed from the workflow's own variables
+          # they would describe the run and not the measurement, and those are not the same thing. The name
+          # sorts chronologically and carries the version and the commit, so two runs can be found and compared.
+          name=$(node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const stamp = r.generatedAt.replace(/:/g, "-").replace(/\.\d+Z$/, "Z");
+            const version = r.subject.version ?? "unknown";
+            const commit = (r.subject.sourceCommit ?? r.subject.commit ?? "unknown").slice(0, 7);
+            const metric = (m) => `${m.metric} ${m.delta >= 0 ? "+" : ""}${m.delta} ${m.unit} (budget ${m.budget}, noise ${m.noise}) ${m.status}`;
+            fs.writeFileSync(
+              process.argv[2],
+              `bench: agent ${version} — ${r.verdict} on ${r.config.rounds}×${r.config.measureSec}s at ${r.config.rps} rps\n\n` +
+                `${r.metrics.map(metric).join("\n")}\n` +
+                `${r.reason ? `\n${r.reason}\n` : ""}\n`,
+            );
+            console.log(`${stamp}-agent-${version}-${commit}.json`);
+          ' "$report" "$RUNNER_TEMP/msg")
+
+          origin="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Clone it or start it: the first run of all finds no branch, and a first run that cannot keep its
+          # report is a first point the series never gets.
+          git clone --depth 1 --branch "$SERIES_BRANCH" "$origin" series 2>/dev/null || {
+            mkdir series
+            git -C series init -q -b "$SERIES_BRANCH"
+            git -C series remote add origin "$origin"
+          }
+          cp "$report" "series/$name"
+          cd series
+          git add -- "$name"
+          if git diff --cached --quiet; then echo "that report is already kept"; exit 0; fi
+          {
+            echo "Run: ${RUN_URL}"
+            echo "Mirror-Commit: ${GITHUB_SHA}"
+            # The same trailer the sync leaves, so one `git log` reaches the monorepo from here too.
+            if [ -n "$SOURCE_COMMIT" ]; then echo "Downtrace-Source: ${SOURCE_COMMIT}"; fi
+          } >> "$RUNNER_TEMP/msg"
+          git -c user.name=RadW2020 -c user.email=8538542+RadW2020@users.noreply.github.com commit -q -F "$RUNNER_TEMP/msg"
+          git push origin "HEAD:$SERIES_BRANCH"
+          echo "kept as $name on $SERIES_BRANCH"

@@ -14,6 +14,8 @@ const { values } = parseArgs({
     rps: { type: "string" },
     seed: { type: "string" },
     agent: { type: "string" },
+    /** The commit this tree was copied from, for a run outside the repository the code is written in. */
+    "source-commit": { type: "string" },
     out: { type: "string", default: "bench-report.json" },
   },
 });
@@ -29,6 +31,19 @@ function num(name: string, v: string | undefined): number | undefined {
   return n;
 }
 
+/**
+ * A commit is a sha and nothing else. Anything else here would be somebody piping a whole commit message in,
+ * and a report that names a commit nobody can look up is worse than one that names none.
+ */
+function sha(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  if (!/^[0-9a-f]{7,40}$/.test(v)) {
+    console.error(`[bench] --source-commit must be a commit sha, got ${JSON.stringify(v)}`);
+    process.exit(2);
+  }
+  return v;
+}
+
 const report = await runBench({
   rounds: num("rounds", values.rounds),
   warmupCleanSec: num("warmup", values.warmup),
@@ -37,6 +52,7 @@ const report = await runBench({
   rps: num("rps", values.rps),
   seed: num("seed", values.seed),
   agentPath: values.agent,
+  sourceCommit: sha(values["source-commit"]),
   log: (line) => console.error(`[bench] ${line}`),
 });
 

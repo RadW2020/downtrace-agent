@@ -6,9 +6,10 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
  * What a measurement measured.
  *
  * The report used to carry the Node version and the platform and nothing about the instrumentation, so a
- * green from another version read exactly like a green from this one. Since the benchmark left CI (ADR 0032)
- * the only evidence for invariant 3 is a manual run, and a manual run with no provenance is a number with no
- * owner (gh-525).
+ * green from another version read exactly like a green from this one. The evidence for invariant 3 is the runs
+ * themselves — after a merge on a machine of its own, and by hand (ADR 0032, 0134) — and a run with no
+ * provenance is a number with no owner (gh-525). It matters more, not less, now that the runs form a series:
+ * two points cannot be compared without knowing what each of them measured.
  *
  * Every field can be `null`, and `null` here means «we could not tell», which is not the same as «does not
  * apply». An absent field would read as the second.
@@ -27,17 +28,27 @@ export interface BenchSubject {
    * what a package manager put in `node_modules`: they are not interchangeable evidence.
    */
   source: "working-tree" | "installed" | "unknown";
+  /**
+   * The commit, in the repository this tree was copied from, that the copy was made at. Optional and never
+   * `null`, which is the distinction the rest of this interface draws: a run in the repository where the code
+   * is written has no upstream commit, and that is «does not apply», not «we could not tell». It exists
+   * because `commit` above is the commit of the tree that ran, and when that tree is a copy — the public
+   * mirror, where the benchmark now measures — that sha resolves nowhere for whoever reads the report.
+   */
+  sourceCommit?: string;
 }
 
 /**
  * Resolves the subject, and never throws: a benchmark that cannot say what it measured still has to run and
  * say so. Everything it cannot determine comes back as an explicit unknown.
  */
-export function subjectOf(agentPath: string, repoRoot: string): BenchSubject {
+export function subjectOf(agentPath: string, repoRoot: string, sourceCommit?: string): BenchSubject {
   const absolute = resolve(agentPath);
   const inside = isInside(absolute, repoRoot);
   const node_modules = absolute.split(sep).includes("node_modules");
   return {
+    // Spread rather than assigned, so that not having been told leaves no field at all.
+    ...(sourceCommit === undefined ? {} : { sourceCommit }),
     // Relative inside the repository: an absolute path carries somebody's home directory, which is nobody
     // else's business and is not part of the identity.
     agentPath: inside ? relative(repoRoot, absolute) : absolute,
@@ -96,5 +107,6 @@ export function describeSubject(s: BenchSubject): string {
   const version = s.version ?? "version unknown";
   const commit = s.commit ? s.commit.slice(0, 12) : "commit unknown";
   const tree = s.dirty === null ? "tree unknown" : s.dirty ? "**uncommitted changes**" : "clean tree";
-  return `Measured \`${s.agentPath}\` · ${version} · ${commit} · ${tree} · from the ${s.source.replace("-", " ")}`;
+  const copied = s.sourceCommit ? ` · copied from ${s.sourceCommit.slice(0, 12)}` : "";
+  return `Measured \`${s.agentPath}\` · ${version} · ${commit} · ${tree} · from the ${s.source.replace("-", " ")}${copied}`;
 }

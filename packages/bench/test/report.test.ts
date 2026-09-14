@@ -8,6 +8,7 @@ const report: BenchReport = {
   generatedAt: "2026-09-03T00:00:00.000Z",
   node: "v24.0.0",
   platform: "linux-x64",
+  host: { cores: 4, memoryMb: 16384, cpu: "Neoverse-N1" },
   subject: {
     agentPath: "packages/agent/src/register.ts",
     version: "0.8.1",

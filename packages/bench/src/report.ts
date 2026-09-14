@@ -1,5 +1,6 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import type { LoadReport } from "./load.ts";
+import type { Host } from "./machine.ts";
 import type { PoolWait, ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
 import { type BenchSubject, describeSubject } from "./subject.ts";
@@ -47,6 +48,8 @@ export interface BenchReport {
   generatedAt: string;
   node: string;
   platform: string;
+  /** Which machine measured, which the runner pool decides and not us (ADR 0134). */
+  host: Host;
   /** What was measured: version, commit, whether the tree was clean and where the code came from (gh-525). */
   subject: BenchSubject;
   config: BenchConfig;
@@ -66,6 +69,7 @@ export function toMarkdown(r: BenchReport): string {
     describeSubject(r.subject),
     "",
     `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (after ${r.config.warmupCleanSec}s clean warmup, max ${r.config.warmupMaxSec}s) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
+    `On ${r.host.cores} core(s), ${r.host.memoryMb} MiB${r.host.cpu ? `, ${r.host.cpu}` : ""}.`,
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,
     ...(r.reason ? ["", `**${r.reason}**`] : []),
     "",

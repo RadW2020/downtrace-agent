@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { type AppHandle, startReferenceApp } from "./app-process.ts";
 import { runLoad } from "./load.ts";
-import { otherCpuPct, readCpuTime } from "./machine.ts";
+import { hostOf, otherCpuPct, readCpuTime } from "./machine.ts";
 import { checkpointsSince, ProcessSampler, poolWaitSince, resetDatabase } from "./process-sampler.ts";
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
@@ -39,6 +39,8 @@ export interface BenchOptions {
   rps?: number | undefined;
   seed?: number | undefined;
   agentPath?: string | undefined;
+  /** The commit this tree was copied from, when it is a copy; see `BenchSubject.sourceCommit`. */
+  sourceCommit?: string | undefined;
   /** Extra environment for both variants (e.g. STARTUP_FAILURE_MS in tests). */
   appEnv?: Record<string, string> | undefined;
   /** Extra environment for the agent variant only (e.g. DOWNTRACE_INTERVAL_MS in tests). */
@@ -220,7 +222,10 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     generatedAt: new Date().toISOString(),
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
-    subject: subjectOf(config.agentPath ?? DEFAULT_AGENT_PATH, repoRoot()),
+    host: hostOf(),
+    // Provenance and not configuration: it says nothing about how the measurement was taken, so it does not
+    // belong in `config`, which is what two reports have to share before they can be subtracted.
+    subject: subjectOf(config.agentPath ?? DEFAULT_AGENT_PATH, repoRoot(), opts.sourceCommit),
     config,
     rounds,
     metrics,
