@@ -90,6 +90,7 @@ const report: BenchReport = {
       noise: 0,
       budget: 1,
       status: "ok",
+      resolved: true,
     },
     {
       metric: "cpuPct",
@@ -102,6 +103,7 @@ const report: BenchReport = {
       noise: 0,
       budget: 3,
       status: "ok",
+      resolved: true,
     },
     {
       metric: "rssMb",
@@ -114,10 +116,34 @@ const report: BenchReport = {
       noise: 0,
       budget: 64,
       status: "ok",
+      resolved: true,
     },
   ],
   verdict: "pass",
 };
+
+describe("an unresolved ok in the table (gh-587)", () => {
+  it("paints it as a warning that says why, not as a green check", () => {
+    const unresolved: BenchReport = {
+      ...report,
+      metrics: report.metrics.map((m) =>
+        m.metric === "p99Ms" ? { ...m, noise: 1.067, resolved: false } : { ...m, resolved: true },
+      ),
+      verdict: "inconclusive",
+      reason: "p99Ms is under the budget (Δ+0.4ms) but its noise (1.067) exceeds the budget (1)",
+    };
+    const md = toMarkdown(unresolved);
+    expect(md).toContain(
+      "| p99Ms (ms, pooled n=12000) | 6 | 6.4 | +0.4 | — | 1.067 | ≤ 1 | ⚠️ ok, unresolved (noise 1.067 > budget 1) |",
+    );
+    expect(md).toContain("**INCONCLUSIVE**");
+  });
+
+  it("keeps the green check for an ok the machine resolved", () => {
+    const md = toMarkdown({ ...report, metrics: report.metrics.map((m) => ({ ...m, resolved: true })) });
+    expect(md).toContain("| ✅ ok |");
+  });
+});
 
 describe("where the measured CPU goes (gh-570)", () => {
   it("puts the agent's own hook estimate beside the measured CPU per request, in the same unit", () => {

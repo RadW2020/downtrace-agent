@@ -1,6 +1,6 @@
 # ADR 0030 — El veredicto lo decide el margen sobre el presupuesto, no Δ
 
-Estado: aceptado · Fecha: 2026-09-08 · Supera la condición de `fail` de los ADR 0007 y 0010 · Alcance: público
+Estado: aceptado; su lectura de que «no estar por encima no necesita resolverse» se mantiene para el estado de la métrica y está **superada por el ADR 0138** para el veredicto de la tirada (un `ok` cuyo ruido supera al presupuesto no es `pass`) · Fecha: 2026-09-08 · Supera la condición de `fail` de los ADR 0007 y 0010 · Alcance: público
 
 ## Contexto
 

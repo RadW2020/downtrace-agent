@@ -82,7 +82,7 @@ export function toMarkdown(r: BenchReport): string {
     "|---|---:|---:|---:|---:|---:|---:|:-:|",
     ...r.metrics.map(
       (m) =>
-        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.excess > 0 ? `+${m.excess}` : "—"} | ${m.noise}${m.noiseSource ? ` (${m.noiseSource})` : ""} | ≤ ${m.budget} | ${ICON[m.status]} ${m.status}${m.reason ? ` — ${m.reason}` : ""} |`,
+        `| ${m.metric} (${m.unit}${m.method === "pooled-p99" ? `, pooled n=${m.samples}` : ", median of rounds"}) | ${m.baselineMedian} | ${m.agentMedian} | ${m.delta >= 0 ? "+" : ""}${m.delta} | ${m.excess > 0 ? `+${m.excess}` : "—"} | ${m.noise}${m.noiseSource ? ` (${m.noiseSource})` : ""} | ≤ ${m.budget} | ${statusCell(m)} |`,
     ),
     "",
     "<details><summary>Rounds</summary>",
@@ -98,6 +98,16 @@ export function toMarkdown(r: BenchReport): string {
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * What the row says about itself. An `ok` the machine could not resolve is a warning and not a green check: the
+ * metric did not cross the budget, but with noise larger than the budget nobody can tell that from crossing it
+ * by less than the noise (gh-587, ADR 0138).
+ */
+export function statusCell(m: MetricVerdict): string {
+  if (m.status === "ok" && !m.resolved) return `⚠️ ok, unresolved (noise ${m.noise} > budget ${m.budget})`;
+  return `${ICON[m.status]} ${m.status}${m.reason ? ` — ${m.reason}` : ""}`;
 }
 
 /**

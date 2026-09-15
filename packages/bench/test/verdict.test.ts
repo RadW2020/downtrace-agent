@@ -500,6 +500,73 @@ describe("the margin over the budget is what has to be resolvable", () => {
  * The rounds alternate so that each pair sees the same machine. On a shared box that assumption breaks silently:
  * the benchmark's collapses lined up one-to-one with another CI runner's jobs on the same VM (gh-200).
  */
+/**
+ * An `ok` says «Δ did not cross the budget». When the noise is larger than the budget, the machine could not tell a
+ * Δ under the line from one just over it, and that `ok` is not a verification of anything — the «comfortable, false
+ * green» the README named (gh-587, ADR 0138). The status keeps its meaning; the run does not call it `pass`.
+ */
+describe("an ok the machine could not resolve", () => {
+  const rounds = (values: number[]): RoundMetrics[] => values.map((cpuPct) => ({ p99Ms: 0, cpuPct, rssMb: 0 }));
+  const budget = { p99Ms: 1, cpuPct: 3, rssMb: 64 };
+
+  it("is still ok, but not resolved, and the run is inconclusive and says why", () => {
+    // Baseline drifting by 10 pp between rounds: the noise (35.13) dwarfs the budget (3); Δ is 1.
+    const { metrics, verdict, reason } = evaluate(rounds([10, 30, 20]), rounds([11, 31, 21]), budget);
+    const cpu = metrics.find((m) => m.metric === "cpuPct");
+    expect(cpu?.status).toBe("ok");
+    expect(cpu?.resolved).toBe(false);
+    expect(verdict).toBe("inconclusive");
+    expect(reason).toMatch(/cpuPct is under the budget \(Δ\+1pp\) but its noise \(35\.134\) exceeds the budget \(3\)/);
+    expect(reason).toMatch(/cannot tell a Δ under the line from one just over it/);
+  });
+
+  it("is resolved when the noise fits inside the budget, and the run is pass", () => {
+    const { metrics, verdict, reason } = evaluate(rounds([20, 20.2, 20.1]), rounds([21, 21.2, 21.1]), budget);
+    expect(metrics.every((m) => m.status === "ok" && m.resolved)).toBe(true);
+    expect(verdict).toBe("pass");
+    expect(reason).toBeUndefined();
+  });
+
+  it("a fail is resolved by construction: its excess beat the noise", () => {
+    const { metrics, verdict } = evaluate(rounds([20, 20.2, 20.1]), rounds([30, 30.2, 30.1]), budget);
+    const cpu = metrics.find((m) => m.metric === "cpuPct");
+    expect(cpu?.status).toBe("fail");
+    expect(cpu?.resolved).toBe(true);
+    expect(verdict).toBe("fail");
+  });
+
+  it("an inconclusive is not resolved either, and the reason names both kinds apart", () => {
+    // p99 (median of rounds here): Δ 2 over a budget of 1 inside a noise of 10.7 → inconclusive; cpu ok but drifting.
+    const b = [r(3.0, 10), r(9.0, 30), r(5.0, 20)];
+    const a = [r(7.0, 11), r(7.5, 31), r(6.8, 21)];
+    const { metrics, verdict, reason } = evaluate(b, a, budget);
+    expect(metrics.find((m) => m.metric === "p99Ms")?.resolved).toBe(false);
+    expect(metrics.find((m) => m.metric === "cpuPct")?.resolved).toBe(false);
+    expect(verdict).toBe("inconclusive");
+    expect(reason).toMatch(/^machine noise exceeds the budget for p99Ms Δ2ms \(budget 1, noise 10\.7\d*\)/);
+    expect(reason).toMatch(/cpuPct is under the budget/);
+  });
+
+  /** The campaign of 2026-09-15 13:00 on the mirror, replayed from its own figures: the case that motivated this. */
+  it("campaign 2026-09-15T13-00-05Z: p99 under the line by 0.112 ms with 1.067 ms of noise is not a pass", () => {
+    const p99 = { metric: "p99Ms", delta: 0.888, noise: 1.067, budget: 1 } as const;
+    // Rebuilt as median-of-rounds with the same Δ and a drift that reproduces the noise: what matters is the rule.
+    const baseline = [20, 20.6, 21.24]; // drift = 4.303 · sd · √(2/3) ≈ 2.18 > 1 → unresolved either way
+    const agent = baseline.map((v) => v + p99.delta);
+    const { metrics, verdict, reason } = evaluate(
+      baseline.map((v) => r(v)),
+      agent.map((v) => r(v)),
+      budget,
+    );
+    const m = metrics.find((x) => x.metric === "p99Ms");
+    expect(m?.status).toBe("ok");
+    expect(m?.delta).toBeCloseTo(p99.delta, 3);
+    expect(m?.resolved).toBe(false);
+    expect(verdict).not.toBe("pass");
+    expect(reason).toMatch(/p99Ms is under the budget/);
+  });
+});
+
 describe("a pair that did not see the same machine", () => {
   const pair = (round: number, variant: "baseline" | "agent", otherCpuPct: number | undefined) => ({
     round,

@@ -23,6 +23,13 @@ export interface MetricVerdict {
   noiseSource?: "split-half" | "round-drift" | undefined;
   budget: number;
   status: MetricStatus;
+  /**
+   * Whether the machine resolved this metric's line. An `ok` is resolved when its noise fits inside its budget:
+   * with noise larger than the budget, «Δ did not cross» cannot be told from «Δ crossed by less than the noise».
+   * A `fail` is resolved by construction —its excess beat the noise— and an `inconclusive` is not. A run is `pass`
+   * only when every metric is `ok` and resolved (gh-587, ADR 0138).
+   */
+  resolved: boolean;
   /** Δ of each agent round against the baseline rounds' median; pooled latency only. */
   roundDeltas?: number[] | undefined;
   /** Why a fail was withheld, when corroboration is what decided it. */
@@ -95,6 +102,7 @@ export function evaluate(
     const delta = agentMedian - baselineMedian;
     const excess = delta - budget[metric];
     const status: MetricStatus = rule?.status ?? (excess <= 0 ? "ok" : excess > noise ? "fail" : "inconclusive");
+    const resolved = status === "fail" || (status === "ok" && noise <= budget[metric]);
     return {
       metric,
       unit: UNITS[metric],
@@ -109,20 +117,43 @@ export function evaluate(
       noiseSource: rule?.noiseSource,
       budget: budget[metric],
       status,
+      resolved,
       roundDeltas: rule?.roundDeltas.map((d) => round(d, 3)),
       reason: rule?.reason,
     };
   });
+  // A pass needs every metric ok **and resolved**: an ok whose noise exceeds its budget did not cross the line, but
+  // the machine could not see the line, and a run that reports it as verified is the false green the README
+  // names (gh-587, ADR 0138). ADR 0134 promised «never reported as verified»; this is where that becomes a field.
   const verdict: Verdict = metrics.some((m) => m.status === "fail")
     ? "fail"
-    : metrics.some((m) => m.status === "inconclusive")
+    : metrics.some((m) => !m.resolved)
       ? "inconclusive"
       : "pass";
   if (verdict === "pass") return { metrics, verdict };
   const broken = describeBrokenMetrics(metrics);
-  const reason =
-    verdict === "fail" ? `overhead budget exceeded: ${broken}` : `machine noise exceeds the budget for ${broken}`;
-  return { metrics, verdict, reason };
+  const unresolved = describeUnresolvedOks(metrics);
+  if (verdict === "fail") return { metrics, verdict, reason: `overhead budget exceeded: ${broken}` };
+  const parts = [
+    ...(broken === "" ? [] : [`machine noise exceeds the budget for ${broken}`]),
+    ...(unresolved === "" ? [] : [unresolved]),
+  ];
+  return { metrics, verdict, reason: parts.join(" · ") };
+}
+
+/**
+ * Every `ok` the machine did not resolve, in words that say what that means: the metric is under the budget, but
+ * with noise larger than the budget a Δ under the line cannot be told from one just over it (gh-587).
+ */
+function describeUnresolvedOks(metrics: readonly MetricVerdict[]): string {
+  return metrics
+    .filter((m) => m.status === "ok" && !m.resolved)
+    .map(
+      (m) =>
+        `${m.metric} is under the budget (Δ${m.delta >= 0 ? "+" : ""}${m.delta}${m.unit}) but its noise (${m.noise}) ` +
+        `exceeds the budget (${m.budget}): the machine cannot tell a Δ under the line from one just over it`,
+    )
+    .join("; ");
 }
 
 /**
