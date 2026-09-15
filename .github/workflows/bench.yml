@@ -14,6 +14,14 @@ on:
   # series is at least explicit about why.
   workflow_dispatch:
     inputs:
+      mode:
+        description: >-
+          bench: the overhead campaign (default). instruments: what each observer and each half of the black box
+          costs, seven head-to-head benchmarks in one run (ADR 0027, gh-570) — 20 seconds per round is plenty
+          there, and 60 takes over two hours.
+        default: bench
+        type: choice
+        options: [bench, instruments]
       rounds:
         description: B/A rounds
         default: "9"
@@ -49,7 +57,9 @@ permissions:
 jobs:
   bench:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    # A campaign is twenty minutes; the seven benchmarks of `instruments` at nine rounds are an hour at 20 s per
+    # round, and two and a half at 60.
+    timeout-minutes: 180
     permissions:
       # To keep the report on the series branch. Nothing else in this repository is written by this job, and a
       # push with this token starts no workflow, so the series cannot feed itself.
@@ -94,6 +104,7 @@ jobs:
         env:
           DATABASE_URL: postgres://downtrace:downtrace@127.0.0.1:5432/downtrace
           REDIS_URL: redis://127.0.0.1:6379
+          MODE: ${{ inputs.mode || 'bench' }}
           ROUNDS: ${{ inputs.rounds || '9' }}
           MEASURE: ${{ inputs.measure || '60' }}
           RPS: ${{ inputs.rps || '200' }}
@@ -102,7 +113,13 @@ jobs:
           set -euo pipefail
           args=(--rounds "$ROUNDS" --measure "$MEASURE" --rps "$RPS")
           if [ -n "$SOURCE_COMMIT" ]; then args+=(--source-commit "$SOURCE_COMMIT"); fi
-          pnpm --filter @downtrace/bench run bench "${args[@]}"
+          # Both scripts take the same flags and both write a JSON report the next step keeps; only the question
+          # differs — how much the whole agent costs, or which part of it costs what (gh-570).
+          if [ "$MODE" = instruments ]; then
+            pnpm --filter @downtrace/bench run instruments "${args[@]}"
+          else
+            pnpm --filter @downtrace/bench run bench "${args[@]}"
+          fi
 
       # The artifact of a run expires, and a series that expires is not a series. Every run therefore leaves its
       # report on a branch that holds nothing else, named so that two of them can be found and compared. It runs
@@ -111,12 +128,13 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode || 'bench' }}
           SERIES_BRANCH: bench-reports
           SOURCE_COMMIT: ${{ steps.source.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          report=packages/bench/bench-report.json
+          if [ "$MODE" = instruments ]; then report=packages/bench/instruments-report.json; else report=packages/bench/bench-report.json; fi
           if [ ! -f "$report" ]; then echo "no report was written, so there is nothing to keep"; exit 0; fi
 
           # The name and the message come out of the report itself: composed from the workflow's own variables
@@ -126,8 +144,22 @@ jobs:
             const fs = require("node:fs");
             const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             const stamp = r.generatedAt.replace(/:/g, "-").replace(/\.\d+Z$/, "Z");
-            const version = r.subject.version ?? "unknown";
-            const commit = (r.subject.sourceCommit ?? r.subject.commit ?? "unknown").slice(0, 7);
+            const version = r.subject?.version ?? "unknown";
+            const commit = (r.subject?.sourceCommit ?? r.subject?.commit ?? "unknown").slice(0, 7);
+            if (r.kind === "instruments") {
+              // What each observer and each half of the black box costs (gh-570): one line per comparison, and
+              // whether the machine resolved it (ADR 0027). Named apart from the campaigns so the series stays
+              // a series and this stays what it is.
+              const resolved = r.steps.filter((s) => s.resolved).length;
+              const step = (s) => `${s.name}: ΔCPU ${s.cpuPp >= 0 ? "+" : ""}${s.cpuPp} pp ± ${s.cpuNoise2se} (p ${s.p}) ${s.resolved ? "resolved" : "not resolved"}`;
+              fs.writeFileSync(
+                process.argv[2],
+                `bench-instruments: agent ${version} — ${resolved} of ${r.steps.length} resolved on ${r.config.rounds}×${r.config.measureSec}s at ${r.config.rps} rps\n\n` +
+                  `${r.steps.map(step).join("\n")}\n\n`,
+              );
+              console.log(`${stamp}-instruments-${version}-${commit}.json`);
+              return;
+            }
             const metric = (m) => `${m.metric} ${m.delta >= 0 ? "+" : ""}${m.delta} ${m.unit} (budget ${m.budget}, noise ${m.noise}) ${m.status}`;
             fs.writeFileSync(
               process.argv[2],

@@ -3,6 +3,7 @@ import type { LoadReport } from "./load.ts";
 import type { Host } from "./machine.ts";
 import type { PoolWait, ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
+import { round } from "./stats.ts";
 import { type BenchSubject, describeSubject } from "./subject.ts";
 import type { MetricVerdict, Verdict } from "./verdict.ts";
 import type { WarmupResult } from "./warmup.ts";
@@ -71,6 +72,7 @@ export function toMarkdown(r: BenchReport): string {
     `${r.config.rounds} rounds/variant · ${r.config.rps} rps · ${r.config.measureSec}s measured (after ${r.config.warmupCleanSec}s clean warmup, max ${r.config.warmupMaxSec}s) · seed ${r.config.seed} · ${r.node} ${r.platform}`,
     `On ${r.host.cores} core(s), ${r.host.memoryMb} MiB${r.host.cpu ? `, ${r.host.cpu}` : ""}.`,
     `Agent shipped ${totalBatches(r)} batch(es) to the sink across its rounds.`,
+    ...(hooksShare(r) === undefined ? [] : [hooksShare(r) as string]),
     ...(r.reason ? ["", `**${r.reason}**`] : []),
     "",
     // The margin is in the table because it is the number the verdict rests on: a Δ that dwarfs the noise says
@@ -96,6 +98,29 @@ export function toMarkdown(r: BenchReport): string {
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * Where the measured CPU goes, by phase: the agent's own estimate of its hooks (one in sixty-four timed, ADR 0080,
+ * carried in every batch and read by the sink) beside the measured Δ CPU in the same unit. A percentage point of
+ * one core is 10 ms of CPU per second, and the load is `rps` requests per second, so `Δpp × 10 / rps` is the
+ * measured milliseconds of CPU per request; what the hooks do not account for runs outside them — transport,
+ * serialisation, timers, the pressure the agent puts on the collector (gh-570). Both are estimates and say so.
+ */
+export function hooksShare(r: BenchReport): string | undefined {
+  const estimates = r.rounds.map((x) => x.sink?.hookMsPerRequest).filter((v): v is number => v !== undefined);
+  const cpu = r.metrics.find((m) => m.metric === "cpuPct");
+  if (estimates.length === 0 || cpu === undefined || r.config.rps <= 0) return undefined;
+  const hooksMs = estimates.reduce((a, b) => a + b, 0) / estimates.length;
+  const measuredMs = (cpu.delta * 10) / r.config.rps;
+  const share = measuredMs > 0 ? Math.round((hooksMs / measuredMs) * 100) : undefined;
+  return (
+    `The agent's own estimate of its hooks: ~${round(hooksMs, 3)} ms of CPU per request (sampled, ADR 0080), ` +
+    `against ${round(measuredMs, 3)} ms per request measured (Δ ${cpu.delta} pp at ${r.config.rps} rps)` +
+    (share === undefined
+      ? "."
+      : ` — about ${share} % of the measured cost is inside the hooks; the rest runs outside them.`)
+  );
 }
 
 function totalBatches(r: BenchReport): number {

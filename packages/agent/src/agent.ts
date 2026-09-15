@@ -246,7 +246,7 @@ export class Agent {
     this.reference = deps.reference ?? new ReferenceRegister();
     this.prearm = deps.prearm ?? new PrearmRegister();
     this.runtime = deps.runtime ?? new RuntimeSampler();
-    this.overhead = deps.overhead ?? new OverheadMeter();
+    this.overhead = deps.overhead ?? new OverheadMeter({ floor: config.shed });
     if (config.instrument.has("pg")) {
       this.fingerprints = new FingerprintCache();
       this.errors = new ErrorFingerprintCache();

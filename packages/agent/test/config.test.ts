@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { configFromEnv, DEFAULT_INTERVAL_MS, detectVersion, INSTRUMENTS, parseInstruments } from "../src/config.ts";
+import {
+  configFromEnv,
+  DEFAULT_INTERVAL_MS,
+  detectVersion,
+  INSTRUMENTS,
+  parseInstruments,
+  parseShed,
+} from "../src/config.ts";
+import { Sheddable } from "../src/overhead.ts";
 import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 describe("configFromEnv", () => {
@@ -63,6 +71,34 @@ describe("which observers to run", () => {
   it("ignores names it does not know rather than failing to start", () => {
     expect([...parseInstruments("pg,cassandra")]).toEqual(["pg"]);
     expect([...parseInstruments("nonsense")]).toEqual([]);
+  });
+});
+
+/**
+ * The floor under the meter's shedding level (gh-570): the benchmark's switch for weighing the fine detail and
+ * the profile on their own. It reads like `DOWNTRACE_INSTRUMENT`: forgiving about case and spaces, and an
+ * unknown value means the default rather than a refusal to start.
+ */
+describe("DOWNTRACE_SHED", () => {
+  it("gives up nothing by default", () => {
+    expect(parseShed(undefined)).toBe(Sheddable.Nothing);
+    expect(parseShed("")).toBe(Sheddable.Nothing);
+    expect(parseShed("nothing")).toBe(Sheddable.Nothing);
+  });
+
+  it("holds the fine detail, or the fine detail and the profile", () => {
+    expect(parseShed("fine")).toBe(Sheddable.Fine);
+    expect(parseShed(" Profile ")).toBe(Sheddable.Profile);
+  });
+
+  it("ignores a value it does not know rather than failing to start", () => {
+    expect(parseShed("everything")).toBe(Sheddable.Nothing);
+  });
+
+  it("reaches the configuration", () => {
+    const result = configFromEnv({ DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "http://c", DOWNTRACE_SHED: "fine" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.config.shed).toBe(Sheddable.Fine);
   });
 });
 

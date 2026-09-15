@@ -1,4 +1,5 @@
 import { patternsOf } from "./exclude.ts";
+import { Sheddable, type SheddableLevel } from "./overhead.ts";
 import { PROFILE_WINDOW_MS } from "./profile.ts";
 
 export interface AgentConfig {
@@ -45,6 +46,12 @@ export interface AgentConfig {
    * signatures do not travel at all (`product.md:104`, ADR 0105).
    */
   minimal: boolean;
+  /**
+   * The least the instrumentation gives up, whatever its own meter measures: `nothing`, `fine` or `profile`
+   * (ADR 0080). The benchmark's switch for weighing each half of the black box on its own (gh-570); an operator
+   * leaves it alone.
+   */
+  shed: SheddableLevel;
 }
 
 export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
@@ -104,6 +111,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
       minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
+      shed: parseShed(env.DOWNTRACE_SHED),
       excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
@@ -129,6 +137,22 @@ function clamp(value: string, max: number): string {
  * everything; anything else is a comma-separated list of names, and unknown names are ignored rather than fatal:
  * an operator's typo should not take the agent down with it.
  */
+/**
+ * Reads the floor under the meter's shedding level (gh-570): `nothing` (the default), `fine` or `profile`.
+ * Anything else is `nothing`, the way an unknown observer name is ignored: a typo must not take the agent down,
+ * and this is the benchmark's switch, not an operator's.
+ */
+export function parseShed(value: string | undefined): SheddableLevel {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "fine":
+      return Sheddable.Fine;
+    case "profile":
+      return Sheddable.Profile;
+    default:
+      return Sheddable.Nothing;
+  }
+}
+
 export function parseInstruments(value: string | undefined): ReadonlySet<Instrument> {
   const raw = (value ?? "all").trim().toLowerCase();
   if (raw === "" || raw === "all" || raw === "auto") return new Set(INSTRUMENTS);

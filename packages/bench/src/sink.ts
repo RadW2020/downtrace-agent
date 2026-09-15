@@ -9,6 +9,11 @@ export interface SinkStats {
   /** Sum of endpoint counts, i.e. requests the agent reported. */
   requests: number;
   rejected: number;
+  /**
+   * The agent's own estimate of what its hooks cost per request, averaged over the batches that carried one
+   * (`agent.resources.hookMsPerRequest`, ADR 0080). Absent when no batch did: not knowing is not zero (gh-570).
+   */
+  hookMsPerRequest?: number | undefined;
 }
 
 /**
@@ -19,6 +24,8 @@ export interface SinkStats {
  */
 export class Sink {
   readonly stats: SinkStats = { batches: 0, intervals: 0, endpoints: 0, requests: 0, rejected: 0 };
+  /** Every hook estimate a batch carried, so the mean is a mean and not a running approximation of one. */
+  private readonly hookEstimates: number[] = [];
   private readonly server = http.createServer((req, res) => this.handle(req, res));
   private port = 0;
 
@@ -57,8 +64,14 @@ export class Sink {
       try {
         const batch = JSON.parse(Buffer.concat(chunks).toString()) as {
           intervals: { endpoints: { count: number }[] }[];
+          agent?: { resources?: { hookMsPerRequest?: number } };
         };
         this.stats.batches += 1;
+        const hooks = batch.agent?.resources?.hookMsPerRequest;
+        if (typeof hooks === "number" && Number.isFinite(hooks)) {
+          this.hookEstimates.push(hooks);
+          this.stats.hookMsPerRequest = this.hookEstimates.reduce((a, b) => a + b, 0) / this.hookEstimates.length;
+        }
         for (const iv of batch.intervals) {
           this.stats.intervals += 1;
           for (const ep of iv.endpoints) {

@@ -66,6 +66,12 @@ export interface OverheadOptions {
   sampleEvery?: number;
   windowRequests?: number;
   budgetMs?: number;
+  /**
+   * The least the meter gives up, whatever it measures: the level starts here and recovery never goes below it,
+   * while shedding above it works as always. A measurement's switch (`DOWNTRACE_SHED`, gh-570), not an
+   * operator's: it is how the benchmark holds one seam of the black box shut to weigh what is behind it.
+   */
+  floor?: SheddableLevel;
   /** Injected so a test can drive the clock, and so nothing here reaches for a global. */
   now?: () => number;
 }
@@ -88,6 +94,7 @@ export class OverheadMeter {
   private readonly mask: number;
   private readonly window: number;
   private readonly budget: number;
+  private readonly floor: SheddableLevel;
   private readonly now: () => number;
 
   /** Hooks seen, and the ones that were timed. */
@@ -99,7 +106,7 @@ export class OverheadMeter {
   private requests = 0;
 
   private estimateMs = 0;
-  private level: SheddableLevel = Sheddable.Nothing;
+  private level: SheddableLevel;
   private why = "";
 
   constructor(opts: OverheadOptions = {}) {
@@ -108,6 +115,9 @@ export class OverheadMeter {
     this.mask = (this.every & (this.every - 1)) === 0 ? this.every - 1 : 0;
     this.window = opts.windowRequests ?? WINDOW_REQUESTS;
     this.budget = opts.budgetMs ?? OVERHEAD_BUDGET_MS;
+    this.floor = opts.floor ?? Sheddable.Nothing;
+    // Held by configuration is not given up for a reason: the reason stays empty until the meter itself sheds.
+    this.level = this.floor;
     this.now = opts.now ?? (() => performance.now());
   }
 
@@ -161,9 +171,9 @@ export class OverheadMeter {
       this.why = ThrottleReasons.Latency;
       return;
     }
-    if (this.estimateMs < this.budget / 2 && this.level > Sheddable.Nothing) {
+    if (this.estimateMs < this.budget / 2 && this.level > this.floor) {
       this.level = (this.level - 1) as SheddableLevel;
-      if (this.level === Sheddable.Nothing) this.why = "";
+      if (this.level === this.floor) this.why = "";
     }
   }
 

@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { runBench } from "./bench.ts";
+import { STEPS } from "./instruments-steps.ts";
+import type { BenchReport } from "./report.ts";
 import { EXACT_LIMIT, gate, permutationP, roundsToResolve, smallestP } from "./significance.ts";
 import { round } from "./stats.ts";
 
@@ -26,6 +29,10 @@ const { values } = parseArgs({
     measure: { type: "string" },
     rps: { type: "string" },
     seed: { type: "string" },
+    /** The commit this tree was copied from, for a run outside the repository the code is written in. */
+    "source-commit": { type: "string" },
+    /** Where the JSON goes, so the mirror can keep a run beside the campaigns (gh-570). */
+    out: { type: "string", default: "instruments-report.json" },
   },
 });
 
@@ -34,14 +41,13 @@ const measureSec = num(values.measure, 12);
 const rps = num(values.rps, 200);
 const seed = num(values.seed, 1);
 
-/** Each step adds one observer to the one before it, so the difference is that observer's own cost. */
-const steps = [
-  { name: "the agent itself", from: undefined, to: "none" },
-  { name: "runtime health", from: "none", to: "runtime" },
-  { name: "postgres", from: "runtime", to: "runtime,pg" },
-  { name: "outgoing HTTP", from: "runtime,pg", to: "runtime,pg,http" },
-  { name: "redis", from: "runtime,pg,http", to: "runtime,pg,http,redis" },
-];
+/** Each step adds one thing to the one before it, so the difference is that thing's own cost (`instruments-steps.ts`). */
+const steps = STEPS;
+const sourceCommit = values["source-commit"];
+if (sourceCommit !== undefined && !/^[0-9a-f]{7,40}$/.test(sourceCommit)) {
+  console.error(`[bench] --source-commit must be a commit sha, got ${JSON.stringify(sourceCommit)}`);
+  process.exit(2);
+}
 
 // The default is the fewest rounds at which any row could clear the gate. Fewer is a run that cannot conclude.
 const rounds = num(values.rounds, roundsToResolve(steps.length));
@@ -71,6 +77,8 @@ if (smallestP(rounds) >= alpha) {
 }
 
 const results: Step[] = [];
+/** The subject and the host of the first step, which are the same for every step: one tree, one machine. */
+let first: BenchReport | undefined;
 for (const step of steps) {
   const report = await runBench({
     rounds,
@@ -79,11 +87,13 @@ for (const step of steps) {
     measureSec,
     rps,
     seed,
+    sourceCommit,
     // `from: undefined` means a baseline with no agent: the cost of the agent before any observer is added.
-    ...(step.from === undefined ? {} : { baselineEnv: { DOWNTRACE_INSTRUMENT: step.from } }),
-    agentEnv: { DOWNTRACE_INSTRUMENT: step.to },
+    ...(step.from === undefined ? {} : { baselineEnv: { ...step.from } }),
+    agentEnv: { ...step.to },
     log: (line) => console.error(`[bench] ${step.name}: ${line}`),
   });
+  first ??= report;
   // Paired, not pooled: rounds alternate in time, so round i of one side and round i of the other saw the same
   // machine. Differencing them first removes most of what the machine was doing, which comparing two medians
   // does not. The uncertainty is then the standard error of those differences.
@@ -156,3 +166,31 @@ for (const r of results) lines.push(`- **${r.name}**: ${r.differences.map((d) =>
 lines.push("");
 
 console.log(lines.join("\n"));
+
+// The JSON is what the mirror keeps: an artifact expires and a series that expires is not a series (ADR 0134).
+await writeFile(
+  values.out,
+  `${JSON.stringify(
+    {
+      generatedAt: new Date().toISOString(),
+      kind: "instruments",
+      subject: first?.subject,
+      host: first?.host,
+      node: first?.node,
+      platform: first?.platform,
+      config: { rounds, measureSec, rps, seed, comparisons: steps.length, alpha },
+      steps: results.map((r) => ({
+        name: r.name,
+        cpuPp: round(r.cpu, 3),
+        cpuNoise2se: round(r.cpuNoise, 3),
+        p99Ms: round(r.p99, 3),
+        p: round(r.p, 4),
+        exact: r.exact,
+        resolved: r.resolved,
+        differences: r.differences.map((d) => round(d, 3)),
+      })),
+    },
+    null,
+    2,
+  )}\n`,
+);

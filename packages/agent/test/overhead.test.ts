@@ -19,12 +19,21 @@ const config = () =>
   testConfig("http://127.0.0.1:1/x", { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set() });
 
 /** A meter whose clock a test can move, sampling every call so the arithmetic is visible. */
-function meter(costPerHookMs: number, opts: { sampleEvery?: number; budgetMs?: number; window?: number } = {}) {
+function meter(
+  costPerHookMs: number,
+  opts: {
+    sampleEvery?: number;
+    budgetMs?: number;
+    window?: number;
+    floor?: (typeof Sheddable)[keyof typeof Sheddable];
+  } = {},
+) {
   let clock = 0;
   const m = new OverheadMeter({
     sampleEvery: opts.sampleEvery ?? 1,
     windowRequests: opts.window ?? WINDOW_REQUESTS,
     budgetMs: opts.budgetMs ?? OVERHEAD_BUDGET_MS,
+    ...(opts.floor === undefined ? {} : { floor: opts.floor }),
     now: () => clock,
   });
   /** One hook that costs what the caller said. */
@@ -163,6 +172,51 @@ describe("giving ground", () => {
       m.m.requestFinished();
     }
     expect(m.m.state().shed).toBe(Sheddable.Nothing);
+  });
+
+  /**
+   * A floor under the level (gh-570). The benchmark holds one seam of the black box shut — the fine detail, or
+   * the fine detail and the profile — to weigh what is behind it head to head (ADR 0027). The meter still sheds
+   * above the floor when the hooks cost too much, and never recovers below it.
+   */
+  describe("a floor under the level", () => {
+    it("starts at the floor, held by configuration and not for a reason", () => {
+      const { m } = meter(0.001, { floor: Sheddable.Fine });
+      expect(m.state().shed).toBe(Sheddable.Fine);
+      expect(m.state().reason).toBe("");
+      expect(m.keeping(Sheddable.Fine)).toBe(false);
+      expect(m.keeping(Sheddable.Profile)).toBe(true);
+    });
+
+    it("with the profile as the floor, keeps nothing that can be shed", () => {
+      const { m } = meter(0.001, { floor: Sheddable.Profile });
+      expect(m.keeping(Sheddable.Fine)).toBe(false);
+      expect(m.keeping(Sheddable.Profile)).toBe(false);
+    });
+
+    it("still sheds above the floor when the hooks cost too much, and says why", () => {
+      const m = meter(0.4, { sampleEvery: 1, floor: Sheddable.Fine });
+      windows(m, WINDOW_REQUESTS, 2); // 0.8 ms per request, over the budget: one more level
+      expect(m.m.state().shed).toBe(Sheddable.Profile);
+      expect(m.m.state().reason).toBe(ThrottleReasons.Latency);
+    });
+
+    it("never recovers below the floor", () => {
+      const m = meter(0.4, { sampleEvery: 1, floor: Sheddable.Fine });
+      windows(m, WINDOW_REQUESTS, 2);
+      expect(m.m.state().shed).toBe(Sheddable.Profile);
+      for (let r = 0; r < WINDOW_REQUESTS * 3; r += 1) {
+        m.m.leave(m.m.enter());
+        m.m.requestFinished();
+      }
+      expect(m.m.state().shed).toBe(Sheddable.Fine);
+      expect(m.m.state().reason).toBe("");
+    });
+
+    it("without a floor, behaves as it always did", () => {
+      const { m } = meter(0.001);
+      expect(m.state().shed).toBe(Sheddable.Nothing);
+    });
   });
 
   // The fourth promise of `product.md:241`, which shares the machinery: «if it approaches its memory budget, it

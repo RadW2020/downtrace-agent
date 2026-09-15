@@ -2,7 +2,14 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendStepSummary, type BenchReport, checkpointCell, poolWaitCell, toMarkdown } from "../src/report.ts";
+import {
+  appendStepSummary,
+  type BenchReport,
+  checkpointCell,
+  hooksShare,
+  poolWaitCell,
+  toMarkdown,
+} from "../src/report.ts";
 
 const report: BenchReport = {
   generatedAt: "2026-09-03T00:00:00.000Z",
@@ -67,7 +74,7 @@ const report: BenchReport = {
       otherCpuPct: 3.2,
       checkpointWriteMs: 0,
       checkpointCount: 0,
-      sink: { batches: 2, intervals: 2, endpoints: 8, requests: 400, rejected: 0 },
+      sink: { batches: 2, intervals: 2, endpoints: 8, requests: 400, rejected: 0, hookMsPerRequest: 0.005 },
     },
   ],
   metrics: [
@@ -111,6 +118,37 @@ const report: BenchReport = {
   ],
   verdict: "pass",
 };
+
+describe("where the measured CPU goes (gh-570)", () => {
+  it("puts the agent's own hook estimate beside the measured CPU per request, in the same unit", () => {
+    // Δ 0.2 pp at 100 rps is 0.02 ms of CPU per request; the hooks say 0.005: a quarter of it.
+    const md = toMarkdown(report);
+    expect(md).toContain("~0.005 ms of CPU per request (sampled, ADR 0080)");
+    expect(md).toContain("against 0.02 ms per request measured (Δ 0.2 pp at 100 rps)");
+    expect(md).toContain("about 25 % of the measured cost is inside the hooks");
+  });
+
+  it("says nothing about the hooks when no batch carried the estimate: not knowing is not zero", () => {
+    const rounds = report.rounds.map((x) => (x.sink ? { ...x, sink: { ...x.sink, hookMsPerRequest: undefined } } : x));
+    expect(hooksShare({ ...report, rounds })).toBeUndefined();
+    expect(toMarkdown({ ...report, rounds })).not.toContain("inside the hooks");
+  });
+
+  it("averages the estimate over the agent rounds that carried one", () => {
+    const withTwo = {
+      ...report,
+      rounds: [
+        ...report.rounds,
+        {
+          ...(report.rounds[1] as (typeof report.rounds)[number]),
+          round: 2,
+          sink: { batches: 1, intervals: 1, endpoints: 1, requests: 1, rejected: 0, hookMsPerRequest: 0.015 },
+        },
+      ],
+    };
+    expect(hooksShare(withTwo)).toContain("~0.01 ms of CPU per request");
+  });
+});
 
 describe("report", () => {
   it("renders a markdown table with one row per metric and per round", () => {
