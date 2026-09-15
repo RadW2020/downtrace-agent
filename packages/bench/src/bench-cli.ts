@@ -44,8 +44,16 @@ function sha(v: string | undefined): string | undefined {
   return v;
 }
 
+const rounds = num("rounds", values.rounds);
+// One pair of rounds cannot estimate its own drift, and a verdict without a noise is a verdict without an error bar
+// (gh-571, ADR 0137). Refused here, before the machine is spent on it.
+if (rounds !== undefined && rounds < 2) {
+  console.error(`[bench] --rounds must be at least 2: a single round cannot estimate its own noise, got ${rounds}`);
+  process.exit(2);
+}
+
 const report = await runBench({
-  rounds: num("rounds", values.rounds),
+  rounds,
   warmupCleanSec: num("warmup", values.warmup),
   warmupMaxSec: num("warmup-max", values["warmup-max"]),
   measureSec: num("measure", values.measure),

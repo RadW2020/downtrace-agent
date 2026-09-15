@@ -18,7 +18,12 @@ describe("evaluate", () => {
   it("passes when every delta is within budget", () => {
     const { metrics, verdict } = evaluate([r(5.0), r(5.2), r(4.9)], [r(5.4), r(5.5), r(5.3)]);
     expect(verdict).toBe("pass");
-    expect(metrics.find((m) => m.metric === "p99Ms")).toMatchObject({ delta: 0.4, noise: 0.3, status: "ok" });
+    // The noise is the baseline's drift as a standard error, 0.537 for these three rounds (gh-571); their range was 0.3.
+    expect(metrics.find((m) => m.metric === "p99Ms")).toMatchObject({
+      delta: 0.4,
+      noise: expect.closeTo(0.537, 2),
+      status: "ok",
+    });
   });
 
   it("fails when a delta exceeds both the budget and the machine noise", () => {
@@ -30,7 +35,7 @@ describe("evaluate", () => {
 
   it("is inconclusive when the delta exceeds the budget but not the noise", () => {
     const { metrics, verdict } = evaluate([r(3.0), r(9.0), r(5.0)], [r(7.0), r(7.5), r(6.8)]);
-    // baseline median 5, agent median 7 → delta 2 > budget 1, but baseline noise is 6
+    // baseline median 5, agent median 7 → delta 2 > budget 1, but the baseline drifts by 10.7 (its range was 6)
     expect(verdict).toBe("inconclusive");
     expect(metrics.find((m) => m.metric === "p99Ms")?.status).toBe("inconclusive");
   });
@@ -178,7 +183,7 @@ describe("evaluate with pooled latency samples", () => {
       seed: 42,
     });
     const p99 = metrics.find((m) => m.metric === "p99Ms");
-    expect(p99?.noiseSource).toBe("round-spread");
+    expect(p99?.noiseSource).toBe("round-drift");
     expect(p99?.noise).toBeGreaterThan(1.5);
     expect(p99?.status).toBe("ok");
   });
@@ -452,11 +457,12 @@ describe("the margin over the budget is what has to be resolvable", () => {
     );
 
   // The run that found this: Δ 3.026 over a budget of 3, with 0.840 of noise. The machine cannot tell 3.026
-  // from 2.9, so calling it a failure claims something the measurement does not support.
+  // from 2.9, so calling it a failure claims something the measurement does not support. These three baseline
+  // rounds drift by 0.74 as a standard error (gh-571); their range was 0.42.
   it("does not call a failure when the excess is smaller than the noise", () => {
     const verdict = cpuOf([24.0, 24.42, 24.238], [27.0, 27.5, 27.264]);
     expect(verdict?.delta).toBeCloseTo(3.026, 3);
-    expect(verdict?.noise).toBeCloseTo(0.42, 3);
+    expect(verdict?.noise).toBeCloseTo(0.74, 2);
     expect(verdict?.status).toBe("inconclusive");
   });
 
@@ -470,16 +476,23 @@ describe("the margin over the budget is what has to be resolvable", () => {
     // Not being over does not need resolving: the question only arises once the budget is crossed.
     const verdict = cpuOf([10, 30, 20], [11, 31, 21]);
     expect(verdict?.delta).toBeLessThan(3);
-    expect(verdict?.noise).toBe(20);
+    expect(verdict?.noise).toBeCloseTo(35.13, 2); // a machine moving by 10 pp between rounds, seen from three of them
     expect(verdict?.status).toBe("ok");
   });
 
-  it("does not call a failure on a tie", () => {
-    // Excess exactly equal to the noise: a tie is not evidence, and the budget is not crossed by agreement.
-    // baseline median 24.5, noise 1; agent median 28.5 → delta 4, excess exactly 1.
-    const verdict = cpuOf([24, 25], [28, 29]);
-    expect((verdict?.delta ?? 0) - 3).toBeCloseTo(verdict?.noise ?? -1, 6);
+  // The boundary from both sides. An exact tie cannot be built from rounds once the noise carries a √2 and a t
+  // quantile, so the tie itself is pinned in `latency-rule.test.ts`, where the sampling noise is injected; here the
+  // same baseline drifts by 0.7396 and the agent's median is set 0.01 under and 0.01 over that excess.
+  it("does not call a failure when the excess is just inside the noise", () => {
+    const verdict = cpuOf([24.0, 24.42, 24.238], [27.9, 27.968, 28.0]);
+    expect((verdict?.delta ?? 0) - 3).toBeCloseTo(0.73, 3);
     expect(verdict?.status).toBe("inconclusive");
+  });
+
+  it("calls a failure once the excess is just outside it", () => {
+    const verdict = cpuOf([24.0, 24.42, 24.238], [27.9, 27.988, 28.0]);
+    expect((verdict?.delta ?? 0) - 3).toBeCloseTo(0.75, 3);
+    expect(verdict?.status).toBe("fail");
   });
 });
 

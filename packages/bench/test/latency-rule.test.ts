@@ -19,10 +19,11 @@ describe("latencyStatus", () => {
     expect(r.delta).toBeCloseTo(0.6);
   });
 
-  it("takes the noise from the spread between rounds when that is larger than the sampling noise", () => {
+  it("takes the noise from the drift between rounds when that is larger than the sampling noise", () => {
+    // Re-pinned for gh-571: the drift is t(2) · sd · √(2/3) = 4.26, where the range of these rounds was 2.1.
     const r = rule({ baselineRounds: [20, 22.1, 20] });
-    expect(r.noise).toBeCloseTo(2.1);
-    expect(r.noiseSource).toBe("round-spread");
+    expect(r.noise).toBeCloseTo(4.26, 2);
+    expect(r.noiseSource).toBe("round-drift");
   });
 
   it("keeps the split-half estimate when the rounds are steady", () => {
@@ -50,6 +51,16 @@ describe("latencyStatus", () => {
   });
 });
 
+describe("the excess and the noise", () => {
+  it("does not call a failure on a tie", () => {
+    // Excess exactly equal to the noise: a tie is not evidence, and the budget is not crossed by agreement. The
+    // rounds are steady, so the drift is zero and the injected sampling noise is the whole noise: 2 − 1 = 1 = 1.
+    const r = rule({ pooledAgent: 22, agentRounds: [22, 22, 22], splitHalfNoise: 1 });
+    expect(r.delta - 1).toBe(r.noise);
+    expect(r.status).toBe("inconclusive");
+  });
+});
+
 /** The two CI runs that motivated the rule, replayed from the figures in their own reports. */
 describe("the runs that motivated the rule", () => {
   it("gate run 33967738239: inconclusive on the round spread, not fail", () => {
@@ -62,8 +73,10 @@ describe("the runs that motivated the rule", () => {
       budget: 1,
     });
     expect(r.delta).toBeCloseTo(1.278, 2);
-    expect(r.noise).toBeCloseTo(1.86, 1); // the baseline rounds spread further than the sampling noise
-    expect(r.noiseSource).toBe("round-spread");
+    // The baseline rounds drift more than the sampling noise: 1.40 as a standard error (gh-571); the range of the
+    // same rounds was 1.86. Either way the excess of 0.278 is inside it, and the verdict does not move.
+    expect(r.noise).toBeCloseTo(1.4, 1);
+    expect(r.noiseSource).toBe("round-drift");
     expect(r.status).toBe("inconclusive");
   });
 

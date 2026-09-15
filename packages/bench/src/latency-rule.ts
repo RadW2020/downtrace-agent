@@ -1,4 +1,4 @@
-import { median } from "./stats.ts";
+import { median, roundDrift } from "./stats.ts";
 
 export type MetricStatus = "ok" | "fail" | "inconclusive";
 
@@ -18,7 +18,7 @@ export interface LatencyRuleResult {
   delta: number;
   noise: number;
   /** Which estimate the noise came from, so the report can say why it is that big. */
-  noiseSource: "split-half" | "round-spread";
+  noiseSource: "split-half" | "round-drift";
   status: MetricStatus;
   /** Δ of each agent round against the baseline rounds' median. */
   roundDeltas: number[];
@@ -35,19 +35,21 @@ export interface LatencyRuleResult {
  *
  * Two things separate it from a plain "delta beats budget and noise" (ADR 0010):
  *
- * - **Noise** is the larger of the split-half estimate and the spread of the baseline's per-round p99s. The first
+ * - **Noise** is the larger of the split-half estimate and the drift of the baseline's per-round p99s. The first
  *   measures sampling variation inside the pool; the second measures the runner drifting between rounds, which
  *   alternating rounds only cancel in part. Estimating only the first claims a precision the machine does not have.
+ *   The drift is a standard error with Student's t, not the range of the rounds: a range grows with the number of
+ *   rounds by construction, and made more rounds report more noise (gh-571, ADR 0137).
  * - **Corroboration**: a fail also requires most agent rounds to show the difference **on their own** — each one
  *   over the budget by more than the noise. One round stalling for 200 ms queues enough requests to drag a pooled
  *   p99 by itself; a real regression shows up in round after round.
  */
 export function latencyStatus(input: LatencyRuleInput): LatencyRuleResult {
   const delta = input.pooledAgent - input.pooledBaseline;
-  const spread =
-    input.baselineRounds.length > 0 ? Math.max(...input.baselineRounds) - Math.min(...input.baselineRounds) : 0;
-  const noise = Math.max(input.splitHalfNoise, spread);
-  const noiseSource = spread > input.splitHalfNoise ? "round-spread" : "split-half";
+  // No rounds at all: nothing to estimate drift from, and the split-half estimate is all there is.
+  const drift = input.baselineRounds.length === 0 ? 0 : roundDrift(input.baselineRounds);
+  const noise = Math.max(input.splitHalfNoise, drift);
+  const noiseSource = drift > input.splitHalfNoise ? "round-drift" : "split-half";
 
   const baselineTypical = input.baselineRounds.length > 0 ? median(input.baselineRounds) : input.pooledBaseline;
   const roundDeltas = input.agentRounds.map((p99) => p99 - baselineTypical);

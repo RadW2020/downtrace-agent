@@ -1,6 +1,6 @@
 import { BUDGET, METRICS, type MetricName, UNITS } from "./budget.ts";
 import { type LatencyRuleResult, latencyStatus } from "./latency-rule.ts";
-import { median, percentile, pooledPercentile, round, splitHalfNoise } from "./stats.ts";
+import { median, percentile, pooledPercentile, round, roundDrift, splitHalfNoise } from "./stats.ts";
 
 export type RoundMetrics = Record<MetricName, number>;
 export type MetricStatus = "ok" | "fail" | "inconclusive";
@@ -20,7 +20,7 @@ export interface MetricVerdict {
   excess: number;
   noise: number;
   /** Which estimate the noise came from; only meaningful for the pooled latency metric. */
-  noiseSource?: "split-half" | "round-spread" | undefined;
+  noiseSource?: "split-half" | "round-drift" | undefined;
   budget: number;
   status: MetricStatus;
   /** Δ of each agent round against the baseline rounds' median; pooled latency only. */
@@ -42,7 +42,9 @@ export interface LatencyPools {
  * instead of ~24), with the noise and corroboration rule of `latencyStatus` (ADR 0010). Otherwise, and for CPU/RSS
  * always:
  * delta  = median(agent) − median(baseline)
- * noise  = max(baseline) − min(baseline): how much the machine itself moves between identical runs
+ * noise  = t(n−1) · sd(baseline) · √(2/n): how much the machine itself moves between identical runs, as the error it
+ *          puts on a difference of two medians (`roundDrift`, ADR 0137). It was max(baseline) − min(baseline), a
+ *          range that grows with the number of rounds by construction (gh-571).
  * ok            delta ≤ budget
  * fail          delta − budget > noise   (the excess over the budget is distinguishable from noise)
  * inconclusive  delta > budget but the excess is within the noise (this machine cannot resolve the budget)
@@ -88,7 +90,7 @@ export function evaluate(
       const b = baseline.map((r) => r[metric]);
       baselineMedian = median(b);
       agentMedian = median(agent.map((r) => r[metric]));
-      noise = Math.max(...b) - Math.min(...b);
+      noise = roundDrift(b);
     }
     const delta = agentMedian - baselineMedian;
     const excess = delta - budget[metric];
