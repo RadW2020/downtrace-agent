@@ -137,38 +137,9 @@ jobs:
           if [ "$MODE" = instruments ]; then report=packages/bench/instruments-report.json; else report=packages/bench/bench-report.json; fi
           if [ ! -f "$report" ]; then echo "no report was written, so there is nothing to keep"; exit 0; fi
 
-          # The name and the message come out of the report itself: composed from the workflow's own variables
-          # they would describe the run and not the measurement, and those are not the same thing. The name
-          # sorts chronologically and carries the version and the commit, so two runs can be found and compared.
-          name=$(node -e '
-            const fs = require("node:fs");
-            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const stamp = r.generatedAt.replace(/:/g, "-").replace(/\.\d+Z$/, "Z");
-            const version = r.subject?.version ?? "unknown";
-            const commit = (r.subject?.sourceCommit ?? r.subject?.commit ?? "unknown").slice(0, 7);
-            if (r.kind === "instruments") {
-              // What each observer and each half of the black box costs (gh-570): one line per comparison, and
-              // whether the machine resolved it (ADR 0027). Named apart from the campaigns so the series stays
-              // a series and this stays what it is.
-              const resolved = r.steps.filter((s) => s.resolved).length;
-              const step = (s) => `${s.name}: ΔCPU ${s.cpuPp >= 0 ? "+" : ""}${s.cpuPp} pp ± ${s.cpuNoise2se} (p ${s.p}) ${s.resolved ? "resolved" : "not resolved"}`;
-              fs.writeFileSync(
-                process.argv[2],
-                `bench-instruments: agent ${version} — ${resolved} of ${r.steps.length} resolved on ${r.config.rounds}×${r.config.measureSec}s at ${r.config.rps} rps\n\n` +
-                  `${r.steps.map(step).join("\n")}\n\n`,
-              );
-              console.log(`${stamp}-instruments-${version}-${commit}.json`);
-              return;
-            }
-            const metric = (m) => `${m.metric} ${m.delta >= 0 ? "+" : ""}${m.delta} ${m.unit} (budget ${m.budget}, noise ${m.noise}) ${m.status}`;
-            fs.writeFileSync(
-              process.argv[2],
-              `bench: agent ${version} — ${r.verdict} on ${r.config.rounds}×${r.config.measureSec}s at ${r.config.rps} rps\n\n` +
-                `${r.metrics.map(metric).join("\n")}\n` +
-                `${r.reason ? `\n${r.reason}\n` : ""}\n`,
-            );
-            console.log(`${stamp}-agent-${version}-${commit}.json`);
-          ' "$report" "$RUNNER_TEMP/msg")
+          # The name and the message come out of the report itself, through a script a test runs — not code inside
+          # this YAML, which nothing ran before the mirror did and which cost the series a point (gh-590).
+          name=$(node packages/bench/src/report-name.ts "$report" "$RUNNER_TEMP/msg")
 
           origin="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           # Clone it or start it: the first run of all finds no branch, and a first run that cannot keep its
