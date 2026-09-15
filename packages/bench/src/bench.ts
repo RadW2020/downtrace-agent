@@ -102,7 +102,9 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
       try {
         // Every round starts on the same database. Without this, the write tables keep growing across rounds
         // (~21600 orders in a full run) and the late rounds measure a bigger database than the early ones; since
-        // the agent's round always follows its baseline, the growth was charged to the agent (ADR 0021).
+        // the agent's round always follows its baseline, the growth was charged to the agent (ADR 0021). The reset
+        // also ends with a CHECKPOINT, so Postgres's timed one restarts with the round instead of landing inside
+        // round 8 of every nine-round campaign (gh-584).
         await resetDatabase(app.baseUrl);
         const warmup = await warm(app, config);
         if (!warmup.clean) {

@@ -215,7 +215,16 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     expect(await count("order_items")).toBeGreaterThan(0);
     const stockAfterCheckout = await stock();
 
+    // And Postgres's timed-checkpoint clock restarts with the round: the reset ends with a CHECKPOINT, which the
+    // checkpointer counts as requested. Without it the default campaign of nine rounds outlives `checkpoint_timeout`
+    // and the timed checkpoint lands inside round 8 every time (gh-584).
+    const checkpointsBefore = await ref.db.checkpoints();
+    if (!checkpointsBefore) throw new Error("pg_stat_checkpointer is not readable here; this test needs Postgres 17");
+
     expect((await api.resetDb()).status).toBe(204);
+
+    const checkpointsAfter = await ref.db.checkpoints();
+    expect(checkpointsAfter?.requested).toBeGreaterThan(checkpointsBefore.requested);
 
     for (const table of ["orders", "order_items", "payments", "order_events"]) {
       expect(await count(table)).toBe(0);

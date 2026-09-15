@@ -1,5 +1,5 @@
 import pg from "pg";
-import { PoolTimeoutError } from "./errors.ts";
+import { checkpointError, PoolTimeoutError } from "./errors.ts";
 import { type RequestCounters, recordPoolWait } from "./stats.ts";
 
 export interface DbOptions {
@@ -96,6 +96,17 @@ export class Db {
       TRUNCATE order_events, payments, order_items, orders RESTART IDENTITY;
       UPDATE products SET stock = 1000000;
     `);
+    // Then a CHECKPOINT of its own. Postgres schedules its timed checkpoint `checkpoint_timeout` after the last one,
+    // whoever asked for it, so this restarts the clock with the round: without it the default campaign of nine
+    // rounds outlives the fifteen minutes and the timed checkpoint lands inside round 8 —in the baseline half,
+    // never the agent's— and the pair rule of gh-194 rightly throws the whole run away (gh-584). It also flushes
+    // what the reset itself just wrote, before the warm-up instead of inside the window. A separate statement: the
+    // reset has committed by now, and a CHECKPOINT that fails must not undo it, but it must stop the round.
+    try {
+      await this.pool.query("CHECKPOINT");
+    } catch (err) {
+      throw checkpointError(err);
+    }
   }
 
   async close(): Promise<void> {

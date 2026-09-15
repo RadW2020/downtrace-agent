@@ -52,6 +52,6 @@ The provider calls happen inside the transaction on purpose: it is a common shap
 - `GET /__admin/stats` — per endpoint: requests, status by class, `sqlQueries`, `providerCalls`, `providerRetries`, `redisOps`, `poolWaitMs`, `errors` by type, `totalDurationMs`.
 - `POST /__admin/stats/reset`.
 - `GET /__admin/db/checkpoints` — what Postgres has been doing with its checkpoints: `available: false` when the database does not count it, and otherwise the counters. The bench reads it around every round because it cannot reconfigure a database that is not its own, so it reports what it measured against (gh-194).
-- `POST /__admin/db/reset` — leaves the database at its starting size. The bench calls it before every round: it compares rounds with each other, and they are only comparable if they start alike (ADR 0021).
+- `POST /__admin/db/reset` — leaves the database at its starting size. The bench calls it before every round: it compares rounds with each other, and they are only comparable if they start alike (ADR 0021). It ends with a `CHECKPOINT`, so the round also starts with Postgres's timed-checkpoint clock at zero: a nine-round campaign outlives `checkpoint_timeout`, and without this the timed checkpoint landed inside round 8 of every run (gh-584, ADR 0136). That needs a superuser or the `pg_checkpoint` role; refused, the reset fails and says so instead of answering 204 with the clock running.
 
 Traffic to `/__admin/*` is not counted. With `ADMIN_ENABLED=0` these routes do not exist (404).
