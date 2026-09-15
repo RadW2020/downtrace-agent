@@ -43,6 +43,28 @@ describe("evaluate", () => {
   it("rejects empty input", () => {
     expect(() => evaluate([], [r(1)])).toThrow(/at least one round/);
   });
+
+  // Before gh-572 this top-level reason did not exist at all: `evaluate()` returned only `{ metrics, verdict }`,
+  // and nothing else in the chain describes a metrics-driven fail — only a console-only fallback in
+  // `bench-cli.ts` ever produced this text, which never reached the JSON report or the Markdown.
+  it("names the metric that broke the budget in its own reason, on a fail", () => {
+    const { verdict, reason } = evaluate([r(5.0), r(5.2), r(4.9)], [r(10.0), r(10.4), r(9.8)]);
+    expect(verdict).toBe("fail");
+    expect(reason).toMatch(/^overhead budget exceeded: p99Ms Δ/);
+    expect(reason).not.toContain("cpuPct"); // cpuPct passed: only the broken metric is named
+  });
+
+  it("names the metric in its reason on an inconclusive too", () => {
+    const { verdict, reason } = evaluate([r(3.0), r(9.0), r(5.0)], [r(7.0), r(7.5), r(6.8)]);
+    expect(verdict).toBe("inconclusive");
+    expect(reason).toMatch(/^machine noise exceeds the budget for p99Ms Δ/);
+  });
+
+  it("carries no reason at all when every metric passes", () => {
+    const { verdict, reason } = evaluate([r(5.0), r(5.2), r(4.9)], [r(5.4), r(5.5), r(5.3)]);
+    expect(verdict).toBe("pass");
+    expect(reason).toBeUndefined();
+  });
 });
 
 /** Synthetic latencies shaped like the real app: a fast bulk and a slow tail. */
@@ -171,29 +193,31 @@ describe("applyRoundErrors", () => {
   const clean = { errors: 0 };
   it("leaves a clean run alone", () => {
     expect(
-      applyRoundErrors("pass", [
+      applyRoundErrors("pass", undefined, [
         { variant: "baseline", round: 1, ...clean },
         { variant: "agent", round: 1, ...clean },
       ]),
     ).toEqual({ verdict: "pass" });
   });
   it("fails when the agent variant produced request errors, whatever the numbers said", () => {
-    const r = applyRoundErrors("pass", [{ variant: "agent", round: 2, errors: 3, errorStatuses: { "502": 3 } }]);
+    const r = applyRoundErrors("pass", undefined, [
+      { variant: "agent", round: 2, errors: 3, errorStatuses: { "502": 3 } },
+    ]);
     expect(r.verdict).toBe("fail");
     expect(r.reason).toMatch(/agent rounds had request errors — agent#2: 3 failed \(502×3\)/);
   });
   it("is inconclusive — never a pass — when only baseline rounds had errors", () => {
-    const r = applyRoundErrors("pass", [
+    const r = applyRoundErrors("pass", undefined, [
       { variant: "baseline", round: 1, errors: 586, errorStatuses: { "503": 500, timeout: 86 } },
     ]);
     expect(r.verdict).toBe("inconclusive");
     expect(r.reason).toMatch(/baseline rounds had request errors/);
   });
   it("keeps a fail when baseline rounds had errors but the agent already failed", () => {
-    expect(applyRoundErrors("fail", [{ variant: "baseline", round: 1, errors: 1 }]).verdict).toBe("fail");
+    expect(applyRoundErrors("fail", undefined, [{ variant: "baseline", round: 1, errors: 1 }]).verdict).toBe("fail");
   });
   it("says what the application itself reported, not only how many requests failed", () => {
-    const r = applyRoundErrors("pass", [
+    const r = applyRoundErrors("pass", undefined, [
       {
         variant: "baseline",
         round: 1,
@@ -207,6 +231,28 @@ describe("applyRoundErrors", () => {
     ]);
     expect(r.reason).toBe(
       "baseline rounds had request errors, nothing can be measured — baseline#1: 750 failed (500×659, 503×88, timeout×3) — app: 503 GET /me PoolTimeoutError: timed out waiting for a database connection | 500 POST /checkout X",
+    );
+  });
+
+  // The defect gh-572 fixes: this function used to drop any reason it was seeded with the moment it had nothing
+  // new to say, which silently erased a metrics-driven fail or inconclusive from `evaluate()`.
+  it("preserves a seed reason when nothing here adds to it", () => {
+    expect(
+      applyRoundErrors("fail", "overhead budget exceeded: p99Ms Δ+333008ms (budget 1, noise 2522)", [
+        { variant: "baseline", round: 1, ...clean },
+        { variant: "agent", round: 1, ...clean },
+      ]),
+    ).toEqual({ verdict: "fail", reason: "overhead budget exceeded: p99Ms Δ+333008ms (budget 1, noise 2522)" });
+  });
+
+  // Same composition every later rule in the chain uses: the seed comes first, this rule's own text after it.
+  it("appends its own reason after a seed reason instead of replacing it", () => {
+    const r = applyRoundErrors("fail", "overhead budget exceeded: p99Ms Δ5ms (budget 1, noise 0.3)", [
+      { variant: "agent", round: 2, errors: 3, errorStatuses: { "502": 3 } },
+    ]);
+    expect(r.verdict).toBe("fail");
+    expect(r.reason).toBe(
+      "overhead budget exceeded: p99Ms Δ5ms (budget 1, noise 0.3) · agent rounds had request errors — agent#2: 3 failed (502×3)",
     );
   });
 });
@@ -328,6 +374,68 @@ describe("applyUndeliveredBatches", () => {
   // How many batches a round produces depends on the interval and the round's length; only zero is a broken setup.
   it("does not judge how many batches arrived, only that some did", () => {
     expect(applyUndeliveredBatches("pass", undefined, [round("agent", 1, 1)]).verdict).toBe("pass");
+  });
+});
+
+/**
+ * gh-572: `fixtures/slow-agent.ts` stalls one request in fifty by 200 ms — a real p99 regression — but never
+ * ships a batch, because it is a fake `http.Server` patch and not the real instrumentation. Before this fix, that
+ * always tripped `applyUndeliveredBatches` (gh-134) and its "no batches" text was the *only* reason on the
+ * report: the fixture's own regression, the one thing it exists to prove, never appeared. This reproduces the
+ * exact shape of that run through the same functions and order `bench.ts`'s `runBench()` calls them in, without
+ * a full timed benchmark: `evaluate()` → `applyRoundErrors` → `applyUndeliveredBatches`.
+ */
+describe("gh-572: a metrics fail composes with the undelivered-batches rule instead of being hidden by it", () => {
+  it("names the latency regression first and the undelivered batches second", () => {
+    const { verdict: metricsVerdict, reason: metricsReason } = evaluate(
+      [r(5.0), r(5.2), r(4.9)],
+      [r(200.0), r(198.0), r(201.0)], // the fixture's 200 ms stall dominates the pooled p99
+    );
+    expect(metricsVerdict).toBe("fail");
+
+    const measured = applyRoundErrors(metricsVerdict, metricsReason, [
+      { variant: "baseline", round: 1, errors: 0 },
+      { variant: "agent", round: 1, errors: 0 },
+    ]);
+
+    // The fixture never ships: every agent round delivered zero batches to the sink.
+    const delivered = applyUndeliveredBatches(measured.verdict, measured.reason, [
+      { variant: "baseline", round: 1 }, // no sink on the baseline
+      { variant: "agent", round: 1, batches: 0 },
+    ]);
+
+    expect(delivered.verdict).toBe("fail");
+    expect(delivered.reason).toMatch(/^overhead budget exceeded: p99Ms Δ/);
+    const metricsIdx = delivered.reason?.indexOf("overhead budget exceeded") ?? -1;
+    const batchesIdx = delivered.reason?.indexOf("rounds delivered no batches") ?? -1;
+    expect(metricsIdx).toBeGreaterThanOrEqual(0);
+    expect(batchesIdx).toBeGreaterThan(metricsIdx); // latency named before batches, not instead of it
+    expect(delivered.reason).toContain("agent#1");
+    expect(delivered.reason).toContain("no batches");
+  });
+
+  // The rule this ticket must not weaken: real instrumentation that ships nothing still fails, and the reason
+  // still names it, with no metrics reason in front of it when the metrics themselves were fine.
+  it("still fails on undelivered batches alone when the metrics pass", () => {
+    const { verdict: metricsVerdict, reason: metricsReason } = evaluate(
+      [r(5.0), r(5.2), r(4.9)],
+      [r(5.4), r(5.5), r(5.3)],
+    );
+    expect(metricsVerdict).toBe("pass");
+
+    const measured = applyRoundErrors(metricsVerdict, metricsReason, [
+      { variant: "baseline", round: 1, errors: 0 },
+      { variant: "agent", round: 1, errors: 0 },
+    ]);
+    const delivered = applyUndeliveredBatches(measured.verdict, measured.reason, [
+      { variant: "baseline", round: 1 },
+      { variant: "agent", round: 1, batches: 0 },
+    ]);
+
+    expect(delivered.verdict).toBe("fail");
+    expect(delivered.reason).toBe(
+      "rounds delivered no batches to the sink (agent#1): nothing was measured about shipping",
+    );
   });
 });
 

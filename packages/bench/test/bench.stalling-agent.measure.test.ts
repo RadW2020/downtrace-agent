@@ -58,5 +58,10 @@ describe.skipIf(!DATABASE_URL)("bench (integration)", () => {
     expect(p99.delta, rounds).toBeGreaterThanOrEqual(100);
     expect(p99.status).toBe("fail");
     expect(report.verdict).toBe("fail");
+    // The fixture never ships a batch either (it is a fake `http.Server` patch, not the real instrumentation), so
+    // the undelivered-batches rule (gh-134) also fires. Before gh-572 its text was the *only* reason on the
+    // report; the regression this fixture exists to prove never appeared in it. The title of this test promised
+    // "and names it" before this assertion existed to check it.
+    expect(report.reason, rounds).toMatch(/^overhead budget exceeded: p99Ms/);
   });
 });

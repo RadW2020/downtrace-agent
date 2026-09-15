@@ -56,7 +56,7 @@ export function evaluate(
   agent: RoundMetrics[],
   budget: Record<MetricName, number> = BUDGET,
   latency?: LatencyPools,
-): { metrics: MetricVerdict[]; verdict: Verdict } {
+): { metrics: MetricVerdict[]; verdict: Verdict; reason?: string } {
   if (baseline.length === 0 || agent.length === 0) throw new Error("evaluate: need at least one round per variant");
   const metrics = METRICS.map((metric): MetricVerdict => {
     const pooled = metric === "p99Ms" && latency !== undefined;
@@ -116,7 +116,23 @@ export function evaluate(
     : metrics.some((m) => m.status === "inconclusive")
       ? "inconclusive"
       : "pass";
-  return { metrics, verdict };
+  if (verdict === "pass") return { metrics, verdict };
+  const broken = describeBrokenMetrics(metrics);
+  const reason =
+    verdict === "fail" ? `overhead budget exceeded: ${broken}` : `machine noise exceeds the budget for ${broken}`;
+  return { metrics, verdict, reason };
+}
+
+/**
+ * Every metric that missed the budget, in the shape a person reads a verdict's reason in: what it is, how far
+ * over, and how much of that is noise. What names a metrics-driven `fail` or `inconclusive` (gh-572) — before
+ * this, only a display fallback in `bench-cli.ts` ever produced this text, and only for the console line.
+ */
+function describeBrokenMetrics(metrics: readonly MetricVerdict[]): string {
+  return metrics
+    .filter((m) => m.status !== "ok")
+    .map((m) => `${m.metric} Δ${m.delta}${m.unit} (budget ${m.budget}, noise ${m.noise})`)
+    .join("; ");
 }
 
 export interface RoundErrors {
@@ -165,24 +181,30 @@ export function warmupVerdict(w: WarmupOutcome): { verdict: Verdict; reason: str
  * the agent breaks the application: fail. Failed requests in baseline rounds
  * mean the machine could not run the reference app cleanly: nothing can be
  * measured, so the result is inconclusive — never a pass by accident.
+ *
+ * Takes and composes a prior reason the same way every rule after it does (gh-572): a metrics-driven fail or
+ * inconclusive from `evaluate()` is seeded in here first, so it survives even when this rule has nothing of its
+ * own to add, and is what ends up named first when it does.
  */
 export function applyRoundErrors(
   verdict: Verdict,
+  reason: string | undefined,
   rounds: readonly RoundErrors[],
 ): { verdict: Verdict; reason?: string } {
+  const keep = reason === undefined ? { verdict } : { verdict, reason };
   const describe = (r: RoundErrors) =>
     `${r.variant}#${r.round}: ${r.errors} failed (${describeStatuses(r.errorStatuses)})${describeApp(r.firstErrors)}`;
   const agentBad = rounds.filter((r) => r.variant === "agent" && r.errors > 0);
-  if (agentBad.length > 0)
-    return { verdict: "fail", reason: `agent rounds had request errors — ${agentBad.map(describe).join("; ")}` };
+  if (agentBad.length > 0) {
+    const said = `agent rounds had request errors — ${agentBad.map(describe).join("; ")}`;
+    return { verdict: "fail", reason: reason ? `${reason} · ${said}` : said };
+  }
   const baseBad = rounds.filter((r) => r.variant === "baseline" && r.errors > 0);
   if (baseBad.length > 0 && verdict !== "fail") {
-    return {
-      verdict: "inconclusive",
-      reason: `baseline rounds had request errors, nothing can be measured — ${baseBad.map(describe).join("; ")}`,
-    };
+    const said = `baseline rounds had request errors, nothing can be measured — ${baseBad.map(describe).join("; ")}`;
+    return { verdict: "inconclusive", reason: reason ? `${reason} · ${said}` : said };
   }
-  return { verdict };
+  return keep;
 }
 
 /** What one round delivered to the sink, for the check below. */

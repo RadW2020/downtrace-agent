@@ -187,9 +187,12 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
     }
   }
 
-  const { metrics, verdict } = evaluateRounds(rounds, config.seed);
+  const { metrics, verdict, reason } = evaluateRounds(rounds, config.seed);
+  // Seeded with the metrics' own reason, when the budget itself is what failed or could not be resolved, so it
+  // survives the rest of the chain and is named first (gh-572).
   const measured = applyRoundErrors(
     verdict,
+    reason,
     rounds.map((r) => ({
       variant: r.variant,
       round: r.round,
@@ -251,7 +254,10 @@ function warm(app: AppHandle, config: BenchConfig): Promise<WarmupResult> {
 }
 
 /** Metrics over the rounds that were measured; empty when a variant has none (the verdict then comes from the abort). */
-function evaluateRounds(rounds: readonly RoundResult[], seed: number): { metrics: MetricVerdict[]; verdict: Verdict } {
+function evaluateRounds(
+  rounds: readonly RoundResult[],
+  seed: number,
+): { metrics: MetricVerdict[]; verdict: Verdict; reason?: string } {
   const of = (variant: Variant) => rounds.filter((r) => r.variant === variant);
   if (of("baseline").length === 0 || of("agent").length === 0) return { metrics: [], verdict: "inconclusive" };
   const toMetrics = (variant: Variant): RoundMetrics[] =>
