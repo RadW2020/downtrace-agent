@@ -8,7 +8,7 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordCallIn, recordOperationIn } from "../src/context.ts";
 import type { Logger } from "../src/log.ts";
 import { withheldName } from "../src/minimal.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -31,22 +31,13 @@ const THEIRS = {
 };
 
 function config(over: Partial<AgentConfig> = {}): AgentConfig {
-  return {
-    token: "t",
-    url: "http://sink.invalid",
+  return testConfig("http://sink.invalid", {
     environment: "production",
     version: THEIRS.version,
-    queryText: true,
-    inspect: undefined,
-    debug: false,
     intervalMs: 60_000,
-    profileMs: PROFILE_WINDOW_MS,
     instrument: new Set(["pg"]),
-    minimal: false,
-    excludeEndpoints: [],
-    excludeDependencies: [],
     ...over,
-  } as AgentConfig;
+  });
 }
 
 /** Drives one request that does everything a request can do, and returns the body that would be sent. */

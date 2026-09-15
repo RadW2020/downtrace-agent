@@ -17,8 +17,8 @@ import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 import { RuntimeSampler } from "../src/runtime.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
@@ -68,22 +68,7 @@ async function startApp() {
 }
 
 function config(url: string, extra: Partial<AgentConfig> = {}): AgentConfig {
-  return {
-    token: "test-token",
-    url,
-    environment: "test",
-    version: "t1",
-    queryText: true,
-    minimal: false,
-    excludeEndpoints: [],
-    excludeDependencies: [],
-    inspect: undefined,
-    debug: false,
-    intervalMs: 60_000,
-    profileMs: PROFILE_WINDOW_MS,
-    instrument: new Set(),
-    ...extra,
-  };
+  return testConfig(url, { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set(), ...extra });
 }
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };

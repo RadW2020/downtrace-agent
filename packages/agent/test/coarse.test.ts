@@ -2,8 +2,8 @@ import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { COARSE_MAX_BYTES, CoarseRegister, DEFAULT_ROUTES, DEFAULT_SECONDS } from "../src/coarse.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 import { OTHER_ROUTE } from "../src/routes.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /** A logger that says nothing: this test is about the register, not about what the agent prints. */
 const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -196,21 +196,12 @@ describe("the agent's coarse register", () => {
     const c = clock();
     const coarse = new CoarseRegister({ now: c.now, seconds: 10 });
     const agent = createAgent(
-      {
-        token: "test-token",
-        url: "http://127.0.0.1:1/x",
+      testConfig("http://127.0.0.1:1/x", {
         environment: "test",
         version: "t1",
-        queryText: true,
-        minimal: false,
-        excludeEndpoints: [],
-        excludeDependencies: [],
-        inspect: undefined,
-        debug: false,
         intervalMs: 60_000,
-        profileMs: PROFILE_WINDOW_MS,
         instrument: new Set(),
-      },
+      }),
       { coarse, log: silent },
     );
     agent.start();

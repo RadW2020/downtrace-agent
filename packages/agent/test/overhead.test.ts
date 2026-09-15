@@ -4,7 +4,7 @@ import { createAgent } from "../src/agent.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /**
  * `product.md:241`: «if it detects that it is itself adding latency, it throttles itself». Two words carry it:
@@ -15,21 +15,8 @@ import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 const quiet = { warn: () => {}, debug: () => {} };
 
 /** The configuration every agent needs, with nothing instrumented: this is about the hooks, not the drivers. */
-const config = () => ({
-  token: "test-token",
-  url: "http://127.0.0.1:1/x",
-  environment: "test",
-  version: "t1",
-  queryText: true,
-  minimal: false,
-  excludeEndpoints: [],
-  excludeDependencies: [],
-  inspect: undefined,
-  debug: false,
-  intervalMs: 60_000,
-  profileMs: PROFILE_WINDOW_MS,
-  instrument: new Set<never>(),
-});
+const config = () =>
+  testConfig("http://127.0.0.1:1/x", { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set() });
 
 /** A meter whose clock a test can move, sampling every call so the arithmetic is visible. */
 function meter(costPerHookMs: number, opts: { sampleEvery?: number; budgetMs?: number; window?: number } = {}) {

@@ -9,7 +9,7 @@ import {
   FINE_MAX_BYTES,
   FineRegister,
 } from "../src/fine.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /**
  * The fine half of the black box. What these tests protect is the one thing that makes it worth its cost: the
@@ -286,21 +286,12 @@ describe("the agent's fine register", () => {
   it("records a finished request into it, with or without instrumentation", async () => {
     const fine = new FineRegister({ requests: 8, operations: 16 });
     const agent = createAgent(
-      {
-        token: "test-token",
-        url: "http://127.0.0.1:1/x",
+      testConfig("http://127.0.0.1:1/x", {
         environment: "test",
         version: "t1",
-        queryText: true,
-        minimal: false,
-        excludeEndpoints: [],
-        excludeDependencies: [],
-        inspect: undefined,
-        debug: false,
         intervalMs: 60_000,
-        profileMs: PROFILE_WINDOW_MS,
         instrument: new Set(),
-      },
+      }),
       { fine, log: silent },
     );
     agent.start();

@@ -2,11 +2,10 @@ import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/agent.ts";
 import { sliceFor } from "../src/captures.ts";
-import type { AgentConfig } from "../src/config.ts";
 import { currentContext, dependencyKey, recordCall, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import { PrearmRegister } from "../src/prearm.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /**
  * The wire between the two halves of prearming, which was cut.
@@ -101,24 +100,15 @@ describe("what the agent puts in the reserve", () => {
     const prearm = new PrearmRegister();
     const fine = new FineRegister();
     const agent = new Agent(
-      {
-        token: "t",
-        url: "http://127.0.0.1:1/x",
+      testConfig("http://127.0.0.1:1/x", {
         environment: "test",
         version: "t1",
-        queryText: true,
-        minimal: false,
-        excludeEndpoints: [],
-        excludeDependencies: [],
-        inspect: undefined,
-        debug: false,
         intervalMs: 60_000,
-        profileMs: PROFILE_WINDOW_MS,
         // `http` and not an empty set: a request context is only opened when something is going to record
         // into it, and without one there is no detail to put in the reserve. Instrumenting outgoing HTTP
         // subscribes to channels and patches nothing, so it costs this test nothing.
         instrument: new Set(["http"]),
-      } as unknown as AgentConfig,
+      }),
       { fine, prearm, log: { warn: () => {}, debug: () => {} } },
     );
     // Armed before the request, which is the only order in which a reserve can hold anything.

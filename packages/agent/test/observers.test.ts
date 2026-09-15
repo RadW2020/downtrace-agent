@@ -1,27 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/agent.ts";
-import type { AgentConfig } from "../src/config.ts";
+import type { AgentConfig, Instrument } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 
-function config(instrument: string[]): AgentConfig {
-  return {
-    url: "http://sink.invalid",
-    token: "t",
+function config(instrument: Instrument[]): AgentConfig {
+  return testConfig("http://sink.invalid", {
     environment: "test",
     version: "v",
-    queryText: true,
-    minimal: false,
-    excludeEndpoints: [],
-    excludeDependencies: [],
-    inspect: undefined,
-    debug: false,
     intervalMs: 60_000,
-    profileMs: PROFILE_WINDOW_MS,
     instrument: new Set(instrument),
-  } as AgentConfig;
+  });
 }
 
 /**

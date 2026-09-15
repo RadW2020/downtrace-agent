@@ -2,10 +2,9 @@ import { channel } from "node:diagnostics_channel";
 import type { Interval } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
-import type { AgentConfig } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
-import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 import { Sender } from "../src/transport.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /**
  * What the instrumentation says about itself. `product.md:239`: «The instrumentation measures and sends its own
@@ -128,21 +127,12 @@ describe("what the agent adds about itself", () => {
       return new Response(null, { status: 202 });
     }) as unknown as typeof fetch;
     const agent = createAgent(
-      {
-        token: "t",
-        url: "http://cloud.invalid",
+      testConfig("http://cloud.invalid", {
         environment: "production",
         version: "v1",
-        queryText: true,
-        inspect: undefined,
-        debug: false,
         intervalMs: 60_000,
-        profileMs: PROFILE_WINDOW_MS,
         instrument: new Set(),
-        minimal: false,
-        excludeEndpoints: [],
-        excludeDependencies: [],
-      } as AgentConfig,
+      }),
       { log: quiet, fetchImpl },
     );
     agent.start();
