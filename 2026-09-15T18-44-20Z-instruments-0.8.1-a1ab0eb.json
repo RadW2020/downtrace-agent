@@ -1,0 +1,169 @@
+{
+  "generatedAt": "2026-09-15T18:44:20.998Z",
+  "kind": "instruments",
+  "subject": {
+    "sourceCommit": "a1ab0eb3fd128899f32e7d23b72b6437d2af1e44",
+    "agentPath": "packages/agent/src/register.ts",
+    "version": "0.8.1",
+    "commit": "2bcbb1873f3f3f9edb2df6eb20ac802435ca8dcf",
+    "dirty": false,
+    "source": "working-tree"
+  },
+  "host": {
+    "cores": 4,
+    "memoryMb": 15947,
+    "cpu": null
+  },
+  "node": "v24.20.0",
+  "platform": "linux-arm64",
+  "config": {
+    "rounds": 9,
+    "measureSec": 20,
+    "rps": 200,
+    "seed": 1,
+    "comparisons": 7,
+    "alpha": 0.0071428571428571435
+  },
+  "steps": [
+    {
+      "name": "the agent itself",
+      "cpuPp": 1.106,
+      "cpuNoise2se": 0.604,
+      "p99Ms": 0.333,
+      "p": 0.0078,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        1.41,
+        0.805,
+        2.389,
+        0.2,
+        2.622,
+        -0.028,
+        0.558,
+        1.064,
+        0.937
+      ]
+    },
+    {
+      "name": "runtime health",
+      "cpuPp": -0.115,
+      "cpuNoise2se": 0.285,
+      "p99Ms": -0.259,
+      "p": 0.4297,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        -0.292,
+        -0.285,
+        -0.735,
+        0.2,
+        0.66,
+        -0.038,
+        -0.619,
+        0.126,
+        -0.05
+      ]
+    },
+    {
+      "name": "postgres",
+      "cpuPp": 1.506,
+      "cpuNoise2se": 0.472,
+      "p99Ms": 0.037,
+      "p": 0.0039,
+      "exact": true,
+      "resolved": true,
+      "differences": [
+        1.692,
+        1.386,
+        1.399,
+        1.725,
+        2.799,
+        0.041,
+        1.619,
+        1.278,
+        1.617
+      ]
+    },
+    {
+      "name": "outgoing HTTP",
+      "cpuPp": -0.018,
+      "cpuNoise2se": 0.528,
+      "p99Ms": -0.111,
+      "p": 0.957,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        1.57,
+        -0.392,
+        -0.814,
+        -0.81,
+        -0.202,
+        -0.508,
+        0.617,
+        -0.214,
+        0.593
+      ]
+    },
+    {
+      "name": "redis",
+      "cpuPp": 0.29,
+      "cpuNoise2se": 0.227,
+      "p99Ms": 0.27,
+      "p": 0.0195,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        0.041,
+        0.542,
+        -0.022,
+        1.007,
+        0.143,
+        -0.04,
+        0.134,
+        0.462,
+        0.342
+      ]
+    },
+    {
+      "name": "the fine detail",
+      "cpuPp": 0.403,
+      "cpuNoise2se": 0.665,
+      "p99Ms": -0.066,
+      "p": 0.2734,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        0.723,
+        0.18,
+        0.214,
+        -0.415,
+        -0.715,
+        2.274,
+        -0.739,
+        0.743,
+        1.365
+      ]
+    },
+    {
+      "name": "the profile",
+      "cpuPp": -0.187,
+      "cpuNoise2se": 0.434,
+      "p99Ms": -0.062,
+      "p": 0.4141,
+      "exact": true,
+      "resolved": false,
+      "differences": [
+        -0.745,
+        -0.395,
+        -0.503,
+        0.626,
+        0.606,
+        -1.171,
+        -0.668,
+        0.223,
+        0.348
+      ]
+    }
+  ]
+}
