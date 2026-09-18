@@ -41,6 +41,7 @@ Named after the capability, not the route: an agent looks for "verify the recove
 |---|---|
 | `project_status` | traffic, endpoints, dependencies, runtime, coverage, budget |
 | `list_findings`, `read_finding` | what was detected |
+| `list_errors`, `read_error` | every error observed, from the first one, with no traffic minimum |
 | `read_report` | **start here**: facts, hypotheses with their state, recommendations tied to the hypothesis they rest on, and what it cannot say |
 | `compare_windows` | the differences ordered by how much they explain |
 | `verify_recovery` | did what I changed work |

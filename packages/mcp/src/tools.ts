@@ -111,6 +111,41 @@ export const tools: Tool[] = [
     query: ["from", "to"],
   },
   {
+    name: "list_errors",
+    description:
+      "Every error this project has observed, from the first one: its identity, how many times, when it " +
+      "was first and last seen, and in which environments, versions and routes. No traffic minimum and no " +
+      "detector involved — an error is an observed fact, a finding is a detected difference, and the " +
+      "absence of a finding about an error says nothing either way.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        limit: { type: "number", description: "How many to return, 1 to 200. Fifty by default." },
+      },
+      required: ["project"],
+    },
+    method: "GET",
+    path: "/api/p/{slug}/errors",
+    query: ["limit"],
+  },
+  {
+    name: "read_error",
+    description:
+      "One error and where it was seen: every environment, deployed version and route it happened on, each " +
+      "with its own count and its own first and last sighting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        error: { type: "string", description: "The error's identifier, as `list_errors` gives it." },
+      },
+      required: ["project", "error"],
+    },
+    method: "GET",
+    path: "/api/p/{slug}/errors/{id}",
+  },
+  {
     name: "list_captures",
     description: "The captures of a project, with the budget and what a capture cannot do.",
     inputSchema: { type: "object", properties: { project }, required: ["project"] },

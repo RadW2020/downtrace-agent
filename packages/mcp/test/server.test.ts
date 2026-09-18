@@ -321,3 +321,68 @@ describe("the configuration", () => {
     expect(() => configFrom((n) => (n === "DOWNTRACE_URL" ? "cloud.test" : undefined))).toThrow(ConfigError);
   });
 });
+
+/**
+ * ERR-01: an error is investigable from its first observation, on the page, through the API **and** through
+ * the agent tools, with the same identifiers (invariant 13, gh-595).
+ *
+ * This server is a client of the public API with no shortcut, so what it has to get right is the two things
+ * a path can get wrong: which route each tool is, and where the identifier in it comes from.
+ */
+describe("errors", () => {
+  it("lists them through the API, passing the limit as a query parameter", async () => {
+    const { s, calls } = server([{ body: `{"version":"v1","errors":[],"total":0}` }]);
+    const out = (await s.handle("tools/call", {
+      name: "list_errors",
+      arguments: { project: "tienda", limit: 10 },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(out.isError).toBeUndefined();
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/errors?limit=10");
+    expect(only(calls, 0).method).toBe("GET");
+    expect(said(out)).toContain(`"total":0`);
+  });
+
+  it("reads one by the identifier the list gave, not by a finding's", async () => {
+    const { s, calls } = server([{ body: `{"version":"v1","error":{"id":"abc123"}}` }]);
+    const out = (await s.handle("tools/call", {
+      name: "read_error",
+      arguments: { project: "tienda", error: "abc123" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/errors/abc123");
+    // And what it hands back is what the cloud said about that identifier, verbatim.
+    expect(said(out)).toBe(`{"version":"v1","error":{"id":"abc123"}}`);
+  });
+
+  it("says which argument is missing instead of asking the cloud for nothing", async () => {
+    const { s, calls } = server();
+    const out = (await s.handle("tools/call", {
+      name: "read_error",
+      arguments: { project: "tienda" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(out.isError).toBe(true);
+    // The whole sentence, and the name of the argument that is missing. Asserting that the answer of a tool
+    // called `read_error` contains "error" is a test that cannot fail.
+    expect(said(out)).toBe("missing required argument(s): error");
+    expect(calls.length).toBe(0);
+  });
+
+  it("reads without a token: neither of the two operates", async () => {
+    const readOnly = createServer({
+      config: { url: "https://cloud.test", token: "" },
+      version: "0.0.0",
+      fetchImpl: (async () => new Response(`{"errors":[]}`)) as unknown as typeof fetch,
+    });
+    for (const name of ["list_errors", "read_error"]) {
+      const out = (await readOnly.handle("tools/call", {
+        name,
+        arguments: { project: "tienda", error: "abc123" },
+      })) as { isError?: boolean };
+      expect(out.isError).toBeUndefined();
+    }
+    // And the tool list says so from the source rather than from a copy of it here.
+    for (const name of ["list_errors", "read_error"]) {
+      expect(tools.find((t) => t.name === name)?.operates).toBeUndefined();
+    }
+  });
+});
