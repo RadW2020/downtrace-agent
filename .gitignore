@@ -10,3 +10,6 @@ cloud/bin/
 bench-report.json
 .demo/
 .secrets/
+*.swp
+*.swo
+*~
