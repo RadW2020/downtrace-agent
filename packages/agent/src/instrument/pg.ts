@@ -230,6 +230,11 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
   if (!proto || typeof proto.connect !== "function" || proto[WAIT_MARK] === true) return;
 
   const original = proto.connect as (...args: unknown[]) => unknown;
+  // Recording the wait is best effort, as recording a query is. The pool calls back from the connection's own
+  // event and before the application's callback, so a throw there would end the process; in the promise it would
+  // hand the application our error instead of its client, and that client would never go back (invariant 2).
+  const unrecorded = (err: unknown): void =>
+    log.debug(`pg: recording a connection wait failed: ${err instanceof Error ? err.message : String(err)}`);
   proto.connect = function (this: unknown, ...args: unknown[]): unknown {
     let started: number;
     try {
@@ -244,7 +249,11 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
         // One binding, not two: an AsyncResource per acquisition is the price of correct attribution, and
         // `pool.query()` acquires a connection for every query, so paying it twice is measurable.
         args[args.length - 1] = AsyncResource.bind(function (this: unknown, ...cbArgs: unknown[]): unknown {
-          recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+          try {
+            recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+          } catch (err) {
+            unrecorded(err);
+          }
           return callback.apply(this, cbArgs);
         });
         return original.apply(this, args);
@@ -258,12 +267,20 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
         (client) => {
           // The target comes from the client the pool just handed over, so the wait lands on the same dependency
           // as the queries that follow it. A pool built from a connection string knows nothing about its host.
-          recordWait("postgres", targetOfClient(client), performance.now() - started);
+          try {
+            recordWait("postgres", targetOfClient(client), performance.now() - started);
+          } catch (err) {
+            unrecorded(err);
+          }
           return client;
         },
         (err: unknown) => {
           // A pool that timed out waiting is the clearest case of all: count the wait, and let the error through.
-          recordWait("postgres", targetOfPool(this), performance.now() - started);
+          try {
+            recordWait("postgres", targetOfPool(this), performance.now() - started);
+          } catch (failure) {
+            unrecorded(failure);
+          }
           throw err;
         },
       );

@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { enterRequest } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
@@ -389,5 +391,189 @@ describe("a query that fails", () => {
 
     // The whole point of invariant 2: measuring must not change what is being measured.
     await expect(client.query("boom")).rejects.toThrow("query failed");
+  });
+});
+
+/**
+ * Invariant 2 on every path a query takes, and `product.md:241`: «it never throws exceptions into the user's
+ * code nor breaks the application». Until gh-652 only the promise form of `client.query` had a test of it, and
+ * turning the callback form's `catch` into a rethrow left every test green — the form `pg-pool` uses for every
+ * `pool.query()`, with a callback or without (`pg-pool/index.js:467`). The wait for a connection had no `catch`
+ * to turn at all: a throw there ended the process, or kept the connection from ever going back to the pool.
+ */
+describe("a failure while recording never reaches the application", () => {
+  const SQL = "SELECT id FROM t WHERE id = $1";
+  const ROWS = { rows: [{ ok: 1 }] };
+
+  type Query = (...args: unknown[]) => unknown;
+  /** One way of asking for rows, reduced to a promise of what the application got. */
+  type Form = [name: string, run: (query: Query) => Promise<unknown>];
+  /** One failure of the instrumentation's own code, and what the test hands `instrumentPg` and the request. */
+  type Failure = [
+    name: string,
+    make: () => { fingerprints: FingerprintCache | undefined; excluded: { has(target: string): boolean } | undefined },
+  ];
+
+  /** The two forms `pg` accepts, as a table: the symmetry is the shape of the test, not something to remember. */
+  const forms: Form[] = [
+    ["promise", (query) => query(SQL, [1]) as Promise<unknown>],
+    [
+      "callback",
+      (query) =>
+        new Promise((resolve, reject) => {
+          query(SQL, [1], (err: unknown, res: unknown) => (err ? reject(err) : resolve(res)));
+        }),
+    ],
+  ];
+
+  function explodingExclusions(): { has(target: string): boolean } {
+    return {
+      has: () => {
+        throw new Error("exclusion broke");
+      },
+    };
+  }
+
+  /**
+   * Two places the instrumentation's own code can fail while it records, and every recording in `pg.ts` goes
+   * through at least one: the query's fingerprint, and the request's exclusion list, which `recordCallIn` and
+   * `recordWaitIn` consult before anything else. Neither stands in for the driver: both are the agent's.
+   */
+  const failures: Failure[] = [
+    [
+      "fingerprinting throws",
+      () => ({
+        // Only `get` is ever called on it.
+        fingerprints: {
+          get: () => {
+            throw new Error("normalisation broke");
+          },
+        } as unknown as FingerprintCache,
+        excluded: undefined,
+      }),
+    ],
+    ["the exclusion list throws", () => ({ fingerprints: undefined, excluded: explodingExclusions() })],
+  ];
+
+  /**
+   * A connection with no socket that calls back the way `pg` does: later, from its own event, never from the
+   * caller's stack. What escapes a callback it calls is what `pg` rethrows on `process.nextTick`
+   * (`pg/lib/query.js:140-146`), and the process ends; here it lands in `escaped`, so a test can say it
+   * happened. The four methods are the ones `pg-pool` calls on the `Client` it is given.
+   */
+  function connection(refusal?: Error) {
+    let caught: (err: unknown) => void = () => {};
+    const escaped = new Promise<unknown>((resolve) => {
+      caught = resolve;
+    });
+    const later = (call: () => void): void => {
+      setImmediate(() => {
+        try {
+          call();
+        } catch (err) {
+          caught(err);
+        }
+      });
+    };
+    class Connection extends EventEmitter {
+      connect(cb: (err?: Error) => void): void {
+        later(() => cb(refusal));
+      }
+      query(...args: unknown[]): unknown {
+        const cb = args.at(-1);
+        if (typeof cb !== "function") return Promise.resolve(ROWS);
+        later(() => (cb as (err: unknown, res: unknown) => void)(null, ROWS));
+        return undefined;
+      }
+      end(cb?: () => void): void {
+        later(() => cb?.());
+      }
+    }
+    return { Connection, escaped };
+  }
+
+  /** What reached the application, unless something escaped into the connection first: then that is the red. */
+  function unlessEscaped(app: Promise<unknown>, escaped: Promise<unknown>): Promise<unknown> {
+    return Promise.race([
+      app,
+      escaped.then((err) => {
+        throw new Error(`escaped into the driver instead: ${err instanceof Error ? err.message : String(err)}`);
+      }),
+    ]);
+  }
+
+  /** `query`, bound to whatever carries it: a client or a pool. */
+  function queryOf(target: object): Query {
+    const query = (target as { query: Query }).query;
+    return query.bind(target);
+  }
+
+  /**
+   * `pg`'s real pool over the connection above: `pg-pool` builds its clients from the `Client` in its options
+   * (`pg-pool/index.js:95`), and everything else — acquiring, calling back, releasing — is its own code. A
+   * subclass per test, so each test patches a `connect` of its own and not the module's.
+   */
+  function realPool(Connection: new () => EventEmitter) {
+    class Pool extends pg.Pool {}
+    // Typed as pg's own client; this one has only the four methods pg-pool calls.
+    const pool = new Pool({ Client: Connection as unknown as new () => pg.ClientBase });
+    return { Pool, pool };
+  }
+
+  describe.each(failures)("when %s", (_failure, make) => {
+    it.each(forms)("a client's %s query gets its rows, and nothing escapes into the driver", async (_form, run) => {
+      const { Connection, escaped } = connection();
+      const { fingerprints, excluded } = make();
+      instrumentPg({ log: quiet, moduleImpl: { Client: Connection }, fingerprints });
+      enterRequest(undefined, undefined, excluded);
+      await expect(unlessEscaped(run(queryOf(new Connection())), escaped)).resolves.toEqual(ROWS);
+    });
+
+    it.each(forms)("pg's pool.query() gets its rows in the %s form, and nothing escapes", async (_form, run) => {
+      const { Connection, escaped } = connection();
+      const { fingerprints, excluded } = make();
+      const { Pool, pool } = realPool(Connection);
+      instrumentPg({ log: quiet, moduleImpl: { Client: Connection, Pool }, fingerprints });
+      enterRequest(undefined, undefined, excluded);
+      await expect(unlessEscaped(run(queryOf(pool)), escaped)).resolves.toEqual(ROWS);
+      // The connection went back: a pool with one checked out would wait for it here for ever.
+      await pool.end();
+    });
+  });
+
+  describe("pg's pool.connect(), when the exclusion list throws", () => {
+    type Connect = [name: string, connect: (pool: pg.Pool) => Promise<unknown>];
+    const connects: Connect[] = [
+      ["promise", (pool) => pool.connect()],
+      [
+        "callback",
+        (pool) =>
+          new Promise((resolve, reject) => {
+            pool.connect((err, client) => (err ? reject(err) : resolve(client)));
+          }),
+      ],
+    ];
+
+    it.each(connects)("hands over a client the application can release, %s form", async (_form, connect) => {
+      const { Connection, escaped } = connection();
+      const { Pool, pool } = realPool(Connection);
+      instrumentPg({ log: quiet, moduleImpl: { Client: Connection, Pool } });
+      enterRequest(undefined, undefined, explodingExclusions());
+      const client = await unlessEscaped(connect(pool), escaped);
+      expect(client).toBeInstanceOf(Connection);
+      (client as pg.PoolClient).release();
+      await pool.end();
+    });
+
+    it.each(connects)("lets the connection's own failure through, %s form", async (_form, connect) => {
+      const refused = new Error("connection refused");
+      const { Connection, escaped } = connection(refused);
+      const { Pool, pool } = realPool(Connection);
+      instrumentPg({ log: quiet, moduleImpl: { Client: Connection, Pool } });
+      enterRequest(undefined, undefined, explodingExclusions());
+      // The application's own error, not the instrumentation's.
+      await expect(unlessEscaped(connect(pool), escaped)).rejects.toBe(refused);
+      await pool.end();
+    });
   });
 });
