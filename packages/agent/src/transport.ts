@@ -115,6 +115,20 @@ const MAX_TRIGGERS = 4;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 /**
+ * How long one request may take: milliseconds from when it starts, or a deadline somebody already started.
+ *
+ * The second is what the way out hands over, so that one budget covers the batch and every capture's evidence
+ * instead of each request starting a clock of its own, one after another (gh-650). Either way the request
+ * carries a signal. A cloud that takes the connection and never answers is the one failure that nothing else
+ * here ends: without it a flush never settles, holds `inflight` for ever, and the sender stops sending.
+ */
+export type Deadline = number | AbortSignal;
+
+function signalOf(deadline: Deadline): AbortSignal {
+  return typeof deadline === "number" ? AbortSignal.timeout(deadline) : deadline;
+}
+
+/**
  * Statuses that say "this batch is wrong", as opposed to "you are wrong" or "I am having a bad day".
  *
  * A batch the cloud refuses as invalid will be refused the same way tomorrow. Keeping it costs one of the six
@@ -273,14 +287,14 @@ export class Sender {
    *
    * Returns whether the cloud took it, for the log and for the tests. Nothing upstream depends on it.
    */
-  async sendEvidence(id: string, evidence: CaptureEvidence, timeoutMs = this.timeoutMs): Promise<boolean> {
+  async sendEvidence(id: string, evidence: CaptureEvidence, deadline: Deadline = this.timeoutMs): Promise<boolean> {
     if (this.opts.url === "" || this.opts.token === "") return false;
     try {
       const res = await this.fetchImpl(`${this.opts.url}${captureEvidencePath(id)}`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.opts.token}` },
         body: JSON.stringify(evidence),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signalOf(deadline),
       });
       if (res.ok) {
         this.opts.log.debug(`evidence for ${id} accepted`);
@@ -315,7 +329,7 @@ export class Sender {
     );
   }
 
-  async flush(timeoutMs = this.timeoutMs): Promise<boolean> {
+  async flush(deadline: Deadline = this.timeoutMs): Promise<boolean> {
     // Something to say is an interval, a profile **or** a capture report. Asking only about the interval
     // queue meant a profile with no interval to ride on never left — at shutdown, always (gh-375) — and the
     // same trap caught the capture reports the moment they existed: a capture watching a route with no
@@ -363,7 +377,7 @@ export class Sender {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.opts.token}` },
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signalOf(deadline),
       });
       if (res.ok) {
         this.queue = this.queue.filter((iv) => !intervals.includes(iv));

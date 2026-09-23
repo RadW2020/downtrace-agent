@@ -1,8 +1,16 @@
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { AGGREGATES_SCHEMA_V0, type Interval, PROTOCOL_VERSION, type Profile } from "@downtrace/protocol";
+import {
+  AGGREGATES_SCHEMA_V0,
+  type CaptureProgress,
+  type Interval,
+  type LocalTrigger,
+  PROTOCOL_VERSION,
+  type Profile,
+} from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
+import type { CountedException } from "../src/exceptions.ts";
 import type { Logger } from "../src/log.ts";
 import { DEFAULT_MAX_QUEUED, type PendingCapture, Sender } from "../src/transport.ts";
 
@@ -501,5 +509,76 @@ describe("the capture orders that come back in the answer", () => {
     expect(await s.flush()).toBe(true);
     expect(seen).toHaveLength(1);
     expect((seen[0] as { id: string }).id).toBe("cap-2");
+  });
+});
+
+/**
+ * Every array a batch carries has a `maxItems` in the schema, and a batch past one is refused with a `400`, which
+ * the sender drops whole (ADR 0035). So each queue behind one of those arrays has to stop at that number, and not
+ * one before it.
+ *
+ * Three of them had no test at all, and taking any of the three caps out left every test green. With the
+ * exceptions' gone, more than 32 signatures made every batch one the cloud refuses — and the `400` branch drops
+ * each round's intervals and keeps the exceptions, so the next batch was refused the same way (gh-650).
+ *
+ * The numbers are the schema's, read from it and not copied. So is the list: a capped array the contract gains
+ * without a way to overfill it here fails the first test, which is what a list written by hand cannot do.
+ */
+describe("Sender, bounded on every array a batch carries", () => {
+  const properties: Record<string, Record<string, unknown>> = AGGREGATES_SCHEMA_V0.properties;
+  const capped = Object.entries(properties).flatMap(([field, p]) =>
+    p.type === "array" && typeof p.maxItems === "number" ? [{ field, max: p.maxItems }] : [],
+  );
+
+  const exception = (i: number): CountedException => ({ kind: "uncaught", hash: `h${i}`, text: "", count: 1 });
+  const report = (i: number): CaptureProgress => ({ id: `cap-${i}`, startedAt: 1 });
+  // The contract names one signal today and the queue keeps one ask per signal, so going past a cap of four takes
+  // names it does not have. What this checks is the cap, which is there for the day it names a second.
+  const ask = (i: number): LocalTrigger => ({ signal: `signal-${i}` as LocalTrigger["signal"], observedAt: 1 });
+
+  /** One field of the batch as the cloud would receive it, without casting through an optional chain. */
+  const carried = (call: { body: unknown } | undefined, field: string): unknown =>
+    ((call?.body ?? {}) as Record<string, unknown>)[field];
+
+  /** How to hand each queue `n` distinct entries. */
+  const overfill: Record<string, (s: Sender, n: number) => void> = {
+    intervals: (s, n) => {
+      for (let i = 0; i < n; i++) s.enqueue(interval(i));
+    },
+    exceptions: (s, n) => s.enqueueExceptions(Array.from({ length: n }, (_, i) => exception(i))),
+    captures: (s, n) => s.enqueueCaptures(Array.from({ length: n }, (_, i) => report(i))),
+    triggers: (s, n) => s.enqueueTriggers(Array.from({ length: n }, (_, i) => ask(i))),
+  };
+
+  it("has a way to overfill every capped array the schema declares, and no other", () => {
+    expect(capped.map((c) => c.field).sort()).toEqual(Object.keys(overfill).sort());
+  });
+
+  for (const { field, max } of capped) {
+    it(`carries ${max} ${field}, the schema's maxItems, however many it was handed`, async () => {
+      const { s, calls } = sender([202]);
+      overfill[field]?.(s, max + 3);
+      expect(await s.flush()).toBe(true);
+      expect(carried(calls[0], field)).toHaveLength(max);
+    });
+  }
+
+  it("sends a batch the schema accepts with every one of those queues past its cap", async () => {
+    const { s, calls } = sender([202]);
+    for (const { field, max } of capped) if (field !== "triggers") overfill[field]?.(s, max + 3);
+    // The made-up signals above cannot be valid. Every signal the contract does name, asked for twice, is.
+    const signals = AGGREGATES_SCHEMA_V0.$defs.LocalTrigger.properties.signal.enum;
+    // `as` because the JSON module types the enum as `string[]`; the values are the schema's own.
+    s.enqueueTriggers(
+      [...signals, ...signals].map((signal) => ({ signal: signal as LocalTrigger["signal"], observedAt: 1 })),
+    );
+    expect(await s.flush()).toBe(true);
+    const ajv = new Ajv2020({ allErrors: true, strict: true });
+    ajv.addKeyword("x-latency-boundaries-ms");
+    ajv.addKeyword("x-calls-per-request-boundaries");
+    ajv.addKeyword("x-ingest-path");
+    const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
+    expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
+    expect(carried(calls[0], "triggers")).toHaveLength(signals.length);
   });
 });

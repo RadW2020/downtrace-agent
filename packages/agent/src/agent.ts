@@ -479,8 +479,15 @@ export class Agent {
    * Only on the way out. A process that lives less than a minute used to send no profile at all — `rotate`
    * looked at the clock and shutting down did not change the clock — and so did the last incomplete minute
    * of every process (gh-371).
+   *
+   * **And on the way out `timeoutMs` is one deadline for all of it**, started here: the batch and every
+   * capture's evidence share it. Each request used to start a clock of its own, one after another, so a cloud
+   * that took the connection and never answered held a leaving process one second for the batch and five for
+   * each capture under way — 21 s with four, against a limit that said one (gh-650). Otherwise it bounds the
+   * batch, and each evidence has the sender's own default: nothing waits on a flush that is not leaving.
    */
   private async flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
+    const deadline = leaving ? AbortSignal.timeout(timeoutMs ?? SHUTDOWN_FLUSH_MS) : undefined;
     try {
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
       const profile = leaving ? this.profile.drain() : this.profile.rotate();
@@ -508,10 +515,16 @@ export class Agent {
           this.prearm.arm(label, this.now(), ARM_FOR_MS);
         }
       }
-      const sent = await this.sender.flush(timeoutMs);
+      const sent = await this.sender.flush(deadline ?? timeoutMs);
+      // Said, because it is the last thing this process will say about it: nothing is queued in a process that
+      // is leaving, and there is no next batch to count the loss in (gh-650).
+      if (!sent && deadline?.aborted) {
+        this.log.debug(`leaving: the last batch did not land within ${SHUTDOWN_FLUSH_MS} ms and is dropped`);
+      }
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
-      // Leaving hands over everything under way, because partial evidence is an answer and silence is not.
-      await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(this.now()));
+      // Leaving hands over everything under way, because partial evidence is an answer and silence is not —
+      // for as long as the deadline lasts, and not a request longer.
+      await this.deliverEvidence(leaving ? this.captures.takeAll() : this.captures.take(this.now()), deadline);
       this.renewReference();
       return sent;
     } catch (err) {
@@ -527,9 +540,18 @@ export class Agent {
    * recovery» (CAP-01), and the cloud already knows how to answer that. Failures are logged and
    * dropped — a `409` is another instance having been quicker, and nothing here is worth retrying after its
    * window has closed (gh-379).
+   *
+   * On the way out they share the deadline the batch had. Once it has passed nothing more is built or sent: the
+   * request in flight is cut, the rest are dropped, and how many captures went without their evidence is said.
+   * The cloud sees those captures expire, which is what accepting one never promised otherwise (CAP-01, gh-650).
    */
-  private async deliverEvidence(done: LiveCapture[]): Promise<void> {
+  private async deliverEvidence(done: LiveCapture[], deadline?: AbortSignal): Promise<void> {
+    let without = 0;
     for (const capture of done) {
+      if (deadline?.aborted) {
+        without += 1;
+        continue;
+      }
       // With the reserve, which is the whole point of having one: a route armed before this capture kept its
       // requests out of reach of everyone else's traffic, and this is where the two registers meet (ADR 0122).
       // It used to be left out — the argument was optional and this call simply did not pass it — so a capture
@@ -540,7 +562,7 @@ export class Agent {
         (route) => this.nameOf(route),
         this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(capture.footprint.route ?? ""), this.now()),
       );
-      await this.sender.sendEvidence(capture.id, {
+      const evidence: CaptureEvidence = {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },
         startedAt: new Date(capture.startedAt).toISOString(),
@@ -570,7 +592,14 @@ export class Agent {
           ...(r.detailLost ? { detailLost: true } : {}),
           ...(r.truncated ? { truncated: true } : {}),
         })),
-      });
+      };
+      const delivered = await this.sender.sendEvidence(capture.id, evidence, deadline);
+      if (!delivered && deadline?.aborted) without += 1;
+    }
+    if (without > 0) {
+      this.log.debug(
+        `leaving: ${without} capture(s) left without their evidence: the cloud did not take it within ${SHUTDOWN_FLUSH_MS} ms`,
+      );
     }
   }
 
