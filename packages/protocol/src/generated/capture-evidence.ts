@@ -7,7 +7,7 @@ export interface CaptureEvidence {
   /**
    * Protocol version this payload conforms to. Same enum as a batch: every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0" | "0.9.0";
   /**
    * Which process observed this. Several instances of one deployment get the same order on purpose (ADR 0071), so the cloud has to be able to tell two answers apart.
    */

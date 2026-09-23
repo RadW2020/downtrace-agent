@@ -84,12 +84,24 @@ export class Captures {
     }
   }
 
-  /** The starts the next batch has to carry, each said once. */
+  /**
+   * The starts the next batch has to carry, each said once.
+   *
+   * Rounded **here** and not where the start is sealed. The contract writes an instant as an integer count
+   * of Unix milliseconds and `AgentDeps.now` has decimals since gh-538, so the batch was being refused with
+   * a 400 and dropped whole —intervals, profile and exceptions with it (ADR 0035)— over a fraction of a
+   * millisecond. Rounding what is *stored* would instead take resolution away from `sliceFor`, which is the
+   * comparison ADR 0131 gave one clock to; this way the agent keeps the instant and only the wire is an
+   * integer, which is what `Interval.start` already does (gh-608).
+   *
+   * Down, because the same start also leaves in the evidence as `new Date(startedAt).toISOString()` and
+   * `Date` truncates: rounding up would have two routes reporting one fact a millisecond apart (ADR 0098).
+   */
   toReport(): CaptureReport[] {
     const out: CaptureReport[] = [];
     for (const c of this.live.values()) {
       if (c.reported) continue;
-      out.push({ id: c.id, startedAt: c.startedAt });
+      out.push({ id: c.id, startedAt: Math.floor(c.startedAt) });
     }
     return out;
   }

@@ -1,6 +1,6 @@
 # reference-app
 
-Reference Node backend with the shape of the ICP's backends: Express 5, PostgreSQL (`pg`), Redis (`ioredis`) and a simulated external provider that real HTTP calls go to. Its regressions are switched on and off at will, and it exposes its own truth —what each request did— so that benchmarks, tests and evals have something to compare against. It does not include the agent, nor depend on it.
+Reference Node backend with the shape of the ICP's backends: Express 5, PostgreSQL (`pg`), Redis (`ioredis`) and a simulated external provider that real HTTP calls go to. Its regressions are switched on and off at will, and it exposes its own truth —what each request did— so that benchmarks, tests and evals have something to compare against. It depends on `@downtrace/agent` for the two calls ERR-02 needs and for nothing else: two lines, both inert when the instrumentation is not loaded, and the section below says which and why.
 
 ## Getting it up
 
@@ -43,6 +43,28 @@ They are switched on at start-up with `REGRESSIONS=n_plus_one,slow_dependency`, 
 | `new_error` | a fraction of `GET /products/:id` throws `InventoryMismatchError` | `rate` (0.1) |
 
 The provider calls happen inside the transaction on purpose: it is a common shape in production, and it is what turns a slow dependency into pressure on the pool.
+
+## What it asks of Downtrace, and why
+
+Two lines, and they are the two things installing without touching the code cannot do (ERR-02):
+
+- `app.use(expressErrorHandler())`, registered before this app's own error handler, so the exception Express turns into a 5xx arrives with a type, a message and a stack signature instead of as a bare status class. It records the error and calls `next(err)`, so the response is the one this app gave before it was there.
+- `captureException(err, …)` in the provider client's retry, which is a failure the application **handles**: it retries, and the request carries on. From the outside nothing went wrong, so no hook can see it.
+
+Both do nothing at all when the instrumentation is not loaded, which is how the benchmark's baseline rounds run. Setting `failureRate` to 1 through `PUT /__admin/provider` makes the second one happen on demand.
+
+## Beside the error tracker (ESC-16)
+
+`product.md` says the replacement goes first beside the tracker and only then instead of it, so this app can run both instrumentations at once, the way an application in the middle of a migration does. **`@sentry/node` is a development dependency of this package and of no other**, pinned to an exact version: `@downtrace/agent` never depends on a tracker, and `packages/bench` reaches this one through the workspace when it needs it (gh-615). Verified with **@sentry/node 10.75.0**; a bump is a new verification, which is why the version is exact and is written here.
+
+```sh
+SENTRY_DSN=… node --import @downtrace/agent/register --import ./src/sentry.ts src/main.ts
+```
+
+- `src/sentry.ts` is the tracker's entry point and the only thing that calls `Sentry.init`; it reads what `src/config.ts` read from the environment, because that module is the one place that reads it. With no `SENTRY_DSN` it does nothing, so loading it is never what turns the tracker on.
+- `SENTRY_DSN` is also what makes `main.ts` wire the tracker into the app: its Express error middleware beside `expressErrorHandler()`, and its `captureException` beside ours in the provider client's retry, with the same error and the same context. A DSN set with the tracker never loaded aborts start-up rather than quietly running with one instrumentation.
+- `TRACKER_ERROR_HANDLER=before|after` (default `after`) puts the tracker's error middleware on either side of ours. Both record and call `next(err)`, so both see the error and neither answers; the switch exists because that is a claim, and `test/coexistence.integration.test.ts` runs it both ways. Any other value aborts start-up.
+- What that test compares, and what it pins as **not** working — the tracker's `pg` spans, which do not survive our start-up `require("pg")` (gh-614) — is in the test's own header.
 
 ## Admin (`ADMIN_ENABLED=1`, the default)
 

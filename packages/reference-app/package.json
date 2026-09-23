@@ -14,15 +14,17 @@
     "dev": "node --watch --env-file-if-exists=.env src/main.ts",
     "start": "node src/main.ts",
     "test": "vitest run",
-    "test:integration": "DOWNTRACE_REQUIRE_DB=1 vitest run test/integration.test.ts",
+    "test:integration": "DOWNTRACE_REQUIRE_DB=1 vitest run integration",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@downtrace/agent": "workspace:*",
     "express": "^5.2.1",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@sentry/node": "10.75.0",
     "@types/express": "^5.0.6",
     "@types/pg": "^8.23.1"
   }

@@ -1,9 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Dependency } from "@downtrace/protocol";
+import type { Dependency, Operation } from "@downtrace/protocol";
 import type { FineRegister } from "./fine.ts";
 import type { QueryClass } from "./fingerprint.ts";
 
 export type DependencyKind = Dependency["kind"];
+
+/**
+ * What an operation of the profile can be: something the route ran, or one of the three ways an error gets
+ * here. Taken from the protocol rather than written again, so a kind the schema does not know cannot be
+ * recorded (invariant 9).
+ */
+export type OperationKind = Operation["kind"];
 
 /** What one request did against one dependency. Counters only: never the query text, never the values. */
 export interface DependencyWork {
@@ -22,7 +29,7 @@ export interface DependencyWork {
  * Never the values — the text is normalised before it ever reaches here (`fingerprint.ts`, invariant 5).
  */
 export interface OperationWork {
-  kind: "query" | "error";
+  kind: OperationKind;
   hash: string;
   /** Normalised text. Empty when there is nothing readable to label it with. */
   text: string;
@@ -31,6 +38,12 @@ export interface OperationWork {
   count: number;
   totalMs: number;
   errors: number;
+  /**
+   * The structural context the application attached to an error it reported, already sanitised and bounded
+   * (ERR-02). Only the two kinds an application produces ever carry one; a query never does. The **first**
+   * one seen for this signature in this window, because what travels is per signature and not per occurrence.
+   */
+  context?: Record<string, string> | undefined;
 }
 
 /**
@@ -213,6 +226,25 @@ export interface FinishedOperation {
   startedAt: number;
   endedAt: number;
   failed?: boolean;
+  /** Sanitised and bounded already, or absent: this file decides nothing about what text may travel. */
+  context?: Record<string, string> | undefined;
+}
+
+/**
+ * What tells two operations apart: the kind and the hash, and not the hash alone.
+ *
+ * The same throw can be seen twice — as the operation that failed and as the exception the framework turned
+ * into a 5xx — and then the two share an identity text and so a hash. Keyed on the hash alone they merged
+ * into whichever kind got there first, and one of the two facts disappeared into the other's count (gh-596).
+ * `endpoint_operations` has always keyed on both; this is the same key on this side of the wire.
+ *
+ * **A query keeps its hash as its key**, which is what it was before this existed, so the path that runs once
+ * per query per request allocates nothing (invariant 3, ADR 0003). The three kinds of error pay one
+ * concatenation each, and they happen once per *failure* rather than once per call. A hash is sixteen hex
+ * characters, so no query's key can ever read as one of theirs.
+ */
+export function operationKey(kind: OperationKind, hash: string): string {
+  return kind === "query" ? hash : `${kind}\n${hash}`;
 }
 
 /**
@@ -224,7 +256,8 @@ export interface FinishedOperation {
 export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): void {
   const ms = op.endedAt - op.startedAt;
   ctx.operations ??= new Map();
-  let entry = ctx.operations.get(op.fingerprint.hash);
+  const key = operationKey(op.kind, op.fingerprint.hash);
+  let entry = ctx.operations.get(key);
   if (!entry) {
     entry = {
       kind: op.kind,
@@ -235,7 +268,11 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
       errors: 0,
     };
     if (op.fingerprint.class !== undefined) entry.class = op.fingerprint.class;
-    ctx.operations.set(op.fingerprint.hash, entry);
+    // The first context for this signature, and only the first: this map counts occurrences and does not
+    // date them, so replacing it on every throw would keep an arbitrary one rather than the one that can be
+    // read beside the first sighting the cloud stores.
+    if (op.context !== undefined) entry.context = op.context;
+    ctx.operations.set(key, entry);
   }
   entry.count += 1;
   entry.totalMs += ms;

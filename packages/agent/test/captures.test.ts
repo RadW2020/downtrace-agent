@@ -60,6 +60,38 @@ describe("Captures", () => {
     expect(c.size).toBe(0);
   });
 
+  // gh-608. The contract writes an instant as an integer count of Unix milliseconds, and since gh-538 the
+  // agent's clock is `performance.timeOrigin + performance.now()`, which has decimals. Every batch that
+  // reported a start was refused by the cloud with a 400 and **dropped whole** (ADR 0035), taking the
+  // intervals, the profile and the exceptions that were riding with it.
+  it("reports a start the contract can carry, rounded down to the millisecond", () => {
+    const c = new Captures();
+    c.accept([order("cap-1")], 1_000.4165);
+    expect(c.toReport()).toEqual([{ id: "cap-1", startedAt: 1_000 }]);
+    expect(Number.isInteger(c.toReport()[0]?.startedAt)).toBe(true);
+  });
+
+  // Down and not to the nearest, because the same fact leaves by two routes: this one and the evidence
+  // (ADR 0073), where the instant is written with `new Date(startedAt).toISOString()` — and `Date`
+  // truncates. Rounding up would make the two disagree by a millisecond half of the time, and ADR 0098
+  // says of this very field that two paths for one fact are two truths waiting to disagree.
+  it("rounds the way the evidence route already does", () => {
+    const c = new Captures();
+    c.accept([order("cap-1")], 1_000.75);
+    expect(c.toReport()[0]?.startedAt).toBe(new Date(1_000.75).getTime());
+  });
+
+  // And it rounds on the way **out**, not on the way in. `sliceFor` compares a request's instant against
+  // the stored start, and ADR 0131 gave the two one clock precisely so that comparison has an answer at any
+  // resolution; rounding what is stored would hand back up to a millisecond of it.
+  it("keeps the instant it really started at, which is not the one it reports", () => {
+    const c = new Captures();
+    c.accept([order("cap-1", { windowSeconds: 10 })], 1_000.75);
+    const [live] = c.takeAll();
+    expect(live?.startedAt).toBe(1_000.75);
+    expect(live?.endsAt).toBe(11_000.75);
+  });
+
   it("hands over everything when the process is leaving", () => {
     // Partial evidence is an answer; silence is not. The same reasoning as the profile (gh-371).
     const c = new Captures();
@@ -125,6 +157,23 @@ describe("what one capture saw", () => {
     expect(slice.attachedRequests).toBe(2);
     expect(slice.detailLost).toBe(2);
     expect(slice.truncated).toBe(1);
+  });
+
+  // gh-608, the other half of the rounding. The start that leaves in the batch is rounded down; the one
+  // this comparison uses is not. A request that happened inside the millisecond the capture started in,
+  // but **before** it, is attached detail — and reading the rounded value here would call it observed.
+  it("orders a request against the instant the capture really started, not the one it reported", () => {
+    const start = 1_000.75;
+    const slice = sliceFor(
+      live({ startedAt: start }),
+      snapshot([request(1_000.5), request(1_000.9)]),
+      (route) => route,
+      null,
+    );
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 1]);
+    // Sorted by their own instants, which keep their decimals: two requests inside one millisecond still
+    // have an order, which is what ADR 0131 bought.
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_000.5, 1_000.9]);
   });
 
   it("is an answer even when nothing ran", () => {

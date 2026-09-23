@@ -1,0 +1,40 @@
+{
+  "protocol": "0.9.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [],
+  "profile": {
+    "start": 1756900000000,
+    "durationMs": 60000,
+    "endpoints": [
+      {
+        "method": "POST",
+        "route": "/checkout",
+        "operations": [
+          {
+            "kind": "explicit",
+            "hash": "3c9f0a1b2d4e5f60",
+            "count": 1,
+            "totalMs": 0,
+            "context": {
+              "order": { "id": 17, "items": 3 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

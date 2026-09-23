@@ -1,6 +1,13 @@
 import { createReferenceApp } from "./app.ts";
+import { configFromEnv } from "./config.ts";
+import { loadTracker } from "./tracker.ts";
 
-const ref = createReferenceApp();
+// The error tracker this process may also be running (ESC-16). Here, before the app is built, because its
+// error middleware has to sit between the routes and this app's own handler —which answers and does not call
+// `next`— and where a middleware sits is decided when the app is built.
+const tracker = await loadTracker(configFromEnv());
+
+const ref = createReferenceApp(tracker === undefined ? {} : { tracker });
 const { port, providerPort } = await ref.start();
 console.log(
   JSON.stringify({
@@ -10,6 +17,7 @@ console.log(
     version: ref.config.appVersion,
     admin: ref.config.adminEnabled,
     regressions: ref.regressions.enabled(),
+    tracker: tracker !== undefined,
   }),
 );
 

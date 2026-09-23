@@ -93,6 +93,84 @@ The environment is not withheld: your ingest token already tells the cloud which
 here would protect nothing and would collapse the per-environment scope everything is organised by.
 
 `DOWNTRACE_QUERY_TEXT=off` still exists and still does the smaller thing: send the routes, not the queries.
+It is about queries, so it does not touch the context of an error you report.
+
+## Errors your application handled, and the ones your framework turned into a 5xx
+
+Installing without touching your code stays the default, and it covers most of it: a query that fails, an
+outgoing call that fails, an exception that kills the process. Two kinds of error it cannot cover, because
+from the outside nothing went wrong, and those are what these two calls are for.
+
+**An error you handled.** A `catch` that retries, falls back or writes a warning and carries on, and an error
+you deliberately turn into a 4xx or a 2xx. No hook can see either: the request succeeded.
+
+```js
+import { captureException } from "@downtrace/agent";
+
+try {
+  await provider.authorize(order);
+} catch (err) {
+  captureException(err, { stage: "authorize", retryable: true });
+  return fallback(order);
+}
+```
+
+The shape is the one your error tracker uses, so replacing the import is the migration. The one difference is
+the return: a tracker gives you an event id and this gives you nothing, because the instrumentation has no
+identifier to hand out — an error's identifier is the cloud's digest of its signature.
+
+It is attributed to the request being served when there is one, and to the process when there is not: a
+background job, a worker, start-up. It never throws, whatever you pass it, and with the instrumentation not
+loaded it does nothing at all, so it is safe to leave in code that also runs without Downtrace.
+
+**The context is structural, small and sanitised.** A flat object: at most **8 keys** of at most 32
+characters, each value at most 64 characters after sanitising. A string is sanitised exactly as an error
+message is — including the rule that omits it when fewer than half its words survive, and then what travels
+is a `?` — a boolean travels as it is, and **a number comes out as `?`**: an order id, a user id and a price
+are all numbers and there is no telling them apart, so the key survives and the value does not. Nested
+objects, arrays, `null` and functions are dropped. A **key** has to be a name and survive the same sanitiser
+unchanged, so `stage` and `willRetry` travel and `order_12345` or `sk_live_…` are dropped whole rather than
+sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass the flat fields you want.
+
+**What that guarantees, and what is yours.** The sanitising replaces what *looks like* a value: anything with
+a digit in it, an email, a long run of hex or base64, whatever is between quotes. It cannot recognise a plain
+word, so `{ customer: "alice" }` travels whole. The guarantee is «no identifier, no address, no token», not
+«nothing about a person» — so do not put a name, an email or anything else that identifies somebody in a
+context. Downtrace does not measure users (IMP-01), and this call cannot enforce that on prose you wrote.
+
+Only the **first** context for a signature in each window is sent, because what travels is counted per
+signature and not per occurrence.
+
+**An exception your framework turned into a 5xx.** Express hands a thrown or rejected handler to `next(err)`
+and, if nobody answers, to `finalhandler`; nothing on that path publishes anything a library outside Express
+can listen to, so without this line a 500 arrives as a status class with no type, message or stack. One line,
+after your routes and **before** your own error handler, because yours is likely to answer rather than call
+`next`:
+
+```js
+import { expressErrorHandler } from "@downtrace/agent";
+
+app.use(expressErrorHandler());
+app.use((err, req, res, next) => { /* … yours … */ });
+```
+
+It records the error and calls `next(err)` with the same error, always, so your response is the one you would
+have given anyway. It costs nothing per request: it runs only when an error is already travelling. An error
+that declares itself a client's fault (`status` or `statusCode` between 400 and 499) is passed on and not
+recorded; if you want one of those recorded, `captureException` is the call.
+
+Express 4 and 5. Fastify, Koa, Nest and Hono do not have one yet.
+
+Both calls obey `DOWNTRACE_MINIMAL=1`: the message and the whole context stay on your server, and the error
+still groups by its hash. That switch, and not the exclusions, is the one that withholds text.
+
+**And the exclusions.** An endpoint you excluded with `DOWNTRACE_EXCLUDE_ENDPOINTS` is not observed at all,
+and that covers these two calls too — as long as some observer is on, which is the default. The exception is
+`DOWNTRACE_INSTRUMENT=none`: told to observe nothing, the instrumentation opens no context per request, so a
+report made inside one has **no route to be attributed to**. It then travels as something the process saw,
+with no route, and an endpoint exclusion has no endpoint to match it against. Nothing about the excluded route
+travels — not its template, not its counts — but the error's own text does. If that matters to you, either
+leave an observer on, or use `DOWNTRACE_MINIMAL=1`, which is the switch for text.
 
 ## Exceptions that kill the process
 
@@ -107,6 +185,74 @@ What is reported is the type, the sanitised message and the stack signature, cou
 through `beforeExit`, and there is no synchronous channel to send it on. It arrives when your application
 survives what it threw — because it has its own `uncaughtException` handler, or because the rejection did
 not kill it — which is the common case for the ones you can still do something about.
+
+## Beside your error tracker
+
+You probably already have one installed, and you are not going to remove it the day you install this. Both
+can run in the same process. Verified against `@sentry/node` **10.75.0**, with an ESM application on Express
+5, `pg` and `ioredis`, loading each one the way its own documentation asks for:
+
+```sh
+node --import @downtrace/agent/register --import ./instrument.mjs server.js
+```
+
+**Load this one first.** Both orders work and neither breaks the other; the difference is what the tracker
+loses. This instrumentation resolves `pg` from your application's root and patches it when it starts, with
+no loader hooks (that is what lets it work without you importing anything). A tracker built on
+OpenTelemetry patches `pg` the other way, by hooking module loading — so whichever order you pick, the
+module cache is warm before one of them expects it to be:
+
+| order | what this instrumentation sees | what the tracker sees |
+| --- | --- | --- |
+| Downtrace, then the tracker | everything | everything but its `pg-pool.connect` span |
+| the tracker, then Downtrace | everything | **every `pg` query span twice** |
+
+Duplicated spans are worse than a missing one, so put `@downtrace/agent/register` first. Tracked as gh-614;
+when it is fixed, either order will be exact and this table goes.
+
+**The table was measured with an ESM application** — the one place the two designs meet is your own
+`import "pg"`, and in a CommonJS application that is a `require` sharing one cache with ours, so the split
+between what survives and what does not may differ. Not verified. If your application is CommonJS and you
+care about your tracker's `pg` spans while both are installed, check them.
+
+Everything else composes cleanly, in both orders, and there is a test that compares exact counts —
+requests, calls per request, errors — against each one running alone:
+
+- **What this instrumentation reports does not change**: same requests per route, same queries, Redis
+  operations and outgoing calls per request, same errors, whether the tracker is there or not.
+- **Its own cost does not change either**: no internal errors, and the meter never has to give anything up.
+  The hook time it reports is sampled inside its own hooks, so your tracker's work is never counted as ours.
+- **Your tracker's ingestion is not reported as one of your dependencies.** It sends outside the request
+  that produced what it is sending, so there is no request to charge it to.
+
+### Two `captureException`s while the migration lasts
+
+`captureException` here takes the tracker's shape on purpose, so finishing the migration is deleting an
+import. While both are installed, call both — same error, same context:
+
+```js
+import { captureException } from "@downtrace/agent";
+import * as Sentry from "@sentry/node";
+
+try {
+  await provider.authorize(order);
+} catch (err) {
+  const context = { stage: "authorize", retryable: true };
+  captureException(err, context);
+  Sentry.captureException(err, { extra: context });
+  return fallback(order);
+}
+```
+
+Same for the framework's 5xx: register both error handlers, in either order. Both record and then call
+`next(err)`, so both see it and neither answers — your own handler still decides the response.
+
+### And when the process dies
+
+A tracker's uncaught-exception integration usually **handles** the exception and then ends the process
+itself. This one never does that (see above), so with both installed how your process ends is your
+tracker's business: its exit code, its rendering of the crash. What is checked is that adding this
+instrumentation changes neither, on either side of the tracker.
 
 ## If your application calls `process.exit()`
 

@@ -98,6 +98,21 @@ describe("the handshake", () => {
     for (const must of ["read_report", "verify_recovery", "request_capture", "close_finding", "annotate_finding"]) {
       expect(names).toContain(must);
     }
+    // Every journey a team uses a tracker for is one a coding agent can walk, triage included (ERR-03).
+    for (const must of [
+      "list_errors",
+      "read_error",
+      "resolve_error",
+      "ignore_error",
+      "unignore_error",
+      "annotate_error",
+    ]) {
+      expect(names).toContain(must);
+    }
+    // And every tool the source declares is listed, enumerated from `tools.ts` rather than from the list
+    // above: a hand-written list only checks what somebody remembered to put in it, and one of these was
+    // missing from it until somebody read it (repo rule).
+    expect([...names].sort()).toEqual(tools.map((t) => t.name).sort());
   });
 });
 
@@ -367,6 +382,105 @@ describe("errors", () => {
     expect(calls.length).toBe(0);
   });
 
+  /**
+   * ERR-03 through the agent tools, which is the surface invariant 13 puts beside the page and the API. What
+   * this server can get wrong is which route each tool is, what it sends and what it carries: the rule about
+   * which transition is allowed lives in the cloud and is checked there.
+   */
+  it("triages one through the four routes the API registered", async () => {
+    const { s, calls } = server([{}, {}, {}, {}]);
+    const until = "2026-10-01T00:00:00Z";
+    await s.handle("tools/call", {
+      name: "resolve_error",
+      arguments: { project: "tienda", error: "abc123", why: "the column is wider since 2.4.0" },
+    });
+    await s.handle("tools/call", {
+      name: "ignore_error",
+      arguments: { project: "tienda", error: "abc123", until, why: "the provider is migrating" },
+    });
+    await s.handle("tools/call", {
+      name: "unignore_error",
+      arguments: { project: "tienda", error: "abc123", why: "the migration is over" },
+    });
+    await s.handle("tools/call", {
+      name: "annotate_error",
+      arguments: { project: "tienda", error: "abc123", note: "only with the legacy checkout" },
+    });
+
+    const paths = calls.map((c) => c.url);
+    expect(paths).toEqual([
+      "https://cloud.test/api/p/tienda/errors/abc123/resolve",
+      "https://cloud.test/api/p/tienda/errors/abc123/ignore",
+      "https://cloud.test/api/p/tienda/errors/abc123/unignore",
+      "https://cloud.test/api/p/tienda/errors/abc123/annotations",
+    ]);
+    // The identifier addresses the resource and never travels in the body, as a finding's does not.
+    expect(only(calls, 0).body).toEqual({ why: "the column is wider since 2.4.0" });
+    expect(only(calls, 1).body).toEqual({ until, why: "the provider is migrating" });
+    expect(only(calls, 3).body).toEqual({ note: "only with the legacy checkout" });
+  });
+
+  /**
+   * Every operation carries a key, and none of the four carries a version: an error has no report to have
+   * been read, which is the same reason a silence declares none (RES-01, ADR 0074).
+   */
+  it("keys every triage operation and versions none of them", async () => {
+    const { s, calls } = server([{}, {}, {}, {}]);
+    for (const [name, extra] of [
+      ["resolve_error", {}],
+      ["ignore_error", { until: "2026-10-01T00:00:00Z" }],
+      ["unignore_error", {}],
+      ["annotate_error", { note: "x" }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      await s.handle("tools/call", {
+        name,
+        arguments: { project: "tienda", error: "abc123", why: "x", version: "abc", ...extra },
+      });
+    }
+    for (const call of calls) {
+      expect(call.headers["idempotency-key"]).toBe("key-1");
+      expect(call.headers["if-match"]).toBeUndefined();
+    }
+    // And from the source rather than from a copy of it here.
+    for (const name of ["resolve_error", "ignore_error", "unignore_error", "annotate_error"]) {
+      const tool = tools.find((t) => t.name === name);
+      expect(tool?.operates).toBe(true);
+      expect(tool?.versioned).toBeUndefined();
+    }
+  });
+
+  it("asks for the state filter in the query string, where the API reads it", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "list_errors",
+      arguments: { project: "tienda", state: "all" },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/errors?state=all");
+  });
+
+  it("asks for the order of the endpoints in the query string, where the API reads it", async () => {
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", {
+      name: "project_status",
+      arguments: { project: "tienda", sort: "p99", order: "asc" },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/status?sort=p99&order=asc");
+    // Neither is required: asking for nothing is the order the page shows by default.
+    await s.handle("tools/call", { name: "project_status", arguments: { project: "tienda" } });
+    expect(only(calls, 1).url).toBe("https://cloud.test/api/p/tienda/status");
+  });
+
+  it("says which argument a triage operation is missing instead of calling the cloud without it", async () => {
+    const { s, calls } = server();
+    const out = (await s.handle("tools/call", {
+      name: "ignore_error",
+      arguments: { project: "tienda", error: "abc123" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(out.isError).toBe(true);
+    expect(said(out)).toBe("missing required argument(s): until");
+    expect(calls.length).toBe(0);
+  });
+
   it("reads without a token: neither of the two operates", async () => {
     const readOnly = createServer({
       config: { url: "https://cloud.test", token: "" },
@@ -384,5 +498,20 @@ describe("errors", () => {
     for (const name of ["list_errors", "read_error"]) {
       expect(tools.find((t) => t.name === name)?.operates).toBeUndefined();
     }
+  });
+
+  it("says what a triage operation needs when there is no credential", async () => {
+    const readOnly = createServer({
+      config: { url: "https://cloud.test", token: "" },
+      version: "0.0.0",
+      fetchImpl: (async () => new Response("{}")) as unknown as typeof fetch,
+    });
+    const out = (await readOnly.handle("tools/call", {
+      name: "resolve_error",
+      arguments: { project: "tienda", error: "abc123", why: "x" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("DOWNTRACE_TOKEN");
+    expect(said(out)).toContain("operate");
   });
 });

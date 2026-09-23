@@ -34,6 +34,8 @@ function sender(responses: Array<number | Error>, maxQueued = 6) {
     log: quiet,
     fetchImpl,
     maxQueued,
+    // A clock that does not move: nothing here waits on a Retry-After.
+    now: () => 1_000_000,
   });
   return { s, bodies };
 }

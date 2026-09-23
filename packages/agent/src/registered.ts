@@ -22,6 +22,19 @@ export function remember(agent: Agent): void {
 }
 
 /**
+ * The running instrumentation, or undefined when there is none.
+ *
+ * The second reader of this variable, and its argument is `shutdown`'s: `captureException` is called from the
+ * application's own code, which was loaded after `--import` had already built the agent, so there is no call
+ * chain along which it could have been handed one. Undefined is an ordinary answer — an unconfigured process,
+ * one that has already shut down, a test that started no agent — and every caller has to do nothing with it
+ * rather than fail.
+ */
+export function registered(): Agent | undefined {
+  return running;
+}
+
+/**
  * Hands over everything the instrumentation is holding, for an application that is about to exit.
  *
  * `process.exit()` does not wait for a promise in flight and does not fire `beforeExit`, so an application

@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { performance } from "node:perf_hooks";
+import { expressErrorHandler } from "@downtrace/agent";
 import express from "express";
 import { Cache } from "./cache.ts";
 import { checkout } from "./checkout.ts";
@@ -11,8 +12,15 @@ import { FakeProvider } from "./provider.ts";
 import { ProviderClient } from "./provider-client.ts";
 import { Regressions } from "./regressions.ts";
 import { countError, newCounters, Stats } from "./stats.ts";
+import type { Tracker } from "./tracker.ts";
 
-export type ReferenceAppOptions = Partial<AppConfig>;
+export interface ReferenceAppOptions extends Partial<AppConfig> {
+  /**
+   * The error tracker this process also runs, when it runs one (ESC-16). `main.ts` loads it; absent is the
+   * normal case, and then nothing here knows a tracker exists.
+   */
+  tracker?: Tracker;
+}
 
 export interface ReferenceApp {
   app: express.Express;
@@ -27,7 +35,8 @@ export interface ReferenceApp {
   stop(): Promise<void>;
 }
 
-export function createReferenceApp(overrides: ReferenceAppOptions = {}): ReferenceApp {
+export function createReferenceApp(options: ReferenceAppOptions = {}): ReferenceApp {
+  const { tracker, ...overrides } = options;
   const config: AppConfig = { ...configFromEnv(), ...overrides };
   const regressions = Regressions.fromEnv(config.regressions);
   const stats = new Stats();
@@ -40,7 +49,7 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
   const provider = new FakeProvider((manual) =>
     regressions.isEnabled("slow_dependency") ? regressions.params("slow_dependency").delayMs : manual,
   );
-  const providerClient = new ProviderClient(() => provider.url, regressions);
+  const providerClient = new ProviderClient({ baseUrl: () => provider.url, regressions, tracker });
 
   const app = express();
   app.disable("x-powered-by");
@@ -174,6 +183,17 @@ export function createReferenceApp(overrides: ReferenceAppOptions = {}): Referen
   app.use((_req, _res, next) => {
     next(new NotFoundError("route not found"));
   });
+
+  // The one line the «no code» default needs for the exceptions a framework turns into a 5xx (ERR-02).
+  // Before the application's own handler, because that one answers and does not call `next`; it records and
+  // passes the error on, so the response below is exactly the one this app gave before it was here.
+  //
+  // Beside the tracker (ESC-16), its middleware goes on whichever side `TRACKER_ERROR_HANDLER` asks for.
+  // Both of them record and call `next(err)`, so both see the error either way round and neither answers:
+  // what decides the response is still the application's own handler, below.
+  if (tracker && config.trackerErrorHandler === "before") tracker.setupErrorHandler(app);
+  app.use(expressErrorHandler());
+  if (tracker && config.trackerErrorHandler === "after") tracker.setupErrorHandler(app);
 
   app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const name = err instanceof Error ? err.name : "UnknownError";

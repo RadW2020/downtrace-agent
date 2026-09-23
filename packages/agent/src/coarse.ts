@@ -91,11 +91,16 @@ export interface CoarseSnapshot {
   coverage: CoarseCoverage;
 }
 
-/** Options, all with defaults, so the common case constructs with none. */
+/** Options. The clock is the one without a default; the sizes have theirs. */
 export interface CoarseOptions {
+  /**
+   * The agent's clock (`AgentDeps.now`), so a second here is the same second as a request's instant in the fine
+   * register. Required: a default is how this read the wall clock on every request while nothing noticed
+   * (gh-610, ADR 0126).
+   */
+  now: () => number;
   seconds?: number;
   maxRoutes?: number;
-  now?: () => number;
 }
 
 /**
@@ -116,10 +121,10 @@ export class CoarseRegister {
   private readonly loopDelay: Float64Array;
   private readonly loopStamps: Float64Array;
 
-  constructor(options: CoarseOptions = {}) {
+  constructor(options: CoarseOptions) {
     this.seconds = options.seconds ?? DEFAULT_SECONDS;
     this.maxRoutes = options.maxRoutes ?? DEFAULT_ROUTES;
-    this.now = options.now ?? Date.now;
+    this.now = options.now;
     this.loopDelay = new Float64Array(this.seconds);
     this.loopStamps = new Float64Array(this.seconds).fill(Number.NaN);
   }

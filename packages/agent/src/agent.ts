@@ -14,12 +14,20 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { Captures, type LiveCapture, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
-import { type DependencyWork, enterRequest, poolWaitOf, type RequestContext } from "./context.ts";
+import {
+  currentContext,
+  type DependencyWork,
+  enterRequest,
+  type OperationKind,
+  poolWaitOf,
+  type RequestContext,
+  recordOperationIn,
+} from "./context.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
 import { FineRegister } from "./fine.ts";
-import { FingerprintCache } from "./fingerprint.ts";
+import { type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { instrumentPg } from "./instrument/pg.ts";
@@ -30,6 +38,7 @@ import { OverheadMeter, Sheddable, type SheddableLevel, ThrottleReasons } from "
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
+import { sanitizeContext } from "./report.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
@@ -129,6 +138,21 @@ interface FinishMessage {
 }
 
 /**
+ * An error somebody handed the instrumentation rather than one it observed (ERR-02).
+ *
+ * A parameter object, because the three are not interchangeable and two of them are `unknown`: positional
+ * arguments here would be a call nobody can read at the call site.
+ */
+export interface ReportedError {
+  /** Whatever was thrown. `unknown` until `errorFingerprint` decides what can be said about it. */
+  error: unknown;
+  /** Whatever the application passed as a context, validated and sanitised before anything is done with it. */
+  context?: unknown;
+  /** `explicit` when the application reported it, `framework` when its error path did. */
+  kind: Extract<OperationKind, "framework" | "explicit">;
+}
+
+/**
  * The Downtrace Node agent, v0: observes finished HTTP requests through
  * diagnostics_channel, aggregates them per route and interval, and ships
  * batches asynchronously. Nothing here runs synchronously against the cloud,
@@ -162,11 +186,11 @@ export class Agent {
   private readonly runtime: RuntimeSampler;
   /** What the instrumentation costs, measured while it runs, and what it gives up when it costs too much. */
   private readonly overhead: OverheadMeter;
-  /** All three exist only when Postgres is instrumented: without it there is nothing to fingerprint. */
+  /** Only when Postgres is instrumented: without it no query text is ever looked at. */
   private readonly fingerprints: FingerprintCache | undefined;
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
-  private readonly errors: ErrorFingerprintCache | undefined;
-  private readonly profile: ProfileAggregator | undefined;
+  private readonly errors: ErrorFingerprintCache;
+  private readonly profile: ProfileAggregator;
   /** The captures the cloud has asked this process for. Empty until one arrives (gh-379). */
   private readonly captures = new Captures();
   /** What the process threw outside any request (`product.md:77`, ADR 0103). */
@@ -178,13 +202,11 @@ export class Agent {
    */
   private readonly onThrown = (err: unknown, origin: string): void =>
     this.guard(() =>
-      this.exceptions.record(
-        origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT,
-        err,
+      this.exceptions.record(origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT, err, {
         // In minimal mode the signature keeps its identity and loses its words: the hash is a digest and
         // says nothing, and the text is the user's (ADR 0105).
-        this.config.minimal ? (e) => ({ ...errorFingerprint(e), text: "" }) : undefined,
-      ),
+        sign: this.signature(),
+      }),
     );
   /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
   private readonly excludedEndpoints: Excluded;
@@ -237,26 +259,35 @@ export class Agent {
       version: config.minimal ? withheldName(config.version) : config.version,
       environment: config.environment,
     };
-    this.recorder = deps.recorder ?? new IntervalAggregator();
+    // Every component that keeps a clock is handed this one, and none has a default of its own. Each used to fall
+    // back to `Date.now` and this constructor passed a clock to none of them, so the interval, the profile, the
+    // coarse register and the sender read the wall clock while ADR 0131 said nothing did (gh-610).
+    this.recorder = deps.recorder ?? new IntervalAggregator({ now: this.now });
     // The coarse half of the black box. Always on: `product.md` says the instrumentation **maintains** it, and
-    // it is cheap enough to — five additions per request into a preallocated row. Nothing leaves the process
-    // with it until captures exist.
-    this.coarse = deps.coarse ?? new CoarseRegister();
+    // it is cheap enough to — five additions per request into a preallocated row. Nothing sends it yet: a
+    // capture carries the fine register, not this one.
+    this.coarse = deps.coarse ?? new CoarseRegister({ now: this.now });
     this.fine = deps.fine ?? new FineRegister();
     this.reference = deps.reference ?? new ReferenceRegister();
     this.prearm = deps.prearm ?? new PrearmRegister();
     this.runtime = deps.runtime ?? new RuntimeSampler();
     this.overhead = deps.overhead ?? new OverheadMeter({ floor: config.shed });
-    if (config.instrument.has("pg")) {
-      this.fingerprints = new FingerprintCache();
-      this.errors = new ErrorFingerprintCache();
-      // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
-      // «send my routes but not my queries» is a real thing to want — and this turns it off as well.
-      this.profile = new ProfileAggregator({
-        sendText: config.queryText && !config.minimal,
-        windowMs: config.profileMs,
-      });
-    }
+    // The fingerprint cache of queries exists only with Postgres instrumented: without it no query text is
+    // ever looked at. The **errors** and the profile exist always, since ERR-02: an application can report an
+    // error it handled whatever else is being observed, and a profile that nothing writes into is an empty
+    // map that rotates to null. Before this, a process with `DOWNTRACE_INSTRUMENT=http` had nowhere to put a
+    // reported error, and the cost of always having them is two empty maps and no work on the hot path.
+    if (config.instrument.has("pg")) this.fingerprints = new FingerprintCache();
+    this.errors = new ErrorFingerprintCache();
+    // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
+    // «send my routes but not my queries» is a real thing to want — and this turns it off as well. The
+    // context of a reported error is not a query, so only the minimal mode withholds it (ADR 0105).
+    this.profile = new ProfileAggregator({
+      now: this.now,
+      sendText: config.queryText && !config.minimal,
+      sendContext: !config.minimal,
+      windowMs: config.profileMs,
+    });
     this.sender =
       deps.sender ??
       new Sender({
@@ -267,6 +298,7 @@ export class Agent {
         deploy,
         log: this.log,
         fetchImpl: deps.fetchImpl,
+        now: this.now,
         // What the sender cannot know about itself: the memory the registers hold, what the hooks cost,
         // and what has been given up to stay inside the budget (gh-243).
         resources: () => this.ownResources(),
@@ -299,6 +331,60 @@ export class Agent {
       rejected: this.sender.rejected,
       pending: this.sender.pending,
     };
+  }
+
+  /**
+   * Records an error somebody handed over: the application itself (`captureException`) or the framework's
+   * error path (`expressErrorHandler`). ERR-02.
+   *
+   * It goes through `guard` like every hook, which is what makes it safe: a bug here is counted as an
+   * internal error of the instrumentation and never reaches the application, which is invariant 2 in the one
+   * place where the application is the caller. And the error's identity is the one everything else uses, from
+   * the same bounded cache: the same throw seen twice is one signature.
+   *
+   * Where it lands is decided by whether a request is being served. Inside one it is an operation of the
+   * profile, under the route it happened on, so the error carries its `where`; outside one it is what the
+   * process saw, with no route — the same split ADR 0102 made, for the same reason.
+   */
+  report(reported: ReportedError): void {
+    // An instrumentation that was never started, has stopped, or disabled itself after its tenth internal
+    // error records nothing. Checked before the guard so that a report to a dead agent costs one comparison.
+    if (!this.started) return;
+    this.guard(() => {
+      const sanitised = this.config.minimal ? undefined : sanitizeContext(reported.context);
+      const fingerprint = this.signatureOf(reported.error);
+      const ctx = currentContext();
+      if (!ctx) {
+        this.exceptions.record(reported.kind, reported.error, { sign: this.signature(), context: sanitised });
+        return;
+      }
+      const at = performance.now();
+      recordOperationIn(ctx, {
+        kind: reported.kind,
+        fingerprint,
+        // An instant and not a duration: nothing was measured, because the application had already handled
+        // this by the time it said so. The black box keeps the point in the request where it was reported,
+        // which is what an order of events is for (ATR-01).
+        startedAt: at,
+        endedAt: at,
+        failed: true,
+        context: sanitised,
+      });
+    });
+  }
+
+  /**
+   * How a signature is computed here: the text as it is, or the identity with its words removed in minimal
+   * mode. One place, because a second copy of this decision is a second answer to «what leaves the server».
+   */
+  private signature(): (e: unknown) => Fingerprint {
+    return this.config.minimal ? (e) => ({ ...errorFingerprint(e), text: "" }) : errorFingerprint;
+  }
+
+  /** The same, through the cache, so a throw that repeats is signed once (gh-368). */
+  private signatureOf(err: unknown): Fingerprint {
+    const signed = this.errors.get(err);
+    return this.config.minimal ? { ...signed, text: "" } : signed;
   }
 
   start(): void {
@@ -397,7 +483,7 @@ export class Agent {
   private async flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
     try {
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
-      const profile = leaving ? this.profile?.drain() : this.profile?.rotate();
+      const profile = leaving ? this.profile.drain() : this.profile.rotate();
       if (profile) this.sender.enqueueProfile(profile);
       // What the cloud asked for and this process really started, said once (ADR 0098).
       this.sender.enqueueCaptures(this.captures.toReport());
@@ -681,7 +767,7 @@ export class Agent {
       );
     }
     if (ctx?.operations && this.overhead.keeping(Sheddable.Profile)) {
-      this.profile?.record(method, named, ctx.operations.values());
+      this.profile.record(method, named, ctx.operations.values());
     }
     this.recorded += 1;
     // Closed here and not in the hook wrapper: what invariant 3 bounds is the cost **per request**, and this

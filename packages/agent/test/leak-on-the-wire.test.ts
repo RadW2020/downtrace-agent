@@ -77,6 +77,7 @@ describe("what actually leaves, in the bytes", () => {
         body = String(init.body);
         return new Response(null, { status: 202 });
       }) as unknown as typeof fetch,
+      now: () => 1_000_000,
     });
     // A batch needs an interval: the profile rides with one, it is not a batch on its own.
     sender.enqueue({ start: Date.now() - 10_000, durationMs: 10_000, endpoints: [] });

@@ -138,6 +138,7 @@ describe("what the sender does with a destination and no cloud", () => {
         return new Response(null, { status: 202 });
       }) as unknown as typeof fetch,
       inspector: createInspector(path, quiet),
+      now: () => 1_000_000,
     });
     sender.enqueue(interval(1));
     expect(await sender.flush()).toBe(true);
@@ -167,6 +168,7 @@ describe("what the sender does with a destination and no cloud", () => {
         return new Response(null, { status: 202 });
       }) as unknown as typeof fetch,
       inspector: createInspector(path, quiet),
+      now: () => 1_000_000,
     });
     sender.enqueue(interval(1));
     await sender.flush();

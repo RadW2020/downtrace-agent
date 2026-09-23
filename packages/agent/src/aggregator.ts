@@ -51,6 +51,16 @@ export interface Recorder {
 
 export const DEFAULT_MAX_ROUTES = 500;
 
+export interface IntervalOptions {
+  /**
+   * The agent's clock, which every instant it produces comes from (`AgentDeps.now`). Required, with no default:
+   * a default is how this read the wall clock in production while the agent's clock was somewhere else, with
+   * every unit test green (gh-610, ADR 0126).
+   */
+  now: () => number;
+  maxRoutes?: number | undefined;
+}
+
 /**
  * Aggregates finished requests for the current interval. Memory is bounded:
  * at most `maxRoutes` distinct routes per interval, the rest fold into (other).
@@ -62,10 +72,10 @@ export class IntervalAggregator implements Recorder {
   private readonly maxRoutes: number;
   private readonly now: () => number;
 
-  constructor(maxRoutes = DEFAULT_MAX_ROUTES, now: () => number = Date.now) {
-    this.maxRoutes = maxRoutes;
-    this.now = now;
-    this.start = now();
+  constructor(options: IntervalOptions) {
+    this.maxRoutes = options.maxRoutes ?? DEFAULT_MAX_ROUTES;
+    this.now = options.now;
+    this.start = this.now();
   }
 
   get size(): number {
@@ -189,6 +199,8 @@ export class IntervalAggregator implements Recorder {
         ...(dependencies ? { dependencies } : {}),
       });
     }
+    // Rounded here, where the interval becomes what the batch carries, and not in `start`: the contract's
+    // instants are integers and the agent's clock is not (ADR 0145).
     return { start: Math.floor(start), durationMs: Math.max(1, Math.round(now - start)), endpoints: out };
   }
 }

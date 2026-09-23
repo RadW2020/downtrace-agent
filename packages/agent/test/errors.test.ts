@@ -14,12 +14,15 @@ describe("the message", () => {
    * ended up in an error message in a real application (invariant 5).
    */
   it("keeps nothing that looks like a value", () => {
+    // Assembled at run time and never written whole: whole, it is shaped like a Stripe key, which the public
+    // mirror of packages/ must not carry (invariant 10, gh-644, ADR 0155). The message is the very same string.
+    const stripeShaped = ["sk", "live", "A1b2C3d4E5f6G7h8"].join("_");
     const cases: Array<[string, string[]]> = [
       ["user 4821 not found", ["4821"]],
       ["could not send to ana.perez@cliente.com", ["ana.perez", "cliente.com"]],
       ["order 5b6d1f0e-2c3a-4d5e-8f90-1a2b3c4d5e6f is already paid", ["5b6d1f0e"]],
       [`duplicate key value violates unique constraint "orders_email_key"`, ["orders_email_key"]],
-      ["token sk_live_A1b2C3d4E5f6G7h8 rejected", ["sk_live_A1b2C3d4E5f6G7h8"]],
+      [`token ${stripeShaped} rejected`, [stripeShaped]],
       ["connect ECONNREFUSED 10.0.3.14:5432", ["10.0", "5432"]],
     ];
     for (const [message, forbidden] of cases) {

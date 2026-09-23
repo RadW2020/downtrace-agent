@@ -5,6 +5,9 @@ import { OTHER_ROUTE } from "../src/routes.ts";
 
 const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
 
+/** A clock that does not move: these are about what is counted, not about when. */
+const still = () => 1_000;
+
 /** Narrows an optional value in tests, failing loudly instead of asserting with `!`. */
 function must<T>(value: T | undefined | null, what: string): T {
   if (value === undefined || value === null) throw new Error(`missing ${what}`);
@@ -14,7 +17,7 @@ function must<T>(value: T | undefined | null, what: string): T {
 describe("IntervalAggregator", () => {
   it("counts requests, status classes, errors and latency per route", () => {
     let t = 1_000;
-    const agg = new IntervalAggregator(500, () => t);
+    const agg = new IntervalAggregator({ maxRoutes: 500, now: () => t });
     agg.record("GET", "/products", 200, 3.2);
     agg.record("GET", "/products", 200, 4.8);
     agg.record("GET", "/products", 404, 1.1);
@@ -40,8 +43,21 @@ describe("IntervalAggregator", () => {
     expect(checkout?.latency.counts[19]).toBe(1); // 350 ms → (300, 400]
   });
 
+  // gh-610. The agent hands this its own clock now, which has decimals (ADR 0131), and the contract's `start`
+  // and `durationMs` do not. This was always rounded where the interval is built, which is why wiring the clock
+  // changes nothing in what it sends — and why it is worth a line that says so.
+  it("reports its interval in integer milliseconds under a clock with decimals, the start rounded down", () => {
+    let t = 1_789_735_799_454.903;
+    const agg = new IntervalAggregator({ now: () => t });
+    agg.record("GET", "/a", 200, 1);
+    t += 10_000.4;
+    const interval = must(agg.rotate(), "interval");
+    expect(interval.start).toBe(1_789_735_799_454);
+    expect(interval.durationMs).toBe(10_000);
+  });
+
   it("returns null and resets when nothing was recorded", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: still });
     expect(agg.rotate()).toBeNull();
     agg.record("GET", "/a", 200, 1);
     expect(agg.rotate()?.endpoints).toHaveLength(1);
@@ -49,7 +65,7 @@ describe("IntervalAggregator", () => {
   });
 
   it("caps distinct routes per interval and folds the rest into (other)", () => {
-    const agg = new IntervalAggregator(500);
+    const agg = new IntervalAggregator({ maxRoutes: 500, now: still });
     for (let i = 0; i < 600; i++) agg.record("GET", `/scan/${i}`, 404, 0.5);
     const interval = agg.rotate();
     expect(interval?.endpoints).toHaveLength(501);
@@ -63,7 +79,7 @@ describe("IntervalAggregator", () => {
   // than 50 ms — is a measurement, so it moved to `aggregator.measure.test.ts` whole and with its number
   // (ADR 0114, gh-562). Splitting the file costs one file and loses no check.
   it("counts ten thousand events into the endpoints they belong to", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: still });
     const routes = ["/a", "/b/:id", "/c", "/d", "/e"];
     for (let i = 0; i < 10_000; i++) agg.record("GET", routes[i % 5] ?? "/a", 200 + (i % 3) * 100, (i % 500) / 3);
     const interval = must(agg.rotate(), "interval");
@@ -82,7 +98,7 @@ function work(calls: number, ms: number, maxMs = ms, kind: "postgres" | "redis" 
 
 describe("dependencies", () => {
   it("bins each request by how many calls it made, and sums their time", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: still });
     agg.record("POST", "/checkout", 201, 5, work(12, 20, 9));
     agg.record("POST", "/checkout", 201, 6, work(14, 22, 11));
     agg.record("POST", "/checkout", 201, 4, work(2, 3, 2));
@@ -99,7 +115,7 @@ describe("dependencies", () => {
   });
 
   it("keeps one entry per kind and target, so many hosts do not collapse into one", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: still });
     const mixed = new Map([
       ["postgres", { kind: "postgres" as const, target: "", calls: 3, ms: 9, maxMs: 4, errors: 0, waitMs: 12 }],
       [
@@ -132,15 +148,15 @@ describe("dependencies", () => {
   });
 
   it("omits the field entirely for endpoints where no call was observed", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: still });
     agg.record("GET", "/healthz", 200, 1);
     const interval = must(agg.rotate(), "interval");
     expect(interval.endpoints[0]?.dependencies).toBeUndefined();
   });
 
   it("an N+1 moves the histogram to a higher bucket", () => {
-    const normal = new IntervalAggregator();
-    const broken = new IntervalAggregator();
+    const normal = new IntervalAggregator({ now: still });
+    const broken = new IntervalAggregator({ now: still });
     for (let i = 0; i < 10; i++) {
       normal.record("GET", "/products", 200, 5, work(2, 4, 3));
       broken.record("GET", "/products", 200, 40, work(53, 80, 4));

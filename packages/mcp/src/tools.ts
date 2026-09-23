@@ -27,6 +27,10 @@ export interface Tool {
 
 const project = { type: "string", description: "The project's slug." } as const;
 const finding = { type: "string", description: "The finding's numeric id." } as const;
+const error = {
+  type: "string",
+  description: "The error's identifier, as `list_errors` gives it.",
+} as const;
 const why = {
   type: "string",
   description:
@@ -39,10 +43,31 @@ export const tools: Tool[] = [
     name: "project_status",
     description:
       "What a project looks like right now: traffic, endpoints, dependencies, runtime health, coverage " +
-      "and the data budget with its consumption.",
-    inputSchema: { type: "object", properties: { project }, required: ["project"] },
+      "and the data budget with its consumption. The endpoints come in the order you ask for, and the " +
+      "answer says which order it applied under `endpointsSort`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        sort: {
+          type: "string",
+          description:
+            "What to order the endpoints by: `environment`, `endpoint`, `requests` (the default), `errors` " +
+            "(the share of requests that returned 5xx), `p50`, `p95`, `p99` or `max`. By the measurement, " +
+            "not by the text it is printed as, and a route with no requests is last on every measurement.",
+        },
+        order: {
+          type: "string",
+          description:
+            "`desc` or `asc`. By default the worst first for a measurement and alphabetical for a name, " +
+            "which is what the page does on the first click.",
+        },
+      },
+      required: ["project"],
+    },
     method: "GET",
     path: "/api/p/{slug}/status",
+    query: ["sort", "order"],
   },
   {
     name: "list_findings",
@@ -114,36 +139,110 @@ export const tools: Tool[] = [
     name: "list_errors",
     description:
       "Every error this project has observed, from the first one: its identity, how many times, when it " +
-      "was first and last seen, and in which environments, versions and routes. No traffic minimum and no " +
-      "detector involved — an error is an observed fact, a finding is a detected difference, and the " +
-      "absence of a finding about an error says nothing either way.",
+      "was first and last seen, and in which environments, versions and routes. `kind` says how the " +
+      "instrumentation came to see it — an instrumented operation failed, the framework turned it into a " +
+      "5xx, the application reported it itself, or the process threw it outside any request. No traffic " +
+      "minimum and no detector involved — an error is an observed fact, a finding is a detected " +
+      "difference, and the absence of a finding about an error says nothing either way.",
     inputSchema: {
       type: "object",
       properties: {
         project,
         limit: { type: "number", description: "How many to return, 1 to 200. Fifty by default." },
+        state: {
+          type: "string",
+          description:
+            "Which triage states to list: `waiting` (the default — open and reappeared, the ones waiting " +
+            "for somebody), `open`, `resolved`, `ignored`, `reappeared` or `all`. Whatever you ask for, the " +
+            "answer says which filter it applied and how many errors it is not showing.",
+        },
       },
       required: ["project"],
     },
     method: "GET",
     path: "/api/p/{slug}/errors",
-    query: ["limit"],
+    query: ["limit", "state"],
   },
   {
     name: "read_error",
     description:
       "One error and where it was seen: every environment, deployed version and route it happened on, each " +
-      "with its own count and its own first and last sighting.",
+      "with its own count and its own first and last sighting. When the application reported the error " +
+      "itself it also carries, under `fromService`, the structural context it attached — bounded and " +
+      "sanitised by the sender, and the one it sent with the first occurrence of that signature. It also " +
+      "carries its triage: the state it is in, who left it there and why, and the whole history, including " +
+      "any reappearance with the version it was resolved in and the one it came back in.",
     inputSchema: {
       type: "object",
-      properties: {
-        project,
-        error: { type: "string", description: "The error's identifier, as `list_errors` gives it." },
-      },
+      properties: { project, error },
       required: ["project", "error"],
     },
     method: "GET",
     path: "/api/p/{slug}/errors/{id}",
+  },
+  {
+    name: "resolve_error",
+    description:
+      "File an error as dealt with, attributed. That is all it does: it accepts no reference, silences no " +
+      "detector and proves nothing about the code, and the occurrences go on being counted. If this error " +
+      "happens again in a deployed version the project first sees after you resolve it, it comes back on " +
+      "its own as a reappearance of the same error, naming both versions — not as a new error. Resolving " +
+      "one that is already resolved is refused, because it would overwrite who resolved it.",
+    inputSchema: {
+      type: "object",
+      properties: { project, error, why },
+      required: ["project", "error"],
+    },
+    method: "POST",
+    path: "/api/p/{slug}/errors/{id}/resolve",
+    operates: true,
+  },
+  {
+    name: "ignore_error",
+    description:
+      "Take an error out of the default list until a moment you choose, after which it comes back on its " +
+      "own. It silences no detector and no alert, and every occurrence is still counted: no news must never " +
+      "be able to mean nothing is happening. An error that is already resolved cannot be ignored.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        error,
+        until: { type: "string", description: "RFC 3339 instant, at most thirty days away. Required." },
+        why,
+      },
+      required: ["project", "error", "until"],
+    },
+    method: "POST",
+    path: "/api/p/{slug}/errors/{id}/ignore",
+    operates: true,
+  },
+  {
+    name: "unignore_error",
+    description: "Bring an ignored error back into the default list before its time is up.",
+    inputSchema: {
+      type: "object",
+      properties: { project, error, why },
+      required: ["project", "error"],
+    },
+    method: "POST",
+    path: "/api/p/{slug}/errors/{id}/unignore",
+    operates: true,
+  },
+  {
+    name: "annotate_error",
+    description:
+      "Say what you know about an error and Downtrace could not measure: 'only with the legacy checkout', " +
+      "'the provider confirms an incident'. It is kept beside the evidence and never on top of it — it " +
+      "moves no state and changes no measurement.",
+    inputSchema: {
+      type: "object",
+      properties: { project, error, note: { type: "string", description: "What you know. Required." } },
+      required: ["project", "error", "note"],
+    },
+    method: "POST",
+    path: "/api/p/{slug}/errors/{id}/annotations",
+    operates: true,
   },
   {
     name: "list_captures",

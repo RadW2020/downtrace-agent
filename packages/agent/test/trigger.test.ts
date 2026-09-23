@@ -32,6 +32,29 @@ describe("the local trigger", () => {
     expect(fired?.intervals).toBe(SUSTAINED_INTERVALS);
   });
 
+  // gh-608. `observedAt` is an integer in the contract and the agent's clock has decimals since gh-538, so
+  // a batch carrying a trigger was refused with a 400 and dropped whole (ADR 0035) — and that is the batch
+  // describing a process in trouble, which is the one worth keeping.
+  it("says when it observed it in the integer milliseconds the contract carries", () => {
+    const t = new LocalTriggers();
+    let fired: ReturnType<LocalTriggers["interval"]>;
+    for (let i = 0; i < SUSTAINED_INTERVALS; i += 1) fired = t.interval(health(THRESHOLD_MS + 50), 1_000.4165 + i);
+    expect(fired?.observedAt).toBe(1_000 + SUSTAINED_INTERVALS - 1);
+    expect(Number.isInteger(fired?.observedAt)).toBe(true);
+  });
+
+  it("still cools down under a clock with decimals", () => {
+    // What is rounded is the value that leaves; the arithmetic behind it goes on being done with the
+    // instant it was handed. Rounding the wrong one of the two is how this fix could have broken the only
+    // thing keeping a ten-minute signal from asking on every interval.
+    const t = new LocalTriggers({ cooldownMs: 30_000 });
+    let asks = 0;
+    for (let i = 0; i < 4; i += 1) {
+      if (t.interval(health(THRESHOLD_MS + 50), 1_000.75 + i * 10_000) !== undefined) asks += 1;
+    }
+    expect(asks).toBe(1);
+  });
+
   it("a good interval in between starts the count again", () => {
     const t = new LocalTriggers();
     for (let i = 0; i < SUSTAINED_INTERVALS - 1; i += 1) t.interval(health(THRESHOLD_MS + 50), 1_000 + i);

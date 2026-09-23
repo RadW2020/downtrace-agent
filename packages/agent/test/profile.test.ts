@@ -87,6 +87,54 @@ describe("ProfileAggregator", () => {
     expect(rotated?.durationMs).toBe(PROFILE_WINDOW_MS + 500);
   });
 
+  // gh-610. The agent's clock has decimals (ADR 0131) and the contract's `start` and `durationMs` are integers:
+  // a window sealed straight from it is a `400`, and a `400` drops the batch whole, with the intervals riding
+  // in it (ADR 0035). This clock used to be `Date.now`, an integer, and that was the only thing keeping the
+  // window valid.
+  it("reports its window in the integer milliseconds the contract carries, the start rounded down", () => {
+    const time = clock(1_789_735_799_454.903);
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(PROFILE_WINDOW_MS + 0.2);
+    const rotated = profile.rotate();
+    // Down, as every other instant of the batch is rounded (ADR 0145); the duration as the interval's is.
+    expect(rotated?.start).toBe(1_789_735_799_454);
+    expect(rotated?.durationMs).toBe(PROFILE_WINDOW_MS);
+    expect(validateProfileWindow(rotated), JSON.stringify(validateProfile?.errors)).toBe(true);
+  });
+
+  it("does the same when it closes because the process is leaving", () => {
+    const time = clock(1_789_735_799_454.903);
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(1_234.6);
+    const drained = profile.drain();
+    expect(drained?.start).toBe(1_789_735_799_454);
+    expect(drained?.durationMs).toBe(1_235);
+    expect(validateProfileWindow(drained), JSON.stringify(validateProfile?.errors)).toBe(true);
+  });
+
+  it("says a millisecond for a window shorter than one, under a clock with decimals too", () => {
+    // `durationMs >= 1` in the contract, and rounding is exactly how a real window becomes a zero (gh-392).
+    const time = clock(1_000.7);
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(0.2);
+    expect(profile.drain()?.durationMs).toBe(1);
+  });
+
+  // Rounded on the way out and not on the way in, as the capture's start is (ADR 0145): the window's own start
+  // keeps its fraction, or a window that began at .9 of a millisecond would close almost a millisecond early.
+  it("decides whether its window is up with the instant it really started at", () => {
+    const time = clock(1_000.9);
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("GET", "/a", [work("q1")]);
+    time.advance(PROFILE_WINDOW_MS - 0.5);
+    expect(profile.rotate(), "closed before its window was up").toBeNull();
+    time.advance(1);
+    expect(profile.rotate()).not.toBeNull();
+  });
+
   it("starts a fresh window after rotating", () => {
     const time = clock();
     const profile = new ProfileAggregator({ now: time.now });
@@ -128,6 +176,38 @@ describe("ProfileAggregator, when there is more than fits", () => {
     time.advance(PROFILE_WINDOW_MS);
     const [endpoint] = profile.rotate()?.endpoints ?? [];
     expect(endpoint?.operations.some((o) => o.hash === OTHER_OPERATION)).toBe(false);
+  });
+
+  // An error is not there to be read, it is an identity nothing else carries (ERR-01), and a reported one
+  // takes no time at all — so ordering by time alone made it the first thing merged into a bucket the
+  // protocol labels a query, on every route with more than sixty-three distinct operations (ERR-02).
+  it("keeps errors ahead of queries when it has to drop something", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    for (let i = 0; i < DEFAULT_MAX_OPERATIONS; i++) {
+      profile.record("GET", "/a", [work(`q${i}`, { totalMs: 1000 + i })]);
+    }
+    // The cheapest thing in the window, and the one that must survive.
+    profile.record("GET", "/a", [work("reported", { kind: "explicit", totalMs: 0, errors: 1 })]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+
+    expect(operations.find((o) => o.hash === "reported")?.kind).toBe("explicit");
+    expect(operations.find((o) => o.hash === OTHER_OPERATION)?.distinct).toBe(1);
+  });
+
+  it("cuts at the same place twice for the same window", () => {
+    const rotated = (): string[] => {
+      const time = clock();
+      const profile = new ProfileAggregator({ now: time.now, maxOperations: 2 });
+      // Three queries of the same cost: only the hash can order them, and it has to order them the same way
+      // every time or two windows would not be comparable.
+      for (const hash of ["q3", "q1", "q2"]) profile.record("GET", "/a", [work(hash, { totalMs: 5 })]);
+      time.advance(PROFILE_WINDOW_MS);
+      return (profile.rotate()?.endpoints[0]?.operations ?? []).map((o) => o.hash);
+    };
+    expect(rotated()).toEqual(rotated());
+    expect(rotated()).toEqual(["q1", "q2", OTHER_OPERATION]);
   });
 
   it("folds routes beyond the cap into (other), like the aggregates do", () => {

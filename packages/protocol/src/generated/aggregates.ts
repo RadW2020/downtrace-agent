@@ -12,7 +12,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0" | "0.9.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -517,9 +517,9 @@ export interface ProfileEndpoint {
  */
 export interface Operation {
   /**
-   * What kind of operation this is.
+   * What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). The last two since 0.9.0.
    */
-  kind: "query" | "error";
+  kind: "query" | "error" | "framework" | "explicit";
   /**
    * Stable identity of the operation, or `(other)` for the bucket that holds the rest.
    */
@@ -544,10 +544,17 @@ export interface Operation {
    * Only on the `(other)` bucket: how many distinct operations it merges, so a cap does not become a lie by omission.
    */
   distinct?: number;
+  context?: ReportedContext;
   /**
    * What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «only as hash and class», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344).
    */
   class?: "select" | "insert" | "update" | "delete" | "other";
+}
+/**
+ * The structural context an application attached to an error it reported (ERR-02, since 0.9.0). Flat and small on purpose: what travels is the shape of the failure, never its contents (invariant 5). Every value has been through the same sanitising as an error message before it got here, so anything that looked like a value is already a `?`, and there is nothing per user in it (IMP-01). It is the context of the **first** occurrence of the signature in this window, because what travels is counted per signature and not per occurrence. Absent is the normal case: an error nobody attached a context to carries none.
+ */
+export interface ReportedContext {
+  [k: string]: string;
 }
 /**
  * What the instrumentation has to say about a capture the cloud asked it for. The order travels in the ingest response (ADR 0071) and the answer travels here, on the same cadence and at the same cost: a path of its own would be one more call per capture, and one more thing to authenticate, for a fact that fits in the batch that is already going (gh-378).
@@ -567,9 +574,9 @@ export interface CaptureProgress {
  */
 export interface ProcessException {
   /**
-   * Which of the two. Two different failures with two different fixes: counting them together hides which one is happening.
+   * How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. Since 0.9.0, `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02).
    */
-  kind: "uncaught" | "unhandled-rejection";
+  kind: "uncaught" | "unhandled-rejection" | "framework" | "explicit";
   /**
    * Stable identity of the signature, the same shape a query's or an operation error's has (ADR 0017).
    */
@@ -582,6 +589,7 @@ export interface ProcessException {
    * How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many.
    */
   count: number;
+  context?: ReportedContext;
 }
 /**
  * One local signal, sustained past its threshold. It asks for detail; it does not claim a cause (invariant 7).

@@ -28,8 +28,12 @@ export interface SenderOptions {
   maxQueued?: number | undefined;
   timeoutMs?: number | undefined;
   fetchImpl?: typeof fetch | undefined;
-  /** Injected in tests so a wait of hours does not take hours. */
-  now?: (() => number) | undefined;
+  /**
+   * The agent's clock (`AgentDeps.now`), which a wait the cloud asks for is measured on. Required: it defaulted
+   * to `Date.now`, which the agent never overrode, so a deadline was kept on a clock nothing else here used and
+   * that a stepped wall clock moves (gh-610, ADR 0126). A test drives it so a wait of hours does not take hours.
+   */
+  now: () => number;
   /** Writes every batch exactly as it would be sent. Absent means the inspection mode is off (gh-181). */
   inspector?: Inspector | undefined;
   /**
@@ -172,7 +176,7 @@ export class Sender {
     this.maxQueued = opts.maxQueued ?? DEFAULT_MAX_QUEUED;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.now = opts.now ?? Date.now;
+    this.now = opts.now;
   }
 
   get pending(): number {
@@ -435,6 +439,10 @@ const TOO_MANY_REQUESTS = 429;
  *
  * Seconds or an HTTP date, which is what the standard allows. Anything unparseable, negative or in the past is
  * treated as absent rather than guessed at: a header we cannot read is not an instruction.
+ *
+ * A date is the other machine's wall clock, and `now` is the agent's. They differ by what this process's clock
+ * has drifted since it started, on top of the skew between two machines that reading a date already accepts —
+ * the same trade a capture's `expiresAt` makes (ADR 0131).
  */
 function retryAfterMs(header: string | null, now: number): number | undefined {
   if (header === null) return undefined;

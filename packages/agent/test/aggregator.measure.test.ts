@@ -20,7 +20,7 @@ describe("what the aggregator costs (measured)", () => {
   // adds to the application it observes, measured by `make bench`. This is one part of that, bounded on its
   // own so that an accidental O(n²) in `record` shows up as itself rather than as a worse p99.
   it("handles 10 000 events in well under 50 ms", () => {
-    const agg = new IntervalAggregator();
+    const agg = new IntervalAggregator({ now: () => 1_000 });
     const routes = ["/a", "/b/:id", "/c", "/d", "/e"];
     const start = performance.now();
     for (let i = 0; i < 10_000; i++) agg.record("GET", routes[i % 5] ?? "/a", 200 + (i % 3) * 100, (i % 500) / 3);

@@ -34,6 +34,8 @@ function sender(responses: Array<number | Error>, log: Logger = quiet, responseB
     deploy: { version: "v", environment: "test" },
     log,
     fetchImpl,
+    // A clock that does not move: nothing in these waits on a Retry-After, and the ones that do drive their own.
+    now: () => 1_000_000,
   });
   return { s, calls };
 }

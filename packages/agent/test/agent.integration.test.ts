@@ -223,7 +223,7 @@ describe("agent v0 (integration)", () => {
   it("does not subscribe or send anything when never started", async () => {
     const sink = await startSink();
     const app = await startApp();
-    const agent = createAgent(config(sink.url), { log: quiet, recorder: new IntervalAggregator() });
+    const agent = createAgent(config(sink.url), { log: quiet, recorder: new IntervalAggregator({ now: () => 1_000 }) });
     cleanups.push(app.close, sink.close);
     await hit(app.url, "/products");
     expect(agent.stats.recorded).toBe(0);
@@ -377,14 +377,26 @@ describe("agent v0 (integration)", () => {
 
     const reporting = batches.find((b) => b.captures !== undefined);
     expect(reporting?.captures?.[0]?.id, "the start was never reported").toBe("cap-1");
+    // And the batch that reports it is one the cloud would take. The cloud validates every batch against
+    // this same schema and answers 400 to what does not fit (ADR 0008), and a 400 is a batch **dropped**,
+    // not retried (ADR 0035): the intervals and the profile riding with it go too. Nothing asked this
+    // question of a batch the agent produces, so when gh-538 made the agent's clock a float and
+    // `startedAt` stopped being the integer the contract asks for, every report of a start was refused and
+    // the only sign was one line of log, said once (gh-608).
+    expect(validate(reporting), ajv.errorsText(validate.errors)).toBe(true);
     expect(evidence, "no evidence was sent").toHaveLength(1);
     expect(evidence[0]?.path).toContain("/v0/captures/cap-1/evidence");
 
     const body = evidence[0]?.body as {
       coverage: { observedRequests: number; attachedRequests: number };
       requests: { startedAt: string }[];
+      startedAt: string;
     };
     expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    // The same instant by the two routes it travels: the batch (ADR 0098) and the evidence (ADR 0073).
+    // They are written differently —an integer here, a date there— and they have to be the same moment, or
+    // the cloud's `least(...)` is choosing between two versions of one fact (gh-608).
+    expect(reporting?.captures?.[0]?.startedAt).toBe(Date.parse(body.startedAt));
     // The request happened before the order arrived, so it is **attached** detail and not observed: that is
     // the distinction CAP-01 asks for, and a total would hide it.
     expect(body.requests).toHaveLength(1);
@@ -426,6 +438,10 @@ describe("agent v0 (integration)", () => {
     // signal that stays (`product.md:114`).
     expect(batches[0]?.triggers).toBeUndefined();
     expect(asked, "the signal never asked for anything").not.toHaveLength(0);
+    // And this batch is one the cloud would take, for the same reason as the one that reports a capture's
+    // start: `observedAt` is an integer in the contract and it was being sealed from a clock with decimals,
+    // so the one batch that says the process is in trouble was the one being refused and dropped (gh-608).
+    expect(validate(asked[0]), ajv.errorsText(validate.errors)).toBe(true);
     const trigger = asked[0]?.triggers?.[0];
     expect(trigger?.signal).toBe("event-loop-delay");
     expect(trigger?.valueMs).toBe(330);
@@ -704,6 +720,88 @@ describe("agent v0 (integration)", () => {
     // And the end is after the start by the window the clock was advanced, which is the pair being coherent
     // rather than merely both being large.
     expect(ended).toBeGreaterThanOrEqual(started);
+  });
+
+  // The test above says «every instant it stamps» and looks at the two a capture carries. These are the ones it
+  // did not look at. The interval, the profile, the coarse register and the sender each fell back to `Date.now`
+  // through a default argument, and `agent.ts` passed a clock to none of them, so in production they read the
+  // wall clock that ADR 0131 says no source file reads — while the guard that says so matched a call and not a
+  // reference (gh-610).
+  //
+  // Stated the same way: the agent's clock a day ahead of the wall clock, and with a fraction, which the
+  // production clock always has and the contract's instants never do.
+  it("dates the interval and the profile with its own clock, in the integers the contract carries", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const batches: AggregatesBatch[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) batches.push(JSON.parse(String(init?.body)) as AggregatesBatch);
+      return new Response(JSON.stringify({ accepted: 1, inserted: 1 }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const DAY = 86_400_000;
+    const born = performance.timeOrigin + performance.now() + DAY + 0.4165;
+    let at = born;
+    // An observer on, so a request opens a context and an error reported inside it lands in the profile.
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["http"]) }), {
+      log: quiet,
+      fetchImpl,
+      now: () => at,
+    });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    agent.report({ error: new Error("boom"), kind: "explicit" });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    at += 1_000.25;
+    // Leaving closes the profile's window, which is the only way a test shorter than a minute sees it (gh-371).
+    await agent.stop();
+
+    expect(batches).toHaveLength(1);
+    const batch = batches[0];
+    // A float in either `start` is a `400`, and a `400` drops the batch whole (ADR 0035, gh-608).
+    expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
+    const interval = batch?.intervals[0];
+    expect(interval?.start, "the interval was dated with another clock").toBe(Math.floor(born));
+    expect(interval?.durationMs).toBe(1_000);
+    expect(batch?.profile, "the profile never left").toBeDefined();
+    expect(batch?.profile?.start, "the profile was dated with another clock").toBe(Math.floor(born));
+    expect(batch?.profile?.durationMs).toBe(1_000);
+  });
+
+  // The sender's clock is a deadline and not an instant, and it read the wall clock all the same: a wait the
+  // cloud asked for was measured on a clock nothing else in the agent uses, and that a stepped wall clock moves.
+  it("waits out the time the cloud asked for on its own clock", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    let calls = 0;
+    const fetchImpl = (async (url: string | URL) => {
+      if (!String(url).endsWith(AGGREGATES_PATH)) return new Response(null, { status: 202 });
+      calls += 1;
+      if (calls === 1) return new Response(null, { status: 429, headers: { "retry-after": "30" } });
+      return new Response(JSON.stringify({ accepted: 1, inserted: 1 }), { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const clock = testClock();
+    const agent = createAgent(config("http://cloud.invalid"), { log: quiet, fetchImpl, now: clock.now });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const request = { method: "GET", url: "/products" };
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    expect(await agent.flushNow()).toBe(false);
+    expect(calls).toBe(1);
+
+    clock.advance(29_000);
+    expect(await agent.flushNow()).toBe(false);
+    expect(calls, "asked again before the time the cloud asked for was up").toBe(1);
+
+    clock.advance(2_000);
+    expect(await agent.flushNow(), "still waiting on a clock the test did not move").toBe(true);
+    expect(calls).toBe(2);
   });
 
   it("does not say the same start twice", async () => {

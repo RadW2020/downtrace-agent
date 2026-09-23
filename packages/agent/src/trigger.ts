@@ -153,10 +153,13 @@ export class LocalTriggers {
     this.over += 1;
     if (this.over < this.sustained) return undefined;
     if (this.askedAt !== undefined && now - this.askedAt < this.cooldownMs) return undefined;
+    // The cooldown keeps the instant as it came; what leaves is rounded, for the reason `toReport` in
+    // `captures.ts` explains: `observedAt` is an integer in the contract and this clock has decimals since
+    // gh-538, so the one batch that says this process is in trouble was the one being refused (gh-608).
     this.askedAt = now;
     return {
       signal: EVENT_LOOP_DELAY,
-      observedAt: now,
+      observedAt: Math.floor(now),
       valueMs: p99,
       thresholdMs: this.thresholdMs,
       intervals: this.over,

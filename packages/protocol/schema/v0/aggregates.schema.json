@@ -10,7 +10,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0", "0.9.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -460,8 +460,8 @@
       "required": ["kind", "hash", "count", "totalMs"],
       "properties": {
         "kind": {
-          "enum": ["query", "error"],
-          "description": "What kind of operation this is."
+          "enum": ["query", "error", "framework", "explicit"],
+          "description": "What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). The last two since 0.9.0."
         },
         "hash": {
           "type": "string",
@@ -493,6 +493,9 @@
           "type": "integer",
           "minimum": 0,
           "description": "Only on the `(other)` bucket: how many distinct operations it merges, so a cap does not become a lie by omission."
+        },
+        "context": {
+          "$ref": "#/$defs/ReportedContext"
         },
         "class": {
           "enum": ["select", "insert", "update", "delete", "other"],
@@ -583,8 +586,8 @@
       "description": "Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errors and exceptions», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).",
       "properties": {
         "kind": {
-          "enum": ["uncaught", "unhandled-rejection"],
-          "description": "Which of the two. Two different failures with two different fixes: counting them together hides which one is happening."
+          "enum": ["uncaught", "unhandled-rejection", "framework", "explicit"],
+          "description": "How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. Since 0.9.0, `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02)."
         },
         "hash": {
           "type": "string",
@@ -601,8 +604,19 @@
           "type": "integer",
           "minimum": 1,
           "description": "How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many."
+        },
+        "context": {
+          "$ref": "#/$defs/ReportedContext"
         }
       }
+    },
+    "ReportedContext": {
+      "title": "ReportedContext",
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": { "maxLength": 32 },
+      "additionalProperties": { "type": "string", "maxLength": 64 },
+      "description": "The structural context an application attached to an error it reported (ERR-02, since 0.9.0). Flat and small on purpose: what travels is the shape of the failure, never its contents (invariant 5). Every value has been through the same sanitising as an error message before it got here, so anything that looked like a value is already a `?`, and there is nothing per user in it (IMP-01). It is the context of the **first** occurrence of the signature in this window, because what travels is counted per signature and not per occurrence. Absent is the normal case: an error nobody attached a context to carries none."
     },
     "LocalTrigger": {
       "type": "object",
