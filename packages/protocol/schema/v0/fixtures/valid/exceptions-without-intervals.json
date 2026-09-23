@@ -1,0 +1,37 @@
+{
+  "protocol": "0.9.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "3b8f2e71-9c4d-4a6e-8f1b-5d2c7a9e0f14",
+    "hostname": "worker-1",
+    "pid": 5151
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [],
+  "exceptions": [
+    {
+      "kind": "explicit",
+      "hash": "5e6f708192a3b4c5",
+      "text": "Error: invoice ? could not be rendered · render@invoices-job.js:57",
+      "count": 4,
+      "context": {
+        "stage": "render",
+        "retryable": "false"
+      }
+    },
+    {
+      "kind": "unhandled-rejection",
+      "hash": "d4e5f60718293a4b",
+      "text": "TimeoutError: queue did not answer in ? · poll@queue-client.js:112",
+      "count": 1
+    }
+  ]
+}

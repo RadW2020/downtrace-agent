@@ -18,6 +18,8 @@ Since **0.2.0** an endpoint may also carry `postgres`: how many queries each req
 
 `POST {DOWNTRACE_URL}/v0/aggregates` · `Authorization: Bearer <token>` · JSON · 202 accepted, 400 invalid, 401 bad token, 429 rate limit or daily budget. The 202 body is an `IngestResponse`.
 
+`intervals` may be empty whenever the batch carries anything else: a process that serves no requests closes no interval, and nothing else a batch carries has to wait for one — what such a process throws or reports included. A batch that carries nothing at all is a `400` that says so.
+
 ## How the protocol changes
 
 **The package version is the protocol version.** `@downtrace/protocol@0.5.0` speaks protocol `0.5.0`, and CI refuses to publish a release where the two disagree, so you can read the contract off the version in your lockfile. A release that changes the package without touching the contract moves the patch segment only.

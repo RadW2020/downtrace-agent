@@ -1,0 +1,28 @@
+{
+  "protocol": "0.7.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [],
+  "triggers": [
+    {
+      "signal": "event-loop-delay",
+      "observedAt": 1756900020000,
+      "valueMs": 412.5,
+      "thresholdMs": 200,
+      "intervals": 3
+    }
+  ]
+}
