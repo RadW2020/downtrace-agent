@@ -42,6 +42,11 @@ interface PgModule {
 export interface InstrumentPgDeps {
   log: Logger;
   /**
+   * Where a failure of this observer's own code goes: the agent's count of internal errors, which logs it at
+   * debug, sends the count in the batch and disables the instrumentation at the tenth (invariant 2, ADR 0161).
+   */
+  internalError: (err: unknown) => void;
+  /**
    * Where the query text becomes a fingerprint. Absent means no profile is being built, and then the text is
    * never even looked at: the cost of normalising is not paid by an agent that would not send it.
    */
@@ -120,7 +125,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   }
   if (proto[MARK] === true) return version;
 
-  const fingerprints = deps.fingerprints;
+  const { fingerprints, internalError } = deps;
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
     // Only the instrumentation's own work sits inside this `try`, and all of it is best effort: a bug here must never
@@ -129,6 +134,11 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
     // them. pg is called after the `try`, once, in both forms: what pg throws, or what an application callback it
     // calls throws, is the application's and reaches it as it came, where the `catch` used to take it for the
     // instrumentation's and call pg a second time (gh-662).
+    //
+    // Every `catch` of this observer, here and in `connect`, hands what it caught to the agent's `internalError` and
+    // does nothing else: it is a failure of the instrumentation's own, counted, and at the tenth the instrumentation
+    // disables itself (invariant 2, ADR 0161). Nothing here describes it: what is caught can be a value of the
+    // application's that `String` throws on, and `internalError` describes it behind a `try` of its own (gh-664).
     let done: ((failed?: boolean, err?: unknown) => void) | undefined;
     try {
       // Inside, because it reads the client's own properties, and what a getter there throws is not the query's.
@@ -159,7 +169,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
             }
           }
         } catch (err) {
-          deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
+          internalError(err);
         }
       };
       const last = args.at(-1);
@@ -189,7 +199,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
                 recordErrorIn(ctx, deps.errors, failed, cbArgs[0], started, started + ms);
               }
             } catch (err) {
-              deps.log.debug(`pg: recording a query failed: ${err instanceof Error ? err.message : String(err)}`);
+              internalError(err);
             }
           }
           return callback.apply(this, cbArgs);
@@ -197,9 +207,10 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
       } else {
         done = record;
       }
-    } catch {
+    } catch (err) {
       // The instrumentation failed before doing anything: the query goes to pg as the application wrote it, and is
       // not recorded.
+      internalError(err);
     }
 
     const result = original.apply(this, args);
@@ -225,7 +236,7 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
 
   proto.query = wrapped;
   proto[MARK] = true;
-  wrapPoolConnect(pg, deps.log);
+  wrapPoolConnect(pg, deps);
   deps.log.debug(`instrumented pg ${version}`);
   return version;
 }
@@ -235,16 +246,16 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
  * the application having nowhere to run: a pool with nothing free is what turns one slow dependency into a whole
  * service degrading, and it is invisible in the query's own duration.
  */
-function wrapPoolConnect(pg: PgModule, log: Logger): void {
+function wrapPoolConnect(pg: PgModule, deps: InstrumentPgDeps): void {
+  const { log, internalError } = deps;
   const proto = pg.Pool?.prototype;
   if (!proto || typeof proto.connect !== "function" || proto[WAIT_MARK] === true) return;
 
   const original = proto.connect as (...args: unknown[]) => unknown;
-  // Recording the wait is best effort, as recording a query is. The pool calls back from the connection's own
-  // event and before the application's callback, so a throw there would end the process; in the promise it would
-  // hand the application our error instead of its client, and that client would never go back (invariant 2).
-  const unrecorded = (err: unknown): void =>
-    log.debug(`pg: recording a connection wait failed: ${err instanceof Error ? err.message : String(err)}`);
+  // Recording the wait is best effort, as recording a query is, and a failure goes where a query's does. The pool
+  // calls back from the connection's own event and before the application's callback, so a throw there would end
+  // the process; in the promise it would hand the application our error instead of its client, and that client
+  // would never go back (invariant 2).
   proto.connect = function (this: unknown, ...args: unknown[]): unknown {
     // The same boundary as `query`'s: the instrumentation's own work inside the `try`, and the pool asked after it,
     // once. An ending pool calls the callback before `connect` returns (`pg-pool/index.js:190-194`), so what an
@@ -269,7 +280,7 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
             try {
               recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
             } catch (err) {
-              unrecorded(err);
+              internalError(err);
             }
             return callback.apply(this, cbArgs);
           });
@@ -277,9 +288,10 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
       } else {
         promised = true;
       }
-    } catch {
+    } catch (err) {
       // The instrumentation failed before doing anything: the pool is asked as the application asked it, and the
       // wait is not recorded.
+      internalError(err);
     }
     const result = original.apply(this, args);
     // The callback form records from its callback.
@@ -292,7 +304,7 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
           try {
             recordWait("postgres", targetOfClient(client), performance.now() - started);
           } catch (err) {
-            unrecorded(err);
+            internalError(err);
           }
           return client;
         },
@@ -301,7 +313,7 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
           try {
             recordWait("postgres", targetOfPool(this), performance.now() - started);
           } catch (failure) {
-            unrecorded(failure);
+            internalError(failure);
           }
           throw err;
         },

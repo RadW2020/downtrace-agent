@@ -406,11 +406,15 @@ export class Agent {
       redis: "off",
       runtime: "off",
     };
+    // A failure while an observer records is one of the instrumentation's own, and is counted like any other:
+    // at the tenth the instrumentation disables itself (invariant 2, ADR 0161).
+    const internalError = (err: unknown): void => this.internalError(err);
     // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
     if (on.has("pg")) {
       const version = instrumentPg({
         log: this.log,
+        internalError,
         fingerprints: this.fingerprints,
         errors: this.errors,
         ...(this.pgModule !== undefined ? { moduleImpl: this.pgModule } : {}),
@@ -418,9 +422,6 @@ export class Agent {
       // The only observer that resolves a module, so the only one that can be asked for and not attach.
       observers.pg = version === undefined ? "unavailable" : "on";
     }
-    // A failure while an observer records is one of the instrumentation's own, and is counted like any other:
-    // at the tenth the instrumentation disables itself (invariant 2, ADR 0161).
-    const internalError = (err: unknown): void => this.internalError(err);
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
       this.stopHttp = instrumentHttp({ log: this.log, internalError });
@@ -837,7 +838,7 @@ export class Agent {
   }
 
   /**
-   * Where the guards end: this class's `guard`, and the observers' of ADR 0161 (`pg`'s only log until gh-670).
+   * Where the guards end: this class's `guard`, and every observer's (ADR 0161).
    * So it may not throw, whatever it is handed, or the guard that called it is not one (gh-664).
    */
   private internalError(err: unknown): void {
