@@ -209,7 +209,11 @@ An uncaught exception and a promise rejected with no `catch` are watched through
 the exception**. Your process ends exactly as it would have: same exit code, same stack trace. There is a
 test that runs two processes, one with the instrumentation and one without, and compares both.
 
-What is reported is the type, the sanitised message and the stack signature, counted per signature.
+What is reported is the type, the sanitised message and the stack signature, counted per signature. Each
+signature also travels with its running total since the process started, so a batch sent again because its answer
+was lost is not counted twice, and an exception reported while another batch is in flight rides the next one. The
+instrumentation keeps totals for up to 256 signatures over the life of the process; past that, a signature is sent
+with its count alone and the cloud says its number may include a resend.
 
 **If the process dies, the exception is lost.** Sending is asynchronous, an uncaught exception does not go
 through `beforeExit`, and there is no synchronous channel to send it on. It arrives when your application

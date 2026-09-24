@@ -1,0 +1,27 @@
+{
+  "protocol": "0.9.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "5c2a7e19-3d4b-4f8a-9e61-0b7d2c4a8f33",
+    "hostname": "web-2",
+    "pid": 6262
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [],
+  "exceptions": [
+    {
+      "kind": "uncaught",
+      "hash": "9f1c2d3e4a5b6c7d",
+      "count": 1,
+      "total": 0
+    }
+  ]
+}

@@ -110,6 +110,25 @@ export const DEFAULT_MAX_QUEUED = 6;
 const MAX_CAPTURE_REPORTS = 16;
 /** As many signatures as the protocol accepts in one batch. */
 const MAX_EXCEPTIONS = 32;
+/**
+ * How many signatures this instance keeps a running total for, over its whole life (ADR 0179).
+ *
+ * A key and a number each, and never evicted: a total that started again under the same instance would read to the
+ * cloud as occurrences it already counted, which is an undercount nothing would ever say. Past this a signature
+ * travels without one, exactly as an older instrumentation's does, and the cloud counts it as delivered and says so.
+ */
+export const MAX_RUNNING_TOTALS = 256;
+
+/**
+ * One signature waiting to be delivered: `count` is what happened since the last delivery this sender heard land,
+ * and `total`, when this sender keeps one for it, everything since the instance started (gh-625).
+ */
+interface PendingException extends CountedException {
+  total?: number;
+}
+
+/** The identity a signature is counted under, here and in the cloud: its kind and its hash. */
+const signatureOf = (e: { kind: string; hash: string }): string => `${e.kind}\n${e.hash}`;
 /** As many local asks as the protocol accepts, which is one per signal there is. */
 const MAX_TRIGGERS = 4;
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -158,7 +177,9 @@ export class Sender {
   /** Capture starts waiting to ride the next batch. Cleared when it lands, so nothing is said twice. */
   private captureReports: CaptureProgress[] = [];
   /** What the process threw outside any request, waiting for a batch to carry it (ADR 0103). */
-  private exceptions: CountedException[] = [];
+  private exceptions: PendingException[] = [];
+  /** Every signature's running total since this instance started, for up to `MAX_RUNNING_TOTALS` (ADR 0179). */
+  private readonly totals = new Map<string, number>();
   /** What a local signal is asking for. Accumulates until a batch carries them (gh-409). */
   private triggers: LocalTrigger[] = [];
   private inflight = false;
@@ -216,12 +237,52 @@ export class Sender {
    * Queues a profile for the next batch. A batch carries at most one, so they go out oldest first and, like
    * intervals, the oldest is dropped rather than letting an unreachable cloud grow this without bound.
    */
-  /** What the process threw outside a request. Accumulates: two flushes without a send must not lose one. */
+  /**
+   * What the process threw outside a request. Accumulates: two flushes without a send must not lose one.
+   *
+   * And each signature carries its running total, which is what lets the cloud apply a delivery once. The count
+   * alone could not: a batch whose answer was lost went out again with its count added to what came after, and
+   * nothing in it told the cloud which part it already had (gh-625).
+   */
   enqueueExceptions(all: CountedException[]): void {
     for (const e of all) {
-      const seen = this.exceptions.find((x) => x.kind === e.kind && x.hash === e.hash);
-      if (seen) seen.count += e.count;
-      else if (this.exceptions.length < MAX_EXCEPTIONS) this.exceptions.push(e);
+      const total = this.runningTotal(signatureOf(e), e.count);
+      const seen = this.exceptions.find((x) => signatureOf(x) === signatureOf(e));
+      if (seen) {
+        seen.count += e.count;
+        if (total !== undefined) seen.total = total;
+      } else if (this.exceptions.length < MAX_EXCEPTIONS) {
+        this.exceptions.push(total === undefined ? { ...e } : { ...e, total });
+      }
+    }
+  }
+
+  /**
+   * Adds `count` to a signature's running total and returns it, or nothing for a signature this instance keeps no
+   * total for. Counted whether or not the signature fits in the next batch: the total is how many times it
+   * happened, and the cloud bounds what it adds by `count`, which is what this sender has not heard land.
+   */
+  private runningTotal(key: string, count: number): number | undefined {
+    const before = this.totals.get(key);
+    if (before === undefined && this.totals.size >= MAX_RUNNING_TOTALS) return undefined;
+    const total = (before ?? 0) + count;
+    this.totals.set(key, total);
+    return total;
+  }
+
+  /**
+   * Takes off what a batch that landed carried, and only that. What reached the sender while it was in flight is
+   * still here —a signature's count is what came after, its total everything— and rides the next batch. Emptying
+   * the list whole, as it did, lost it without a word (gh-626).
+   */
+  private delivered(carried: PendingException[]): void {
+    for (const c of carried) {
+      const i = this.exceptions.findIndex((x) => signatureOf(x) === signatureOf(c));
+      const pending = this.exceptions[i];
+      if (pending === undefined) continue;
+      const left = pending.count - c.count;
+      if (left > 0) pending.count = left;
+      else this.exceptions.splice(i, 1);
     }
   }
 
@@ -341,6 +402,10 @@ export class Sender {
     this.inflight = true;
     const intervals = this.queue.slice(0, this.maxQueued);
     const profile = this.profiles[0];
+    // Copies, as they are now: what reaches the sender while this batch is in flight changes the entries, and what
+    // the landing takes off is what this batch carried and not what is there by then (gh-626).
+    const exceptions = this.exceptions.map((e) => ({ ...e }));
+    const triggers = [...this.triggers];
     const resources = this.resources();
     const batch: AggregatesBatch = {
       protocol: PROTOCOL_VERSION,
@@ -350,15 +415,13 @@ export class Sender {
       // 1..maxQueued intervals by construction; the generated type is a union of tuples.
       intervals: intervals as AggregatesBatch["intervals"],
       ...(profile ? { profile } : {}),
-      // 1..16 by construction, like the intervals above: the generated type is a union of tuples.
-      ...(this.exceptions.length > 0
-        ? { exceptions: this.exceptions as NonNullable<AggregatesBatch["exceptions"]> }
-        : {}),
+      // 1..32 by construction, like the intervals above: the generated type is a union of tuples.
+      ...(exceptions.length > 0 ? { exceptions: exceptions as NonNullable<AggregatesBatch["exceptions"]> } : {}),
       ...(this.captureReports.length > 0
         ? { captures: this.captureReports as NonNullable<AggregatesBatch["captures"]> }
         : {}),
       // 1..4 by construction, like the rest.
-      ...(this.triggers.length > 0 ? { triggers: this.triggers as NonNullable<AggregatesBatch["triggers"]> } : {}),
+      ...(triggers.length > 0 ? { triggers: triggers as NonNullable<AggregatesBatch["triggers"]> } : {}),
     };
     const reported = this.captureReports.map((c) => c.id);
     const body = JSON.stringify(batch);
@@ -387,10 +450,13 @@ export class Sender {
         // Said, so it is not said again. Only on success: a report whose batch never arrived has not been
         // heard, and the capture would look accepted-but-never-started for as long as that lasted.
         this.captureReports = [];
-        this.exceptions = [];
+        // Delivered, so not delivered again: what this batch carried, and nothing that reached the sender while it
+        // was in flight, which rides the next one (gh-626).
+        this.delivered(exceptions);
         // Asked, so it is not asked again. Only on success, like the rest: a batch that never arrived
-        // never asked, and a signal that has passed is one nobody will ever ask about (gh-409).
-        this.triggers = [];
+        // never asked, and a signal that has passed is one nobody will ever ask about (gh-409). And only what it
+        // asked, for the same reason as the exceptions.
+        this.triggers = this.triggers.filter((t) => !triggers.includes(t));
         // Said, so it is not said twice. A counter that repeated itself would read as loss that keeps
         // happening (gh-243).
         this.since = { dropped: 0, failed: 0, rejected: 0 };

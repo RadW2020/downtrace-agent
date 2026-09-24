@@ -582,3 +582,126 @@ describe("Sender, bounded on every array a batch carries", () => {
     expect(carried(calls[0], "triggers")).toHaveLength(signals.length);
   });
 });
+
+/**
+ * What the process threw outside a request, delivered so the cloud can apply it once (gh-625) and so nothing that
+ * reaches the sender while a batch is in flight is lost when that batch lands (gh-626).
+ *
+ * Each delivery says, per signature, `count` —what happened since the last delivery this sender heard land— and
+ * `total` —everything since the instance started—. `total - count` is what the sender knows was applied, which is
+ * what lets the cloud recognise a resend: before, a delivery whose answer was lost went out again with its count
+ * added to what came after, and nothing in it said which part the cloud already had.
+ */
+describe("Sender, delivering what the process threw", () => {
+  const thrown = (hash: string, count: number): CountedException => ({ kind: "uncaught", hash, text: "", count });
+  type Sent = { exceptions?: { hash: string; count: number; total?: number }[]; triggers?: LocalTrigger[] };
+
+  /** A sender whose cloud answers each batch only when the test says so, which is what a batch in flight is. */
+  function held() {
+    const bodies: Sent[] = [];
+    const answers: Array<(r: Response) => void> = [];
+    const waiting: Array<{ n: number; resolve: () => void }> = [];
+    const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Sent);
+      for (const w of waiting) if (bodies.length >= w.n) w.resolve();
+      return new Promise<Response>((resolve) => answers.push(resolve));
+    }) as unknown as typeof fetch;
+    const s = new Sender({
+      url: "http://cloud.test",
+      token: "tok",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v24" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl,
+      now: () => 1_000_000,
+    });
+    /** Resolves once the cloud has received `n` batches: a flush reaches `fetch` a turn after it is called. */
+    const requested = (n: number): Promise<"sent"> =>
+      new Promise((resolve) => {
+        if (bodies.length >= n) resolve("sent");
+        else waiting.push({ n, resolve: () => resolve("sent") });
+      });
+    /** Answers the oldest request still waiting for one. */
+    const answer = (status: number): void => answers.shift()?.(new Response(null, { status }));
+    return { s, bodies, requested, answer };
+  }
+  const carried = (b: Sent | undefined) => (b?.exceptions ?? []).map((e) => [e.hash, e.count, e.total]);
+
+  it("says with every delivery how many times a signature has happened since the instance started", async () => {
+    const { s, calls } = sender([202, 202]);
+    s.enqueueExceptions([thrown("a", 3)]);
+    expect(await s.flush()).toBe(true);
+    s.enqueueExceptions([thrown("a", 2), thrown("b", 1)]);
+    expect(await s.flush()).toBe(true);
+    expect(carried(calls[0]?.body as Sent)).toEqual([["a", 3, 3]]);
+    expect(carried(calls[1]?.body as Sent)).toEqual([
+      ["a", 2, 5],
+      ["b", 1, 1],
+    ]);
+  });
+
+  it("sends again what it never heard land with a total the cloud can recognise, and after it only what is new", async () => {
+    // The answer was lost: the cloud may have stored the three. The retry says five in all, and five it has not
+    // heard land, so a cloud that applied the three counts two and one that never saw them counts five.
+    const { s, calls } = sender([new Error("The operation was aborted due to timeout"), 202, 202]);
+    s.enqueueExceptions([thrown("a", 3)]);
+    expect(await s.flush()).toBe(false);
+    s.enqueueExceptions([thrown("a", 2)]);
+    expect(await s.flush()).toBe(true);
+    s.enqueueExceptions([thrown("a", 1)]);
+    expect(await s.flush()).toBe(true);
+    expect(calls.map((c) => carried(c.body as Sent))).toEqual([[["a", 3, 3]], [["a", 5, 5]], [["a", 1, 6]]]);
+  });
+
+  it("keeps what reached it while a batch was in flight, and sends it with the next one (gh-626)", async () => {
+    const { s, bodies, requested, answer } = held();
+    s.enqueueExceptions([thrown("a", 1)]);
+    const first = s.flush();
+    await requested(1);
+    // In flight: what arrives now is for the next batch, and the sender says it cannot send one yet.
+    s.enqueueExceptions([thrown("b", 4), thrown("a", 2)]);
+    const ask: LocalTrigger = { signal: "event-loop-delay", observedAt: 1 };
+    s.enqueueTriggers([ask]);
+    expect(await s.flush()).toBe(false);
+    answer(202);
+    expect(await first).toBe(true);
+    // Before gh-626 there was nothing left to send, and this flush said so at once: the first batch's landing had
+    // emptied the exceptions and the asks, what it carried and what came after alike.
+    const second = s.flush();
+    expect(await Promise.race([second, requested(2)])).toBe("sent");
+    answer(202);
+    expect(await second).toBe(true);
+    expect(carried(bodies[0])).toEqual([["a", 1, 1]]);
+    // `a`'s count is what came after the batch that landed, and its total is everything.
+    expect(carried(bodies[1])).toEqual([
+      ["a", 2, 3],
+      ["b", 4, 4],
+    ]);
+    expect(bodies[1]?.triggers).toEqual([ask]);
+  });
+
+  it("keeps totals for 256 signatures and sends the ones past them with none, which the contract accepts", async () => {
+    // The bound is ADR 0179's: a key and a number per signature for the life of the process, and never an
+    // eviction, because a total that started again under the same instance would read as already counted.
+    const bound = 256;
+    const { s, calls } = sender([]);
+    for (let i = 0; i < bound; i += 32) {
+      s.enqueueExceptions(Array.from({ length: 32 }, (_, j) => thrown(`h${i + j}`, 1)));
+      expect(await s.flush()).toBe(true);
+    }
+    s.enqueueExceptions([thrown("past-the-bound", 2), thrown("h0", 1)]);
+    expect(await s.flush()).toBe(true);
+    const last = calls.at(-1)?.body as Sent;
+    expect(carried(last)).toEqual([
+      ["past-the-bound", 2, undefined],
+      ["h0", 1, 2],
+    ]);
+    const ajv = new Ajv2020({ allErrors: true, strict: true });
+    ajv.addKeyword("x-latency-boundaries-ms");
+    ajv.addKeyword("x-calls-per-request-boundaries");
+    ajv.addKeyword("x-ingest-path");
+    const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
+    expect(validate(last), JSON.stringify(validate.errors)).toBe(true);
+  });
+});

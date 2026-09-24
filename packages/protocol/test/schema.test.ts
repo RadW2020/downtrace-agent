@@ -130,3 +130,34 @@ describe("callsPerRequestBucket", () => {
     expect(callsPerRequestBucket(10_000)).toBe(CALLS_PER_REQUEST_BUCKETS_V0 - 1);
   });
 });
+
+describe("a process exception's running total (gh-625)", () => {
+  it("reads a delivery that says how many times each signature has happened since the instance started", async () => {
+    const doc = byName(await load("valid"), "exceptions-with-a-running-total.json") as unknown as {
+      exceptions: { count: number; total?: number }[];
+    };
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+    // `count` is what happened since the last delivery the sender heard land, and `total` everything since the
+    // instance started, so `total - count` is what the sender knows was already applied.
+    expect(doc.exceptions.map((e) => [e.count, e.total])).toEqual([
+      [2, 5],
+      [1, 1],
+    ]);
+  });
+
+  it("refuses a total of nothing: a signature that happened no times did not happen", async () => {
+    const invalid = new Map(await load("invalid"));
+    expect(validate(invalid.get("a-running-total-of-nothing.json"))).toBe(false);
+    expect(ajv.errorsText(validate.errors)).toMatch(/total must be >= 1/);
+  });
+
+  it("still takes an exception with no total, which is what every older sender sends", async () => {
+    // Optional, as every addition is (ADR 0008): a cloud that stopped accepting it would give every installed
+    // instrumentation a 400 it can do nothing about.
+    const doc = byName(await load("valid"), "process-exceptions.json") as unknown as {
+      exceptions: { total?: number }[];
+    };
+    expect(doc.exceptions.every((e) => e.total === undefined)).toBe(true);
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+  });
+});

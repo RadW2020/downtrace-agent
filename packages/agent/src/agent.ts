@@ -526,9 +526,11 @@ export class Agent {
   ): Promise<boolean> {
     const deadline = leaving ? AbortSignal.timeout(timeoutMs ?? SHUTDOWN_FLUSH_MS) : undefined;
     try {
-      // Before anything is taken, and not after: the batch in flight wipes, when it lands, the exceptions and the
-      // asks the sender holds for the next batch (gh-626), and a process that is leaving has no next batch. The
-      // flushes under way are not cut when the deadline passes; each keeps its own timeout.
+      // Before anything is taken, and not after: the batch in flight clears, when it lands, the capture reports the
+      // sender holds —they are replaced and not accumulated, and the next flush would hand them over again— and a
+      // process that is leaving has no next flush. The exceptions and the asks are no longer at stake: a landing
+      // takes off only what it carried (gh-626). The flushes under way are not cut when the deadline passes; each
+      // keeps its own timeout.
       if (deadline) await settledWithin(underWay, deadline);
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
       const profile = leaving ? this.profile.drain() : this.profile.rotate();

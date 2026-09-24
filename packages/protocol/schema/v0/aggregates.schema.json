@@ -603,7 +603,12 @@
         "count": {
           "type": "integer",
           "minimum": 1,
-          "description": "How many times this signature happened. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many."
+          "description": "How many times this signature happened since the last delivery this sender heard land. An instant per occurrence would be a row per crash of a process that crashes in a loop; what a reader asks is how many."
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Since 0.9.0: how many times this signature has happened in this instance since it started, a running total every delivery of the signature carries again. It is what lets the cloud tell a delivery it already applied from one that happened again (gh-625): `total - count` is what the sender knows was applied, the cloud keeps the largest total it applied per instance and signature, and it counts only what this delivery adds beyond both — so a delivery sent again after its answer was lost, sent twice, or overtaken by a later one adds nothing, and one that never arrived is counted by the next. It never goes down while `instance.id` stays the same, which is why that id is generated once per process. Absent from every sender older than this, and from a signature past the number a sender keeps totals for: the cloud then counts `count` as delivered, and says so."
         },
         "context": {
           "$ref": "#/$defs/ReportedContext"

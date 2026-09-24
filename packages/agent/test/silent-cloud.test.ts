@@ -264,8 +264,8 @@ describe("the way out, when a flush is already under way", () => {
     await stopping;
     // Before gh-657 only the first batch was here, if that: the way out saw it in flight and sent nothing.
     expect(c.batches.map(routes)).toEqual([["/first"], ["/last"]]);
-    // Taken after the batch in flight landed, not before: its landing wipes what the sender was holding for the
-    // next batch (gh-626), and the way out has no next batch.
+    // What was reported after the first batch left rides the way out's own, and only that one: the first batch
+    // did not carry it, and its landing takes off only what it carried (gh-626).
     expect(c.batches[1]?.exceptions?.map((e) => e.kind)).toEqual(["explicit"]);
   });
 
@@ -370,5 +370,43 @@ describe("the way out, when a flush is already under way", () => {
     // Before gh-657 only the evidence was here: `stop()` found the batch in flight, sent the evidence itself and
     // returned, and the batch was still waiting for its answer when the process would have left.
     expect(c.answered.slice(from)).toEqual([AGGREGATES_PATH, captureEvidencePath("cap-0")]);
+  });
+});
+
+/**
+ * A flush that is not leaving, while another is under way (gh-626).
+ *
+ * It does not wait: one per interval, each queued behind a slow cloud, would pile up. So it hands what it took to
+ * the sender and the sender says it cannot send yet. What it handed over used to be wiped when the batch in flight
+ * landed, because that landing emptied the exceptions and the asks whole — what it had carried and what had come
+ * after alike — and nothing said so.
+ */
+describe("a flush that is not leaving, while another is under way", () => {
+  const serve = (url: string): void => {
+    const request = { method: "GET", url };
+    channel("http.server.request.start").publish({ request });
+    channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+  };
+
+  it("keeps what the application reported meanwhile, and the next batch carries it", async () => {
+    let give = (): void => {};
+    const first = new Promise<Reply>((resolve) => {
+      give = () => resolve({ status: 202, body: '{"accepted":1,"inserted":1}' });
+    });
+    let answered = 0;
+    const c = await cloud(() => (answered++ === 0 ? first : { status: 202 }));
+    const agent = createAgent(testConfig(c.url, { intervalMs: 60_000, instrument: new Set() }), { log: quiet });
+    cleanups.push(c.close, () => agent.stop());
+    agent.start();
+    serve("/first");
+    const inFlight = agent.flushNow();
+    agent.report({ error: new Error("reported while the first batch was in flight"), kind: "explicit" });
+    // The interval timer's next flush: it takes the report and the sender cannot send it yet.
+    expect(await agent.flushNow()).toBe(false);
+    give();
+    expect(await inFlight).toBe(true);
+    expect(await agent.flushNow()).toBe(true);
+    expect(c.batches[0]?.exceptions).toBeUndefined();
+    expect(c.batches[1]?.exceptions?.map((e) => [e.kind, e.count, e.total])).toEqual([["explicit", 1, 1]]);
   });
 });
