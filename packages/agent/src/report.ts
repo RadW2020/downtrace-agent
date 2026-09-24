@@ -170,14 +170,23 @@ export function expressErrorHandler(): ErrorRequestHandler {
   // Declared with four parameters because that is how Express tells an error handler from a middleware, and
   // named because a stack trace through an anonymous arrow says nothing to whoever reads it.
   return function downtraceErrorHandler(err: unknown, _req: unknown, _res: unknown, next: (e?: unknown) => void) {
-    if (!clientError(err)) registered()?.report({ error: err, kind: FRAMEWORK });
+    // Nothing here reads the error. Reading a property of the application's object is running the
+    // application's code —a getter, a `Proxy` trap—, and what that throws would reach the next handler as if
+    // it were the error: it did, until gh-664. Whether it is a client's is decided inside `report`, behind the
+    // guard, where a failure is counted as the instrumentation's own; with nothing running, nothing reads it.
+    registered()?.report({ error: err, kind: FRAMEWORK });
     // Always, and with the same error: this middleware observes and answers nothing.
     next(err);
   };
 }
 
-/** Whether the error says of itself that it is a client's fault. `status` is what Express and body-parser set. */
-function clientError(err: unknown): boolean {
+/**
+ * Whether the error says of itself that it is a client's fault. `status` is what Express and body-parser set.
+ *
+ * Called by `Agent.report`, for the framework's path and from inside its guard, and never by the middleware:
+ * these two reads are the application's getters running (gh-664).
+ */
+export function clientError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const carrier = err as { status?: unknown; statusCode?: unknown };
   for (const value of [carrier.status, carrier.statusCode]) {

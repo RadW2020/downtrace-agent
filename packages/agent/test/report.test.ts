@@ -17,6 +17,7 @@ import {
   sanitizeContext,
 } from "../src/report.ts";
 import { testConfig } from "./support/agent-config.ts";
+import { escapedFrom } from "./support/escaped.ts";
 
 /**
  * `product.md:372` (ERR-02): the application hands over an error it handled itself, with structural context,
@@ -51,7 +52,7 @@ interface Sent {
   batch(): AggregatesBatch;
 }
 
-function start(over: Partial<AgentConfig> = {}): Sent {
+function start(over: Partial<AgentConfig> = {}, log: Logger = quiet): Sent {
   let body = "";
   const fetchImpl = (async (_url: string, init: RequestInit) => {
     body = String(init.body);
@@ -64,7 +65,7 @@ function start(over: Partial<AgentConfig> = {}): Sent {
     instrument: new Set(["pg"]),
     ...over,
   });
-  const agent = createAgent(config, { log: quiet, fetchImpl });
+  const agent = createAgent(config, { log, fetchImpl });
   agent.start();
   running.push(agent);
   return { agent, body: () => body, batch: () => JSON.parse(body) as AggregatesBatch };
@@ -90,6 +91,88 @@ function operations(
   const endpoint = batch.profile?.endpoints.find((e) => e.route === route);
   return endpoint?.operations ?? [];
 }
+
+/** What the process saw with no route, or nothing when the stop had nothing to send at all. */
+function exceptionsSent(sent: Sent): NonNullable<AggregatesBatch["exceptions"]> {
+  return sent.body() === "" ? [] : (sent.batch().exceptions ?? []);
+}
+
+/**
+ * An error of the application's whose `property` runs a getter that throws what `thrown` makes. Reading it is
+ * running the application's code, which is the whole of gh-664.
+ */
+function readingThrows(property: string, thrown: () => unknown): Error {
+  const err = new Error("the application's error");
+  Object.defineProperty(err, property, {
+    get() {
+      throw thrown();
+    },
+  });
+  return err;
+}
+
+/** A `Proxy` whose target is gone: every operation on it throws, `instanceof` included. `typeof` does not. */
+function revokedProxy(): object {
+  const { proxy, revoke } = Proxy.revocable(new Error("the application's error"), {});
+  revoke();
+  return proxy;
+}
+
+/**
+ * An error that writes down every time anything so much as looks at it. The handler is itself a proxy, so every
+ * trap the engine asks for is recorded —`get`, `has`, `getPrototypeOf` for an `instanceof`, `ownKeys`— with no
+ * list of traps somebody would have to keep complete: the names of the traps are the names of `Reflect`'s methods.
+ */
+function watched(touched: string[]): Error {
+  const reflect = Reflect as unknown as Record<PropertyKey, (...args: unknown[]) => unknown>;
+  const traps = new Proxy({} as ProxyHandler<Error>, {
+    get:
+      (_handler, trap) =>
+      (...args: unknown[]) => {
+        touched.push(String(trap));
+        return reflect[trap]?.(...args);
+      },
+  });
+  return new Proxy(new Error("watched"), traps);
+}
+
+/**
+ * What a route can hand the middleware, and whether reading it throws. Every row that throws does so from the
+ * application's own code —a getter, a trap—, which is what the middleware used to run outside the guard: the
+ * application's handler got our failure instead of its own error (gh-664). The rest are what Express passes on
+ * whatever a route throws, a frozen object among them because nothing here may write to the application's error.
+ */
+type Handed = [what: string, make: () => unknown, throwsOnRead: boolean];
+const handed: Handed[] = [
+  ["an Error whose status getter throws", () => readingThrows("status", () => new Error("status getter broke")), true],
+  [
+    "an Error whose statusCode getter throws",
+    () => readingThrows("statusCode", () => new Error("statusCode getter broke")),
+    true,
+  ],
+  [
+    "an Error whose status getter throws what cannot be described",
+    () => readingThrows("status", () => Object.create(null)),
+    true,
+  ],
+  [
+    "a Proxy whose every read throws",
+    () =>
+      new Proxy(new Error("the application's error"), {
+        get() {
+          throw new Error("proxy get broke");
+        },
+      }),
+    true,
+  ],
+  ["a revoked Proxy", revokedProxy, true],
+  ["a frozen Error", () => Object.freeze(new Error("frozen")), false],
+  ["a string", () => "just a string", false],
+  ["a number", () => 42, false],
+  ["null", () => null, false],
+  ["undefined", () => undefined, false],
+  ["a symbol", () => Symbol("thrown"), false],
+];
 
 describe("an error the application reports itself", () => {
   it("travels as an operation of the route it happened on", async () => {
@@ -489,6 +572,29 @@ describe("the exception Express turns into a 5xx", () => {
     expect(operations(sent.batch(), "/missing")).toHaveLength(0);
   });
 
+  // The rule reads both names, and until gh-664 only `status` had a test: moving the rule is when the other
+  // half is worth pinning.
+  it("passes on a client error declared as statusCode without recording it", async () => {
+    const sent = start();
+    remember(sent.agent);
+    const server = await listen((app) => {
+      app.get("/missing", () => {
+        throw Object.assign(new Error("no such thing"), { statusCode: 404 });
+      });
+      app.use(expressErrorHandler());
+      ownHandler(app);
+    });
+    try {
+      expect((await fetch(`${server.url}/missing`)).status).toBe(500);
+    } finally {
+      await server.close();
+    }
+    await flush(sent.agent);
+
+    expect(operations(sent.batch(), "/missing")).toHaveLength(0);
+    expect(sent.agent.stats.internalErrors).toBe(0);
+  });
+
   it("records nothing when the application's own handler answers first", async () => {
     const sent = start();
     remember(sent.agent);
@@ -593,6 +699,152 @@ describe("the exception Express turns into a 5xx", () => {
       await server.close();
     }
   });
+
+  /**
+   * The ticket's probe (gh-664): a route throws the application's error, and the application's own handler,
+   * after the middleware, answers whether what it received is the very object its route threw. Compared by
+   * identity, which runs no getter and no trap, and against the same application without the middleware.
+   */
+  function throwing(thrown: unknown, { middleware }: { middleware: boolean }) {
+    return (app: express.Express): void => {
+      app.get("/boom", () => {
+        throw thrown;
+      });
+      if (middleware) app.use(expressErrorHandler());
+      app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        res.status(500).send(err === thrown ? "its own error" : "another error");
+      });
+    };
+  }
+
+  async function answered(build: (app: express.Express) => void): Promise<{ status: number; body: string }> {
+    const server = await listen(build);
+    try {
+      const res = await fetch(`${server.url}/boom`);
+      return { status: res.status, body: await res.text() };
+    } finally {
+      await server.close();
+    }
+  }
+
+  const throwsOnRead = handed.filter(([, , throws]) => throws);
+
+  it.each(throwsOnRead)("hands the application's handler its own error when it is %s", async (_what, make) => {
+    const thrown = make();
+    const bare = await answered(throwing(thrown, { middleware: false }));
+    expect(bare, "without the middleware the application gets its own error").toEqual({
+      status: 500,
+      body: "its own error",
+    });
+
+    const sent = start();
+    remember(sent.agent);
+    const { value: seen, escaped } = await escapedFrom(() => answered(throwing(thrown, { middleware: true })));
+    expect(seen).toEqual(bare);
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+    // Reading it failed inside the instrumentation, and that is where it was counted (ADR 0161).
+    expect(sent.agent.stats.internalErrors).toBe(1);
+    expect(sent.agent.stats.disabled).toBe(false);
+  });
+
+  // Invariant 2 in full: the failure is counted, the tenth disables the instrumentation, and every request is
+  // still answered by the application's own handler with the application's own error.
+  it("counts ten unreadable errors, disables itself at the tenth, and the application never notices", async () => {
+    const sent = start();
+    remember(sent.agent);
+    const thrown = readingThrows("status", () => new Error("status getter broke"));
+    const server = await listen(throwing(thrown, { middleware: true }));
+    try {
+      const { value: bodies, escaped } = await escapedFrom(async () => {
+        const out: string[] = [];
+        for (let i = 0; i < 10; i++) out.push(await (await fetch(`${server.url}/boom`)).text());
+        return out;
+      });
+      expect(bodies).toEqual(Array.from({ length: 10 }, () => "its own error"));
+      expect(escaped, "escaped as an uncaught exception").toEqual([]);
+      expect(sent.agent.stats.internalErrors).toBe(10);
+      expect(sent.agent.stats.disabled).toBe(true);
+      // Disabled reads nothing: the eleventh is answered the same way and costs no internal error.
+      expect(await (await fetch(`${server.url}/boom`)).text()).toBe("its own error");
+      expect(sent.agent.stats.internalErrors).toBe(10);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+/**
+ * The middleware called the way Express calls it, with a `next` that keeps what it was given: whatever a route
+ * threw, `next` gets that very value, once, and the instrumentation's reading of it stays inside the
+ * instrumentation (invariant 2, gh-664). «The same» is identity, so a `Proxy` is compared without being read.
+ */
+describe("whatever the middleware is handed", () => {
+  function handedOn(err: unknown): unknown[] {
+    const passed: unknown[] = [];
+    expressErrorHandler()(err, {}, {}, (e?: unknown) => {
+      passed.push(e);
+    });
+    return passed;
+  }
+
+  it.each(handed)("%s reaches next as it is, and reading it stays inside", async (_what, make, throwsOnRead) => {
+    const sent = start();
+    remember(sent.agent);
+    const err = make();
+    const { value: passed, escaped } = await escapedFrom(async () => handedOn(err));
+    expect(passed.length, "next is called once").toBe(1);
+    expect(passed[0] === err, "next gets the application's own error").toBe(true);
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+    expect(sent.agent.stats.internalErrors).toBe(throwsOnRead ? 1 : 0);
+    expect(sent.agent.stats.disabled).toBe(false);
+
+    await flush(sent.agent);
+    // With no request being served it is what the process saw; an error that could not be read is not recorded.
+    const framework = exceptionsSent(sent).filter((e) => e.kind === "framework");
+    expect(framework).toHaveLength(throwsOnRead ? 0 : 1);
+  });
+
+  it.each(handed)("%s reaches next as it is with no instrumentation running", async (_what, make) => {
+    await shutdown();
+    const err = make();
+    const { value: passed, escaped } = await escapedFrom(async () => handedOn(err));
+    expect(passed.length, "next is called once").toBe(1);
+    expect(passed[0] === err, "next gets the application's own error").toBe(true);
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+  });
+
+  // «With no instrumentation running it does nothing at all» is true only if nothing reads the error: reading it
+  // is the application's code running, and that is what can throw.
+  it("does not so much as look at the error with no instrumentation running", async () => {
+    await shutdown();
+    const touched: string[] = [];
+    const err = watched(touched);
+    const passed = handedOn(err);
+    expect(touched).toEqual([]);
+    expect(passed[0] === err).toBe(true);
+  });
+
+  // The control that makes the two around it mean something: with the instrumentation running the error is
+  // read, so an empty list above is the middleware not looking, not the watch not seeing.
+  it("does look at it with the instrumentation running", async () => {
+    const sent = start();
+    remember(sent.agent);
+    const touched: string[] = [];
+    handedOn(watched(touched));
+    expect(touched).toContain("get");
+  });
+
+  // And the same once the instrumentation has stopped: a report to a dead agent costs one comparison.
+  it("does not look at it once the instrumentation has stopped either", async () => {
+    const sent = start();
+    remember(sent.agent);
+    await sent.agent.stop();
+    const touched: string[] = [];
+    const err = watched(touched);
+    const passed = handedOn(err);
+    expect(touched).toEqual([]);
+    expect(passed[0] === err).toBe(true);
+  });
 });
 
 describe("captureException, the call an application makes", () => {
@@ -620,6 +872,57 @@ describe("captureException, the call an application makes", () => {
     await flush(sent.agent);
     // And nothing of that report was recorded: it failed before it had anything to record.
     expect(operations(sent.batch(), "/orders/:id")).toHaveLength(0);
+  });
+
+  /**
+   * What reaches the guard's `catch` is whatever was thrown, and when a getter of the application's threw it,
+   * it is the application's value. Describing it for the debug line is the one thing left that could throw from
+   * inside the `catch`, and out of the guard: `String` on an object with no prototype, `instanceof` on a revoked
+   * `Proxy`, a getter on `stack` (gh-664).
+   */
+  type Undescribable = [what: string, make: () => unknown];
+  const undescribable: Undescribable[] = [
+    ["an object with no prototype", () => Object.create(null)],
+    ["a revoked Proxy", revokedProxy],
+    ["an Error whose stack getter throws", () => readingThrows("stack", () => new Error("stack getter broke"))],
+  ];
+
+  it.each(undescribable)("counts a failure that is %s, logs it, and does not propagate it", async (_what, make) => {
+    const lines: string[] = [];
+    const sent = start({}, { warn: () => {}, debug: (line) => lines.push(line) });
+    remember(sent.agent);
+    const hostile = {};
+    Object.defineProperty(hostile, "stage", {
+      enumerable: true,
+      get() {
+        throw make();
+      },
+    });
+
+    const { escaped } = await escapedFrom(async () => {
+      expect(() => inRequest("/orders/7", () => captureException(new Error("handled"), hostile))).not.toThrow();
+    });
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+    expect(sent.agent.stats.internalErrors).toBe(1);
+    expect(sent.agent.stats.disabled).toBe(false);
+    // Counted and said, even when what was thrown cannot say anything about itself: in words, and not as an
+    // empty line that reads like a log with nothing to say.
+    expect(lines.filter((line) => line.startsWith("internal error: "))).toEqual([
+      "internal error: (a thrown value that cannot be described)",
+    ]);
+  });
+
+  // The README's promise for what the middleware passes on: «if you want one of those recorded,
+  // `captureException` is the call». The client-error rule belongs to the framework's path and to nothing else.
+  it.each(["status", "statusCode"])("records an error that declares a 404 as its %s", async (field) => {
+    const sent = start();
+    remember(sent.agent);
+    inRequest("/orders/7", () => captureException(Object.assign(new Error("no such order"), { [field]: 404 })));
+    await flush(sent.agent);
+
+    const ops = operations(sent.batch(), "/orders/:id");
+    expect(ops.map((o) => o.kind)).toEqual(["explicit"]);
+    expect(ops[0]?.text).toContain("Error: no such order");
   });
 
   it("reaches the instrumentation the entry point remembered", async () => {

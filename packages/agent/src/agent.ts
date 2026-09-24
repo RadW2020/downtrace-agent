@@ -24,7 +24,7 @@ import {
   recordOperationIn,
 } from "./context.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
-import { ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
+import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
 import { FineRegister } from "./fine.ts";
 import { type Fingerprint, FingerprintCache } from "./fingerprint.ts";
@@ -38,7 +38,7 @@ import { OverheadMeter, Sheddable, type SheddableLevel, ThrottleReasons } from "
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
-import { sanitizeContext } from "./report.ts";
+import { clientError, sanitizeContext } from "./report.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { Sender } from "./transport.ts";
@@ -345,12 +345,18 @@ export class Agent {
    * Where it lands is decided by whether a request is being served. Inside one it is an operation of the
    * profile, under the route it happened on, so the error carries its `where`; outside one it is what the
    * process saw, with no route — the same split ADR 0102 made, for the same reason.
+   *
+   * A `framework` error that declares itself a client's is not recorded: a 404 is an answer and not a failure.
+   * An `explicit` one is, because asking for it is what `captureException` is for.
    */
   report(reported: ReportedError): void {
     // An instrumentation that was never started, has stopped, or disabled itself after its tenth internal
     // error records nothing. Checked before the guard so that a report to a dead agent costs one comparison.
     if (!this.started) return;
     this.guard(() => {
+      // Here and not in the middleware: reading `status` runs the application's getters, and what they throw
+      // is counted in this guard instead of reaching the application's error handler as its error (gh-664).
+      if (reported.kind === FRAMEWORK && clientError(reported.error)) return;
       const sanitised = this.config.minimal ? undefined : sanitizeContext(reported.context);
       const fingerprint = this.signatureOf(reported.error);
       const ctx = currentContext();
@@ -830,9 +836,13 @@ export class Agent {
     }
   }
 
+  /**
+   * Where the guards end: this class's `guard`, and the observers' of ADR 0161 (`pg`'s only log until gh-670).
+   * So it may not throw, whatever it is handed, or the guard that called it is not one (gh-664).
+   */
   private internalError(err: unknown): void {
     this.internalErrors += 1;
-    this.log.debug(`internal error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    this.log.debug(`internal error: ${described(err)}`);
     if (this.internalErrors >= MAX_INTERNAL_ERRORS && !this.disabled) {
       this.disabled = true;
       this.log.warn(
@@ -857,6 +867,25 @@ export class Agent {
       process.kill(process.pid, signal);
     };
     flush.then(resume, resume);
+  }
+}
+
+/**
+ * What a failure says of itself, for the debug line, and never a second failure.
+ *
+ * What reaches a guard's `catch` is whatever was thrown, and when a getter of the application's threw it —on
+ * the error it handed over, on a context— it is the application's value: `String` throws on an object with no
+ * prototype, `instanceof` on a revoked `Proxy`, and reading `stack` runs a getter. Any of those thrown from the
+ * `catch` leaves the guard and lands in the application, as its error handler's argument or in its own `catch`
+ * (gh-664). So the description is attempted and, when it cannot be made, the line says so in words. This
+ * translates rather than swallows: what it replaces is a sentence for a log, and the failure it describes has
+ * already been counted.
+ */
+function described(err: unknown): string {
+  try {
+    return err instanceof Error ? `${err.stack ?? err.message}` : String(err);
+  } catch {
+    return "(a thrown value that cannot be described)";
   }
 }
 
