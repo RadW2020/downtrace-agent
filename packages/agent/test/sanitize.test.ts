@@ -111,6 +111,66 @@ describe("what a URL keeps", () => {
   });
 });
 
+describe("what a path is", () => {
+  // A word with a `/` or a `\` in it and something else besides, which goes whole: nothing of it stays, its first
+  // segment included, because whether a plain word is structure or a value is what no rule can tell. A word that
+  // opens with a URL is the URL rule's, and keeps what that rule lets it keep (gh-697).
+  it.each([
+    ["no route for GET /users/alice", "no route for GET ?"],
+    // Glued to the word in front of it, it takes that word with it.
+    ["Route GET:/users/alice not found", "Route ? not found"],
+    // Node's own, measured: the ESM loader names the importing file by its absolute path and without quotes.
+    ["Cannot find package 'left-pad' imported from /home/alice/app/index.mjs", "Cannot find package ? imported from ?"],
+    [
+      "Cannot find package 'left-pad' imported from C:\\Users\\alice\\app\\index.mjs",
+      "Cannot find package ? imported from ?",
+    ],
+    // And `net`, for a Unix socket.
+    ["connect ENOENT /tmp/app.sock", "connect ENOENT ?"],
+    // One separator is enough, and a share is a path like any other.
+    ["cannot read alice/orders.csv", "cannot read ?"],
+    ["cannot read \\\\fileserver\\alice\\orders.csv", "cannot read ?"],
+    ["see //cdn.example.com/alice", "see ?"],
+    // A URL in its query does not make the word a URL: it opens with a path, and goes whole.
+    ["no route for /users/alice?next=https://app.example.com/home", "no route for ?"],
+    // And a word that opens with one is the URL rule's, whatever comes before its `://`.
+    ["redirect to=https://api.example.com/users/alice", "redirect to=https://api.example.com/?"],
+    // The cost, and ADR 0083's trade: a word that only joins two words with a slash goes too.
+    ["EIO: i/o error, read", "EIO: ? error, read"],
+  ])("«%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  it("is not a slash on its own, which is punctuation", () => {
+    expect(sanitizeMessage("read / write failed")).toBe("read / write failed");
+    expect(sanitizeMessage("read // write failed")).toBe("read // write failed");
+  });
+
+  it("is not a host on its own, with no separator after it", () => {
+    expect(sanitizeMessage("getaddrinfo ENOTFOUND api.example.com")).toBe("getaddrinfo ENOTFOUND api.example.com");
+  });
+
+  // What the rule cannot do, said in a test so that the README's wording and the code agree: with no quotes to go
+  // by, a space is where a word ends, and a path with one in it is two words.
+  it("ends at a space, and the README says so", () => {
+    expect(sanitizeMessage("cannot read /home/alice/My Documents")).toBe("cannot read ? Documents");
+  });
+
+  it("ends at nothing else: a comma or a parenthesis inside it is still the path", () => {
+    // A rule that stopped at either would leave what follows it, which is as much the name of a thing.
+    expect(sanitizeMessage("cannot read /srv/exports/orders,alice")).toBe("cannot read ?");
+    expect(sanitizeMessage("cannot read C:\\exports\\orders(alice).csv")).toBe("cannot read ?");
+  });
+
+  it("is the quotes' when it is between them, space and all, because the quotes are read first", () => {
+    // How Node's `fs` names a path. Were the path read before its quotes, it would end at the space and leave
+    // `Documents` for the quote to close on.
+    expect(sanitizeMessage("ENOENT: no such file or directory, scandir '/home/alice/My Documents'")).toBe(
+      "ENOENT: no such file or directory, scandir ?",
+    );
+  });
+});
+
 describe("what a quote is", () => {
   it("is not an apostrophe, although `’` is both", () => {
     expect(sanitizeMessage("can’t reach the server")).toBe("can’t reach the server");
@@ -142,7 +202,18 @@ const BEFORE_GH_684: readonly RegExp[] = [
 const VALUES_BEFORE_GH_684 = BEFORE_GH_684.slice(2);
 
 /**
- * Messages made only of ASCII, with neither of the two ASCII shapes gh-684 added a rule for: a backtick and `://`.
+ * Whether a word of the message has a `/` or a `\` in it and something besides: the shape gh-697 added a rule for.
+ *
+ * Written with a split on spaces and not with that rule, so that it bounds what the rule may touch instead of copying
+ * it. A slash on its own is not one, and it stays in the corpus, where the rule for a path has to leave it be.
+ */
+const hasPathWord = (message: string): boolean =>
+  message.split(/\s+/).some((word) => /[/\\]/.test(word) && /[^/\\]/.test(word));
+
+/**
+ * Messages made only of ASCII, with none of the three ASCII shapes a rule was added for since: a backtick and `://`
+ * (gh-684), and a word with a `/` or a `\` in it (gh-697). Those three are the exceptions, and the only ones: a
+ * message that carries one changes identity once, by design and said in the changeset (ADR 0170, ADR 0175).
  *
  * Built from pieces each old rule catches, glued with and without spaces so that the pieces also meet, and from any
  * other printable character. Seeded, so a red names a message that comes back on the next run.
@@ -171,7 +242,7 @@ function asciiMessages(count: number): string[] {
       message += next() < 0.6 ? piece : String.fromCharCode(32 + Math.floor(next() * 95));
       if (next() < 0.5) message += " ";
     }
-    if (!message.includes("`") && !message.includes("://")) messages.push(message);
+    if (!message.includes("`") && !message.includes("://") && !hasPathWord(message)) messages.push(message);
   }
   return messages;
 }
@@ -179,11 +250,17 @@ function asciiMessages(count: number): string[] {
 describe("what an upgrade leaves where it was", () => {
   const messages = asciiMessages(5000);
 
-  it("is every message made only of ASCII with no backtick and no `://`: it comes out as it did before gh-684", () => {
+  it("is every message made only of ASCII with no backtick, no `://` and no word with a `/` or `\\` in it: it comes out as it did before gh-684", () => {
     for (const message of messages) {
       expect(sanitizeMessage(message), `«${message}» as a message`).toBe(sanitizeWith(message, BEFORE_GH_684));
       expect(sanitizeValues(message), `«${message}» as a name`).toBe(sanitizeWith(message, VALUES_BEFORE_GH_684));
     }
+  });
+
+  it("keeps the slash on its own among them, where the rule for a path has to leave it be", () => {
+    // Or the exception above could be hiding every slash, and the test passing on messages that have none.
+    const alone = messages.filter((m) => m.split(/\s+/).some((word) => word === "/" || word === "\\"));
+    expect(alone.length).toBeGreaterThan(100);
   });
 
   it("asks each of those rules: every one of them changes some of these messages", () => {

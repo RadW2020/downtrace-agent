@@ -6,6 +6,7 @@ import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import type { Logger } from "../src/log.ts";
 import { PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
+import { sanitizeMessage } from "../src/sanitize.ts";
 import { Sender } from "../src/transport.ts";
 import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
 
@@ -120,5 +121,50 @@ describe("what actually leaves, in the bytes", () => {
     // And the ones that were understood do carry their label: omission has to be the exception, or the
     // profile would be useless and this test would prove nothing.
     expect(operations.some((o) => o.text !== "")).toBe(true);
+  });
+
+  /**
+   * A route template is made of `/` and segments, which is what the rule that takes a path out of a message takes
+   * whole. It never meets one: the route is built by `src/routes.ts`, travels as the route, and no rule of
+   * `src/sanitize.ts` reads it. So it arrives as written, beside the very errors whose paths did not (gh-697).
+   */
+  it("carries the route as it was written, beside errors whose paths it did not carry", async () => {
+    const route = "/orders/:id";
+    expect(sanitizeMessage(route), "a route the rules of a message would leave alone proves nothing").not.toBe(route);
+
+    const errors = new ErrorFingerprintCache();
+    const ctx = enterRequest();
+    for (const { message } of SANITISER_CASES) {
+      const fingerprint = errors.get(new Error(message));
+      recordOperationIn(ctx, { kind: "error", fingerprint, startedAt: 0, endedAt: 1, failed: true });
+    }
+    let t = 1_000_000;
+    const profile = new ProfileAggregator({ now: () => (t += PROFILE_WINDOW_MS) });
+    profile.record("GET", route, [...(ctx.operations?.values() ?? [])]);
+    const rotated = profile.rotate();
+    expect(rotated, "the window should have rotated").not.toBeNull();
+
+    let body = "";
+    const sender = new Sender({
+      url: "http://sink.invalid",
+      token: "t",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v0" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        body = String(init.body);
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch,
+      now: () => 1_000_000,
+    });
+    sender.enqueue({ start: Date.now() - 10_000, durationMs: 10_000, endpoints: [] });
+    if (rotated) sender.enqueueProfile(rotated);
+    expect(await sender.flush()).toBe(true);
+
+    expect(body).toContain(`"route":"${route}"`);
+    // And the paths in those messages did not travel: the route came through beside a rule that works, and not for
+    // want of one.
+    expect(body).not.toContain("alice");
   });
 });

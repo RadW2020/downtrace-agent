@@ -39,7 +39,8 @@ const EDGE = `(?:(?<=${WORD})(?!${WORD})|(?<!${WORD})(?=${WORD}))`;
 
 /**
  * Anything that looks like a value. Order matters three times. A URL runs first, because the email rule would take
- * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. An email runs before
+ * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. A path runs next to it,
+ * although its place decides nothing: it takes a whole word, whatever the others left in it. An email runs before
  * the rest, because a rule that took part of it would leave the rest where no rule sees an address any more:
  * `ana4@cliente.com` would come out as `?@cliente.com`. And a UUID runs before the long run, for the reason given
  * beside it.
@@ -49,7 +50,8 @@ const EDGE = `(?:(?<=${WORD})(?!${WORD})|(?<!${WORD})(?=${WORD}))`;
  *
  * The patterns that read words are the ones they were with `\w`, `\d` and `\b` read in every script, and nothing
  * else: on a message made only of ASCII each matches exactly what it matched before, so the identity of such an
- * error does not move, and `sanitize.test.ts` checks it against the rules as they were (ADR 0170).
+ * error does not move unless it carries a shape a rule was added for since — a backtick, a `://`, a word with a `/`
+ * or a `\` in it —, and `sanitize.test.ts` checks it against the rules as they were (ADR 0170, ADR 0175).
  *
  * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
  * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
@@ -61,6 +63,14 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
   // with a `/` in it, an IPv6 literal — goes whole with the rest, rather than a rule guessing where a credential
   // ends. The host is still read by the rules below, as any word is (ADR 0170).
   /(?<=:\/\/)(?![^\s/?#@:]*(?::\d*)?(?:[\s/?#]|$))\S+|(?<=:\/\/[^\s/?#@:]*(?::\d*)?[/?#])\S+/g,
+  // A path, and anything else a word carries a `/` or a `\` in: the whole word, with nothing of it left. Its segments
+  // are the names of things, a plain word is all a segment needs to be, and whether a first segment is structure or a
+  // tenant is what no rule can tell; the structure travels anyway, as the route and the stack signature. So a path
+  // from the root, a file of either system, a relative one, and a host with no scheme in front of it all go, the word
+  // glued to them included. What it leaves is a slash on its own, which is punctuation, and a word whose first
+  // separator is the `//` of a `://`, which is a URL and the rule above's. A space ends it, as it ends any word
+  // (ADR 0175).
+  /(?<!\S)(?![^\s/\\]*:\/\/)(?=\S*[^\s/\\])\S*[/\\]\S*/gu,
   // Emails before anything splits them.
   new RegExp(String.raw`[${ALNUM}_.+-]+@[${ALNUM}_-]+\.[${ALNUM}_.-]+`, "gu"),
   // UUIDs. The long run below takes a UUID whole as well, hyphens and all, so this one hides nothing that one

@@ -92,6 +92,18 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
     sanitised: "could not connect to postgres://?",
   },
 
+  // A path with no scheme in front of it, and a file path: a word with a `/` or a `\` in it goes whole, because its
+  // segments are the names of things and a plain word is all a segment needs to be (gh-697). Each of these left the
+  // server whole before, the query of the first one included.
+  { message: "no route for /users/alice?name=alice", value: "alice", sanitised: "no route for ?" },
+  // The directory of a file gives away the `$HOME` of whoever runs it, on either system's separator.
+  { message: "cannot read /home/alice/orders.csv", value: "alice", sanitised: "cannot read ?" },
+  { message: "cannot read C:\\Users\\alice\\orders.csv", value: "alice", sanitised: "cannot read ?" },
+  // A relative path has no root to recognise it by, only its separator.
+  { message: "cannot read uploads/alice/orders.csv", value: "alice", sanitised: "cannot read ?" },
+  // And a host with no scheme goes with its path: without a scheme nothing says the first segment is a host.
+  { message: "GET api.example.com/users/alice failed", value: "alice", sanitised: "GET ? failed" },
+
   // Letters, marks and digits of every script. Each of these is a value the ASCII reading of `\w`, `\d` and `\b` let
   // out whole: the address is cut at its accent before the `@` or before the dot, the digits are not digits, and the
   // long run is split at each accent into pieces too short to be one.

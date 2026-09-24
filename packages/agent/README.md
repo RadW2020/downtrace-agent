@@ -142,20 +142,26 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
 - everything in a URL after its host. The scheme and a host with its port stay, because that is what the name
   of a dependency already carries: `https://api.example.com/users/alice?name=alice` becomes
   `https://api.example.com/?`. A URL whose authority holds anything else, a user and a password for one, keeps
-  only its scheme: `postgres://?`.
+  only its scheme: `postgres://?`;
+- any other word with a `/` or a `\` in it, whole: a path with no scheme and its query (`/users/alice?name=alice`),
+  a file path on either system (`/home/alice/orders.csv`, `C:\Users\alice\orders.csv`), a relative one, and a host
+  followed by a path with no scheme in front (`api.example.com/users/alice`). Nothing of it stays, not even its
+  first segment: your route templates travel as routes, and are not read by these rules. A slash on its own stays;
+  a word that only joins two words with a slash goes too (`i/o`, `application/xml`).
 
-It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. Nor, yet, does it recognise a path
-without a scheme (`/users/alice`) or a file path (gh-697), or a span between `‹ ›` or fullwidth quotes. The
-guarantee is «no identifier, no address, no token», not «nothing about a person» — so do not put a name, an
-email or anything else that identifies somebody in a context. Downtrace does not measure users (IMP-01), and
-this call cannot enforce that on prose you wrote.
+It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. A path with a space in it ends at the
+space unless it is between quotes, so the words after the space travel. Nor, yet, does it recognise a span between
+`‹ ›` or fullwidth quotes. The guarantee is «no identifier, no address, no token», not «nothing about a person» —
+so do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not measure
+users (IMP-01), and this call cannot enforce that on prose you wrote.
 
 **The first version that recognises all of these changes some error signatures, once.** Earlier versions let
-through a URL's path, quotes other than `'` and `"`, backticks, and digits and addresses outside ASCII. An error
-whose message carried one of them is sanitised differently now, and the hash of that text is the error's
-identity, so after the upgrade Downtrace lists it as a new error and the old one stops being seen. Most of these
-were one error per value anyway — `user “alice” not found` and `user “bob” not found` were two — and now they
-group. A message made only of ASCII with no URL and no backtick in it keeps its signature exactly.
+through a URL's path, a path with no scheme and a file path, quotes other than `'` and `"`, backticks, and digits
+and addresses outside ASCII. An error whose message carried one of them is sanitised differently now, and the hash
+of that text is the error's identity, so after the upgrade Downtrace lists it as a new error and the old one stops
+being seen. Most of these were one error per value anyway — `user “alice” not found` and `user “bob” not found`
+were two — and now they group. A message made only of ASCII with no URL, no backtick and no word with a `/` or a
+`\` in it keeps its signature exactly.
 
 Only the **first** context for a signature in each window is sent, because what travels is counted per
 signature and not per occurrence.

@@ -99,6 +99,22 @@ describe("the signature", () => {
     expect(a.hash).toBe(b.hash);
   });
 
+  /**
+   * The rules of a message read the message and nothing else. The stack signature is built apart and appended after,
+   * and it has a `/` of its own whenever a frame is a scoped package's: were the message's rules to read it, the path
+   * rule would take `(@prisma/client)`, and every such error would change identity for nothing (gh-697).
+   */
+  it("sanitises the path in the message and leaves the stack signature as it was made", () => {
+    const err = new Error("cannot read /home/alice/orders.csv");
+    err.stack = [
+      "Error: cannot read /home/alice/orders.csv",
+      "    at load (/home/alice/app/src/orders.js:42:11)",
+      "    at Client.query (/home/alice/app/node_modules/@prisma/client/runtime.js:1:1)",
+    ].join("\n");
+    expect(stackSignature(err.stack)).toBe("load@orders.js:42 ← (@prisma/client)");
+    expect(errorFingerprint(err).text).toBe(`Error: cannot read ? · ${stackSignature(err.stack)}`);
+  });
+
   /** And the same sentence from somewhere else is not the same error: the signature is about the code. */
   it("keeps two call sites apart even with the same message", () => {
     const a = errorFingerprint(thrownAt("not found", "orders.js", 42));
