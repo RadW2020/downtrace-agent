@@ -132,13 +132,30 @@ objects, arrays, `null` and functions are dropped. A **key** has to be a name an
 unchanged, so `stage` and `willRetry` travel and `order_12345` or `sk_live_…` are dropped whole rather than
 sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass the flat fields you want.
 
-**What that guarantees, and what is yours.** The sanitising replaces what *looks like* a value: anything with
-a digit in it, an email, a long run of hex or base64, whatever is between `'` or `"`. It cannot recognise a plain
-word, so `{ customer: "alice" }` travels whole. Nor, yet, does it recognise a digit or an address written
-outside ASCII (`４８２１`, `ana@müller.de`), a span between `“ ”`, `« »` or backticks, or the path and query of
-a URL: those travel as written (gh-684). The guarantee is «no identifier, no address, no token», not
-«nothing about a person» — so do not put a name, an email or anything else that identifies somebody in a
-context. Downtrace does not measure users (IMP-01), and this call cannot enforce that on prose you wrote.
+**What that guarantees, and what is yours.** The sanitising replaces what *looks like* a value, in any script:
+
+- anything with a digit in it (`4821`, `４８２１`);
+- an email (`ana@müller.de`);
+- a long run of letters, digits, `_` and `-`;
+- whatever is between quotes, closed or not: `'…'`, `"…"`, `“…”`, `„…“`, `‘…’`, `‚…‘`, `«…»`, `»…«`, `「…」`,
+  `『…』` and backticks;
+- everything in a URL after its host. The scheme and a host with its port stay, because that is what the name
+  of a dependency already carries: `https://api.example.com/users/alice?name=alice` becomes
+  `https://api.example.com/?`. A URL whose authority holds anything else, a user and a password for one, keeps
+  only its scheme: `postgres://?`.
+
+It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. Nor, yet, does it recognise a path
+without a scheme (`/users/alice`) or a file path (gh-697), or a span between `‹ ›` or fullwidth quotes. The
+guarantee is «no identifier, no address, no token», not «nothing about a person» — so do not put a name, an
+email or anything else that identifies somebody in a context. Downtrace does not measure users (IMP-01), and
+this call cannot enforce that on prose you wrote.
+
+**The first version that recognises all of these changes some error signatures, once.** Earlier versions let
+through a URL's path, quotes other than `'` and `"`, backticks, and digits and addresses outside ASCII. An error
+whose message carried one of them is sanitised differently now, and the hash of that text is the error's
+identity, so after the upgrade Downtrace lists it as a new error and the old one stops being seen. Most of these
+were one error per value anyway — `user “alice” not found` and `user “bob” not found` were two — and now they
+group. A message made only of ASCII with no URL and no backtick in it keeps its signature exactly.
 
 Only the **first** context for a signature in each window is sent, because what travels is counted per
 signature and not per occurrence.

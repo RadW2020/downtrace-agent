@@ -58,4 +58,64 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
   // The one rule that stands between no value and the wire: the long run takes a UUID whole too, hyphens and all.
   // What only this rule decides is the word glued to it, which it leaves and the long run would take (ADR 0167).
   { message: `lock order-${UUID} is held`, value: UUID, sanitised: "lock order-? is held" },
+
+  // Quotes that are not ASCII's, one family per rule, each opened by any of its languages' marks and left open once
+  // (gh-684). English and German double quotes close with the same two marks.
+  { message: "user “alice” not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user „alice“ not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user “alice not found", value: "alice", sanitised: "user ?" },
+  { message: "user ‘alice’ not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user ‚alice‘ not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user ‘alice not found", value: "alice", sanitised: "user ?" },
+  { message: "user «alice» not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user »alice« not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user «alice not found", value: "alice", sanitised: "user ?" },
+  { message: "user 「alice」 not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user 『alice』 not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user 「alice not found", value: "alice", sanitised: "user ?" },
+  // A backtick is a quote too, although it is how Prisma and MySQL name a field (ADR 0170).
+  { message: "user `alice` not found", value: "alice", sanitised: "user ? not found" },
+  { message: "user `alice not found", value: "alice", sanitised: "user ?" },
+
+  // A URL keeps its scheme and a plain host, the shape a dependency target already travels in, and loses its path and
+  // its query, which is where the parameters are. This is the message `node-fetch` builds.
+  {
+    message: "request to https://api.example.com/users/alice?name=alice failed",
+    value: "alice",
+    sanitised: "request to https://api.example.com/? failed",
+  },
+  // And an authority with anything but a host in it goes whole. Without this rule the email rule takes the password
+  // and the host, and leaves the user.
+  {
+    message: "could not connect to postgres://payroll:hunter@db.internal/orders",
+    value: "payroll",
+    sanitised: "could not connect to postgres://?",
+  },
+
+  // Letters, marks and digits of every script. Each of these is a value the ASCII reading of `\w`, `\d` and `\b` let
+  // out whole: the address is cut at its accent before the `@` or before the dot, the digits are not digits, and the
+  // long run is split at each accent into pieces too short to be one.
+  { message: "could not send to josé@cliente.com", value: "josé@cliente.com", sanitised: "could not send to ?" },
+  { message: "could not send to ana@müller.de", value: "ana@müller.de", sanitised: "could not send to ?" },
+  // The same `é`, decomposed: an `e` and a combining accent, which is how a name typed on some systems arrives.
+  {
+    message: "could not send to rené@cliente.com",
+    value: "rené@cliente.com",
+    sanitised: "could not send to ?",
+  },
+  { message: "user ４８２１ not found", value: "４８２１", sanitised: "user ? not found" },
+  { message: "user ٤٨٢١ not found", value: "٤٨٢١", sanitised: "user ? not found" },
+  {
+    message: "no account with handle álvaro_garcía_marketing",
+    value: "álvaro_garcía_marketing",
+    sanitised: "no account with handle ?",
+  },
+  // And decomposed, a word with a digit and a long run are one word each, accents and all: a class without the marks
+  // would stop at each accent and leave the name in front of it.
+  { message: "no invoice for josé4821", value: "josé", sanitised: "no invoice for ?" },
+  {
+    message: "no account with handle martínez_lópez_marketing",
+    value: "martínez_lópez_marketing",
+    sanitised: "no account with handle ?",
+  },
 ];

@@ -24,40 +24,80 @@
 const MIN_MEANING = 0.5;
 
 /**
- * Anything that looks like a value. Order matters twice. An email runs first, because a rule that took part of
- * it would leave the rest where no rule sees an address any more: `ana4@cliente.com` would come out as
- * `?@cliente.com`. And a UUID runs before the long run, for the reason given beside it.
+ * A letter, a mark or a digit of any script: what `\w` means, less its `_`, once a message is not written in ASCII.
+ *
+ * JavaScript keeps `\w`, `\d` and `\b` ASCII even with the `u` flag, so `josé@cliente.com` was cut at its accent
+ * before the `@` and `４８２１` was not a number (gh-684). The marks are in because a name typed in decomposed form
+ * is an `e` followed by a combining accent, and a class without them cuts it in the same place. Written once, so that
+ * every pattern below reads a word the same way.
+ */
+const ALNUM = String.raw`\p{L}\p{M}\p{N}`;
+/** A character of a word, as `\w` would be. */
+const WORD = `[${ALNUM}_]`;
+/** And `\b` under that meaning of a word: where a word character meets something that is not one. */
+const EDGE = `(?:(?<=${WORD})(?!${WORD})|(?<!${WORD})(?=${WORD}))`;
+
+/**
+ * Anything that looks like a value. Order matters three times. A URL runs first, because the email rule would take
+ * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. An email runs before
+ * the rest, because a rule that took part of it would leave the rest where no rule sees an address any more:
+ * `ana4@cliente.com` would come out as `?@cliente.com`. And a UUID runs before the long run, for the reason given
+ * beside it.
  *
  * Deliberately eager. A false positive costs a `?` where a word would have read better; a false negative
  * puts a customer's identifier in a batch, and there is no taking that back.
+ *
+ * The patterns that read words are the ones they were with `\w`, `\d` and `\b` read in every script, and nothing
+ * else: on a message made only of ASCII each matches exactly what it matched before, so the identity of such an
+ * error does not move, and `sanitize.test.ts` checks it against the rules as they were (ADR 0170).
  *
  * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
  * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
  */
 export const VALUE_PATTERNS: readonly RegExp[] = [
+  // What a URL carries after its host: the path, the query and the fragment, where the parameters are. The scheme
+  // stays, and so do the host and its port when the authority is nothing else, because that is the shape a
+  // dependency target already travels in. An authority that is anything else — a user and a password, a password
+  // with a `/` in it, an IPv6 literal — goes whole with the rest, rather than a rule guessing where a credential
+  // ends. The host is still read by the rules below, as any word is (ADR 0170).
+  /(?<=:\/\/)(?![^\s/?#@:]*(?::\d*)?(?:[\s/?#]|$))\S+|(?<=:\/\/[^\s/?#@:]*(?::\d*)?[/?#])\S+/g,
   // Emails before anything splits them.
-  /[\w.+-]+@[\w-]+\.[\w.-]+/g,
+  new RegExp(String.raw`[${ALNUM}_.+-]+@[${ALNUM}_-]+\.[${ALNUM}_.-]+`, "gu"),
   // UUIDs. The long run below takes a UUID whole as well, hyphens and all, so this one hides nothing that one
   // does not: what it decides is the word glued to it, `order-?` where the long run would leave `?`. It stays
   // for that, because taking it out would change the identity of every error and name that carries one
-  // (ADR 0167).
+  // (ADR 0167). A UUID is hex by definition, so its class stays ASCII.
   /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
-  // Any long hex or base64-ish run: tokens, hashes, ids.
-  /\b[0-9a-zA-Z_-]{16,}\b/g,
-  // Anything with a digit in it. A word that carries a number is a value or a version, and neither belongs
-  // in an identity.
-  /\b\w*\d[\w.]*\b/g,
+  // Any long run of letters, digits, `_` and `-`: tokens, hashes, ids, and a handle written with an accent.
+  new RegExp(`${EDGE}[${ALNUM}_-]{16,}${EDGE}`, "gu"),
+  // Anything with a digit in it, of any script. A word that carries a number is a value or a version, and neither
+  // belongs in an identity.
+  new RegExp(String.raw`${EDGE}${WORD}*\p{N}[${ALNUM}_.]*${EDGE}`, "gu"),
 ];
 
 /**
- * Quoted spans, single or double, including an unterminated one — the same reasoning as the SQL scanner: a
- * pattern that requires the closing quote lets a malformed string through whole.
+ * Quoted spans, including an unterminated one — the same reasoning as the SQL scanner: a pattern that requires the
+ * closing quote lets a malformed string through whole.
+ *
+ * One rule per family of quotes, each opened by any of its languages' opening marks and closed by either of its
+ * marks: `„alice“` is German and closes with the mark `“alice”` opens with. Not one rule for every quote, which would
+ * stop `“it’s alice”` at the apostrophe and let `alice` out; and `’` opens nothing, because it is also the apostrophe
+ * of `can’t`. A backtick is a quote too, although Prisma and MySQL name a field with it: the same character carries a
+ * value in other messages, and `(?)` is the cost ADR 0083 already accepted for `relation "users"` (ADR 0170).
  *
  * Separate from the list above because they only mean «value» **in prose**. In an error message, what is
  * between quotes is the thing the message is about. Inside a SQL identifier there is nothing to quote: the
  * whole name is already between quotes, and a `"` in there is a character of the name (gh-350).
  */
-const QUOTED_SPANS: readonly RegExp[] = [/'[^']*'?/g, /"[^"]*"?/g];
+const QUOTED_SPANS: readonly RegExp[] = [
+  /'[^']*'?/g,
+  /"[^"]*"?/g,
+  /[“„][^“”]*[“”]?/g,
+  /[‘‚][^‘’]*[‘’]?/g,
+  /[«»][^«»]*[«»]?/g,
+  /[「『][^」』]*[」』]?/g,
+  /`[^`]*`?/g,
+];
 
 /** Every rule a sentence goes through, in the order it does: first what it put between quotes, then the rest. */
 export const MESSAGE_RULES: readonly RegExp[] = [...QUOTED_SPANS, ...VALUE_PATTERNS];

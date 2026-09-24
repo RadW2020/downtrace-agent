@@ -57,8 +57,8 @@ function isKey(key: string): boolean {
  * one of two words. Everything else is dropped: an object, an array, a function and a symbol are values with
  * an inside, and there is no bound on what a nested one would carry.
  *
- * **What this guarantees, and what it does not.** It replaces what *looks like* a value — anything with a digit
- * in it, an email, a long run of hex or base64, a quoted span — and it cannot recognise a plain word. A
+ * **What this guarantees, and what it does not.** It replaces what *looks like* a value — which shapes those are,
+ * and in what order, is `sanitize.ts` — and it cannot recognise a plain word. A
  * `{ customer: "alice" }` travels whole, because nothing here can tell a first name from a stage name. So the
  * guarantee is «no identifier, no address, no token», not «nothing about a person»: IMP-01 is a product
  * commitment about what Downtrace measures, and a call cannot enforce it on prose somebody else wrote. The
