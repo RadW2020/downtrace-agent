@@ -412,13 +412,16 @@ export class Agent {
       // The only observer that resolves a module, so the only one that can be asked for and not attach.
       observers.pg = version === undefined ? "unavailable" : "on";
     }
+    // A failure while an observer records is one of the instrumentation's own, and is counted like any other:
+    // at the tenth the instrumentation disables itself (invariant 2, ADR 0161).
+    const internalError = (err: unknown): void => this.internalError(err);
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
-      this.stopHttp = instrumentHttp(this.log);
+      this.stopHttp = instrumentHttp({ log: this.log, internalError });
       observers.http = "on";
     }
     if (on.has("redis")) {
-      this.stopRedis = instrumentRedis(this.log);
+      this.stopRedis = instrumentRedis({ log: this.log, internalError });
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.

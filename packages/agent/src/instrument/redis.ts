@@ -16,6 +16,15 @@ interface CommandMessage {
   error?: unknown;
 }
 
+export interface InstrumentRedisDeps {
+  log: Logger;
+  /**
+   * Where a failure of this observer's own code goes: the agent's count of internal errors, which logs it at
+   * debug, sends the count in the batch and disables the instrumentation at the tenth (invariant 2, ADR 0161).
+   */
+  internalError: (err: unknown) => void;
+}
+
 /**
  * Observes Redis commands. Nothing is patched: ioredis publishes on a tracing channel, so the agent subscribes to
  * the start and the end of each command and times the difference.
@@ -23,7 +32,8 @@ interface CommandMessage {
  * The request's context is captured at the start, for the same reason as outgoing HTTP: the end of an asynchronous
  * operation does not necessarily run in the async context of whoever started it.
  */
-export function instrumentRedis(log: Logger): () => void {
+export function instrumentRedis(deps: InstrumentRedisDeps): () => void {
+  const { log, internalError } = deps;
   const channel = diagnostics_channel.tracingChannel<CommandMessage>("ioredis:command");
   const pending = new WeakMap<object, Pending>();
 
@@ -34,18 +44,26 @@ export function instrumentRedis(log: Logger): () => void {
     recordCallIn(p.ctx, "redis", p.target, performance.now() - p.started, failed || message.error !== undefined);
   };
 
+  // Every handler runs behind one guard, for the same reason as outgoing HTTP's: Node rethrows a subscriber's throw
+  // on the next tick as an uncaught exception, which ends the application's process (invariant 2, ADR 0161).
+  const guarded =
+    (handler: (message: CommandMessage) => void) =>
+    (message: CommandMessage): void => {
+      try {
+        handler(message);
+      } catch (err) {
+        internalError(err);
+      }
+    };
+
   const handlers = {
-    start(message: CommandMessage) {
+    start: guarded((message) => {
       const ctx = currentContext();
       if (!ctx) return; // a command outside a request belongs to no endpoint
       pending.set(message as object, { ctx, started: performance.now(), target: targetOf(message) });
-    },
-    asyncEnd(message: CommandMessage) {
-      finish(message, false);
-    },
-    error(message: CommandMessage) {
-      finish(message, true);
-    },
+    }),
+    asyncEnd: guarded((message) => finish(message, false)),
+    error: guarded((message) => finish(message, true)),
   };
 
   channel.subscribe(handlers);

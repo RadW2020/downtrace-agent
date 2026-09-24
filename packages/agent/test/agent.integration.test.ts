@@ -1,4 +1,4 @@
-import { channel } from "node:diagnostics_channel";
+import { channel, tracingChannel } from "node:diagnostics_channel";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -13,12 +13,13 @@ import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agent, createAgent } from "../src/agent.ts";
 import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
-import type { AgentConfig } from "../src/config.ts";
+import type { AgentConfig, Instrument } from "../src/config.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
 import { RuntimeSampler } from "../src/runtime.ts";
 import { testConfig } from "./support/agent-config.ts";
+import { escapedFrom } from "./support/escaped.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
@@ -880,5 +881,82 @@ describe("agent v0 (integration)", () => {
     await hit(app.url, "/products");
     expect(await agent.flushNow()).toBe(true);
     expect((sink.batches[0] as AggregatesBatch).agent.withholding).toBeUndefined();
+  });
+});
+
+/**
+ * Invariant 2 from the outside, for the two observers that record from a `diagnostics_channel` subscriber:
+ * «An internal failure disables the instrumentation; it never breaks the application». A failure while they
+ * record is one of the instrumentation's own, counted like a failure in any hook of the agent, and at the tenth
+ * the instrumentation disables itself (ADR 0161, gh-663). Until then it was an uncaught exception.
+ */
+describe("a failure while an observer records", () => {
+  /**
+   * The exclusion list of the context the agent opened for the request, made to fail from inside the handler:
+   * it is what every recording of both observers consults first (`context.ts:157`), and it is the agent's own.
+   */
+  const exploding = {
+    has: (): boolean => {
+      throw new Error("exclusion broke");
+    },
+  };
+  const ioredis = tracingChannel("ioredis:command");
+
+  /** A dependency that answers `ok`, for the application to call. */
+  async function startDownstream() {
+    const server = http.createServer((_req, res) => res.end("ok"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return { url, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }
+
+  /** One observer, and what a request of the application does against the dependency it observes. */
+  type Observed = [instrument: Instrument, call: (downstream: string) => Promise<string>];
+  const observed: Observed[] = [
+    ["http", async (downstream) => (await fetch(downstream)).text()],
+    [
+      "redis",
+      async () =>
+        String(
+          await ioredis.tracePromise(async () => "ok", {
+            command: "GET",
+            serverAddress: "127.0.0.1",
+            serverPort: 6379,
+          }),
+        ),
+    ],
+  ];
+
+  it.each(observed)("with %s: counted, disabled at the tenth, and every request answered", async (instrument, call) => {
+    const sink = await startSink();
+    const downstream = await startDownstream();
+    const app = http.createServer((_req, res) => {
+      const ctx = currentContext();
+      if (ctx) ctx.excluded = exploding;
+      call(downstream.url).then(
+        (body) => res.end(body),
+        (err: unknown) => res.writeHead(500).end(String(err)),
+      );
+    });
+    await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
+    const appUrl = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
+    const closeApp = () => new Promise<void>((r) => app.close(() => r()));
+    const fetchBefore = globalThis.fetch;
+    const agent = new Agent(config(sink.url, { instrument: new Set([instrument]) }), { log: quiet });
+    cleanups.push(() => agent.stop(), closeApp, downstream.close, sink.close);
+    agent.start();
+
+    const { value: answers, escaped } = await escapedFrom(async () => {
+      const bodies: string[] = [];
+      for (let i = 0; i < 10; i++) bodies.push(await (await fetch(appUrl)).text());
+      return bodies;
+    });
+    expect(answers).toEqual(Array.from({ length: 10 }, () => "ok"));
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+    expect(agent.stats.internalErrors).toBe(10);
+    expect(agent.stats.disabled).toBe(true);
+    // Disabled is off: the wrapper is gone, and the application goes on being answered.
+    expect(globalThis.fetch).toBe(fetchBefore);
+    expect(await (await fetch(appUrl)).text()).toBe("ok");
   });
 });

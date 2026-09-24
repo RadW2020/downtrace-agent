@@ -12,6 +12,15 @@ interface Pending {
 
 const MAX_TARGET_LENGTH = 256;
 
+export interface InstrumentHttpDeps {
+  log: Logger;
+  /**
+   * Where a failure of this observer's own code goes: the agent's count of internal errors, which logs it at
+   * debug, sends the count in the batch and disables the instrumentation at the tenth (invariant 2, ADR 0161).
+   */
+  internalError: (err: unknown) => void;
+}
+
 /**
  * Observes outgoing HTTP calls, so a dependency that gets slower or starts failing can be told apart from the
  * application getting slower. Nothing is patched: `fetch` (undici) and the `node:http` client both publish on
@@ -20,7 +29,8 @@ const MAX_TARGET_LENGTH = 256;
  * The response events do not necessarily run in the async context of whoever made the call, so the request's
  * context is captured when the call is created and the result is recorded into it when it ends.
  */
-export function instrumentHttp(log: Logger): () => void {
+export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
+  const { log, internalError } = deps;
   const pending = new WeakMap<object, Pending>();
 
   const begin = (key: object | undefined, target: string): void => {
@@ -39,7 +49,7 @@ export function instrumentHttp(log: Logger): () => void {
     recordCallIn(p.ctx, "http", p.target, performance.now() - p.started, failed || (status ?? 0) >= 500);
   };
 
-  const subscriptions: Array<[string, (message: unknown) => void]> = [
+  const handlers: Array<[string, (message: unknown) => void]> = [
     [
       "undici:request:create",
       (message) => {
@@ -71,9 +81,22 @@ export function instrumentHttp(log: Logger): () => void {
     ],
     ["http.client.request.error", (message) => end((message as { request?: object }).request, undefined, true)],
   ];
+  // Every subscriber runs behind one guard. Node calls a subscriber inside a `try` of its own and rethrows what it
+  // catches on the next tick as an uncaught exception, so a throw here would end the application's process.
+  // Recording is best effort, and a failure is the instrumentation's own (invariant 2, ADR 0161).
+  const subscriptions = handlers.map(([name, handler]): [string, (message: unknown) => void] => [
+    name,
+    (message) => {
+      try {
+        handler(message);
+      } catch (err) {
+        internalError(err);
+      }
+    },
+  ]);
 
   for (const [name, handler] of subscriptions) diagnostics_channel.subscribe(name, handler);
-  const restoreFetch = catchFetchConnectFailures();
+  const restoreFetch = catchFetchConnectFailures(internalError);
   log.debug(`observing outgoing HTTP on ${subscriptions.length} channels`);
 
   return () => {
@@ -91,7 +114,7 @@ export function instrumentHttp(log: Logger): () => void {
  * for this request while it ran, the call is counted as a failed one. On every other path it does nothing and the
  * channels above do the work, so there is no double counting.
  */
-function catchFetchConnectFailures(): () => void {
+function catchFetchConnectFailures(internalError: (err: unknown) => void): () => void {
   const original = globalThis.fetch;
   if (typeof original !== "function") return () => {};
 
@@ -103,8 +126,13 @@ function catchFetchConnectFailures(): () => void {
     try {
       return await original(input, init);
     } catch (error) {
-      if (ctx.recorded === before) {
-        recordCallIn(ctx, "http", hostOfInput(input), performance.now() - started, true);
+      // Best effort, as in the subscribers: had this thrown, the application would get our error and not its own.
+      try {
+        if (ctx.recorded === before) {
+          recordCallIn(ctx, "http", hostOfInput(input), performance.now() - started, true);
+        }
+      } catch (failure) {
+        internalError(failure);
       }
       throw error; // the application sees exactly the error it would have seen
     }

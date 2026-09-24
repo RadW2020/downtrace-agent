@@ -1,19 +1,34 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { afterEach, describe, expect, it } from "vitest";
-import { enterRequest, type RequestContext } from "../src/context.ts";
+import { currentContext, enterRequest, type RequestContext } from "../src/context.ts";
 import { instrumentRedis } from "../src/instrument/redis.ts";
 import type { Logger } from "../src/log.ts";
+import { escapedFrom } from "./support/escaped.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 const channel = diagnostics_channel.tracingChannel("ioredis:command");
 
+/**
+ * What the observer reported as a failure of its own. Until gh-663 such a failure was an uncaught exception,
+ * which the runner reports; now it is handed over here, and a test that is not about one checks it stays empty,
+ * so it is as loud as it was.
+ */
+const failures: unknown[] = [];
+const deps = {
+  log: quiet,
+  internalError: (err: unknown): void => {
+    failures.push(err);
+  },
+};
+
 const stops: Array<() => void> = [];
 afterEach(() => {
   for (const stop of stops.splice(0)) stop();
+  expect(failures.splice(0), "the observer failed while recording").toEqual([]);
 });
 
 function observing(): void {
-  stops.push(instrumentRedis(quiet));
+  stops.push(instrumentRedis(deps));
 }
 
 /**
@@ -79,10 +94,71 @@ describe("instrumentRedis", () => {
   });
 
   it("stops observing when told to", async () => {
-    const stop = instrumentRedis(quiet);
+    const stop = instrumentRedis(deps);
     stop();
     const ctx = enterRequest();
     await command({ command: "GET", serverAddress: "127.0.0.1", serverPort: 6379 });
     expect(redisWork(ctx)).toHaveLength(0);
+  });
+});
+
+/**
+ * Invariant 2 on both ways a command ends, and `product.md:241`: «it never throws exceptions into the user's code
+ * nor breaks the application». Until gh-663 the handlers recorded with no guard, and Node rethrows a subscriber's
+ * throw on the next tick as an uncaught exception, which ends the process. The channel is Node's own, published
+ * the way ioredis does: what Node does with a subscriber's throw is the whole claim, and it is Node's code.
+ */
+describe("a failure while recording never reaches the application", () => {
+  const broken = new Error("exclusion broke");
+  /**
+   * The request's exclusion list, which `recordCallIn` consults before anything else (`context.ts:157`): the
+   * instrumentation's own code, not the driver's.
+   */
+  const exploding = {
+    has: (): boolean => {
+      throw broken;
+    },
+  };
+  const refused = new Error("redis said no");
+
+  /** What the command settled with. Compared by identity: the value and the error are the application's own. */
+  async function settled(run: () => Promise<unknown>): Promise<{ value?: unknown; error?: unknown }> {
+    try {
+      return { value: await run() };
+    } catch (error) {
+      return { error };
+    }
+  }
+
+  type Command = [name: string, run: () => Promise<unknown>];
+  const commands: Command[] = [
+    [
+      "a command that succeeds",
+      () => channel.tracePromise(async () => "OK", { command: "GET", serverAddress: "127.0.0.1", serverPort: 6379 }),
+    ],
+    [
+      "a command that fails",
+      () =>
+        channel.tracePromise(
+          async () => {
+            throw refused;
+          },
+          { command: "EVAL", serverAddress: "127.0.0.1", serverPort: 6379 },
+        ),
+    ],
+  ];
+
+  it.each(commands)("%s settles as it does outside a request, and the failure is counted", async (_command, run) => {
+    observing();
+    // The same command where the observer records nothing, which is what the application sees without it.
+    expect(currentContext(), "the first command has to run outside a request").toBeUndefined();
+    const bare = await settled(run);
+    enterRequest(undefined, undefined, exploding);
+    const { value: seen, escaped } = await escapedFrom(() => settled(run));
+    expect(seen.value).toBe(bare.value);
+    expect(seen.error).toBe(bare.error);
+    expect(escaped, "escaped as an uncaught exception").toEqual([]);
+    // Handed to the agent's count of internal errors once, by whichever handler ended the command.
+    expect(failures.splice(0)).toEqual([broken]);
   });
 });
