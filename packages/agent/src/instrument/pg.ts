@@ -123,14 +123,20 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   const fingerprints = deps.fingerprints;
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
-    const target = targetOfClient(this);
-    // Everything below is best effort: a bug here must never change what the application's query does.
+    // Only the instrumentation's own work sits inside this `try`, and all of it is best effort: a bug here must never
+    // change what the application's query does. In the callback form, putting a callback of its own in place of the
+    // application's is the last thing it does, so a failure before it leaves the arguments as the application wrote
+    // them. pg is called after the `try`, once, in both forms: what pg throws, or what an application callback it
+    // calls throws, is the application's and reaches it as it came, where the `catch` used to take it for the
+    // instrumentation's and call pg a second time (gh-662).
     let done: ((failed?: boolean, err?: unknown) => void) | undefined;
     try {
+      // Inside, because it reads the client's own properties, and what a getter there throws is not the query's.
+      const target = targetOfClient(this);
       const started = performance.now();
       const sql = fingerprints ? queryTextOf(args) : undefined;
       let counted = false;
-      done = (failed = false, err?: unknown) => {
+      const record = (failed = false, err?: unknown) => {
         if (counted) return;
         counted = true;
         const ms = performance.now() - started;
@@ -188,28 +194,32 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
           }
           return callback.apply(this, cbArgs);
         };
-        return original.apply(this, args);
+      } else {
+        done = record;
       }
     } catch {
-      return original.apply(this, args); // instrumentation failed before doing anything: run the query untouched
+      // The instrumentation failed before doing anything: the query goes to pg as the application wrote it, and is
+      // not recorded.
     }
 
     const result = original.apply(this, args);
+    // The callback form records from its callback, and a query the instrumentation failed to prepare is not recorded.
+    if (!done) return result;
     // Promise form. A Cursor or a QueryStream is not thenable and passes through unmeasured, by design.
     if (result && typeof (result as PromiseLike<unknown>).then === "function") {
       const settle = done;
       return (result as Promise<unknown>).then(
         (value) => {
-          settle?.();
+          settle();
           return value;
         },
         (err: unknown) => {
-          settle?.(true, err);
+          settle(true, err);
           throw err; // the application sees exactly the error it would have seen
         },
       );
     }
-    done?.();
+    done();
     return result;
   };
 
@@ -236,32 +246,44 @@ function wrapPoolConnect(pg: PgModule, log: Logger): void {
   const unrecorded = (err: unknown): void =>
     log.debug(`pg: recording a connection wait failed: ${err instanceof Error ? err.message : String(err)}`);
   proto.connect = function (this: unknown, ...args: unknown[]): unknown {
+    // The same boundary as `query`'s: the instrumentation's own work inside the `try`, and the pool asked after it,
+    // once. An ending pool calls the callback before `connect` returns (`pg-pool/index.js:190-194`), so what an
+    // application's callback throws comes back through here; inside the `try`, the `catch` asked the pool again and
+    // the callback ran twice (gh-662).
     let started: number;
+    let promised = false;
     try {
       started = performance.now();
-      if (typeof args.at(-1) === "function") {
+      const last = args.at(-1);
+      if (typeof last === "function") {
         // The callback form is how `pool.query()` works inside. The pool queues this callback and calls it later
         // from whoever released a connection, so without binding it the rest of the request would run under
         // another request's context and its queries would be counted against that one.
-        const callback = args.at(-1) as (...cbArgs: unknown[]) => unknown;
+        const callback = last as (...cbArgs: unknown[]) => unknown;
         const ctx = currentContext();
-        if (!ctx) return original.apply(this, args); // nothing to attribute: leave the callback untouched
-        // One binding, not two: an AsyncResource per acquisition is the price of correct attribution, and
-        // `pool.query()` acquires a connection for every query, so paying it twice is measurable.
-        args[args.length - 1] = AsyncResource.bind(function (this: unknown, ...cbArgs: unknown[]): unknown {
-          try {
-            recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
-          } catch (err) {
-            unrecorded(err);
-          }
-          return callback.apply(this, cbArgs);
-        });
-        return original.apply(this, args);
+        // Outside a request there is nothing to attribute, and the callback is left untouched.
+        if (ctx) {
+          // One binding, not two: an AsyncResource per acquisition is the price of correct attribution, and
+          // `pool.query()` acquires a connection for every query, so paying it twice is measurable.
+          args[args.length - 1] = AsyncResource.bind(function (this: unknown, ...cbArgs: unknown[]): unknown {
+            try {
+              recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+            } catch (err) {
+              unrecorded(err);
+            }
+            return callback.apply(this, cbArgs);
+          });
+        }
+      } else {
+        promised = true;
       }
     } catch {
-      return original.apply(this, args);
+      // The instrumentation failed before doing anything: the pool is asked as the application asked it, and the
+      // wait is not recorded.
     }
     const result = original.apply(this, args);
+    // The callback form records from its callback.
+    if (!promised) return result;
     if (result && typeof (result as PromiseLike<unknown>).then === "function") {
       return (result as Promise<unknown>).then(
         (client) => {

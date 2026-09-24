@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { enterRequest } from "../src/context.ts";
+import { currentContext, enterRequest } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import { instrumentPg } from "../src/instrument/pg.ts";
@@ -541,6 +541,20 @@ describe("a failure while recording never reaches the application", () => {
     });
   });
 
+  // Reading where a client points is the instrumentation's work as much as recording is, and until gh-662 it was
+  // the one part of it before any `try`: a client whose `host` throws threw into the application's own call.
+  it.each(forms)("a client whose target cannot be read gets its rows in the %s form", async (_form, run) => {
+    const { Connection, escaped } = connection();
+    class Unreadable extends Connection {
+      get host(): string {
+        throw new Error("host broke");
+      }
+    }
+    instrumentPg({ log: quiet, moduleImpl: { Client: Unreadable } });
+    enterRequest();
+    await expect(unlessEscaped(run(queryOf(new Unreadable())), escaped)).resolves.toEqual(ROWS);
+  });
+
   describe("pg's pool.connect(), when the exclusion list throws", () => {
     type Connect = [name: string, connect: (pool: pg.Pool) => Promise<unknown>];
     const connects: Connect[] = [
@@ -574,6 +588,132 @@ describe("a failure while recording never reaches the application", () => {
       // The application's own error, not the instrumentation's.
       await expect(unlessEscaped(connect(pool), escaped)).rejects.toBe(refused);
       await pool.end();
+    });
+  });
+});
+
+/**
+ * Invariant 2 from the other side: what pg throws, or what an application callback it calls throws, is the
+ * application's, and reaches it as it would with no instrumentation — once. Until gh-662 the callback forms called
+ * pg inside the `try` that exists for the instrumentation's own failures, and its `catch` took the application's
+ * throw for one of those and called pg a second time. An ended pool calls a `connect` callback before returning
+ * (`pg-pool/index.js:190-194`), so a callback that rethrows its error, the usual pattern, ran twice.
+ */
+describe("what pg throws or calls back reaches the application once", () => {
+  type Call = (...args: unknown[]) => unknown;
+  /**
+   * What the application saw: how many times the row's code ran — the application's callback on the pool, pg's
+   * own `query` on the client, where pg throws before it calls anything back — and what was thrown at it.
+   */
+  interface Seen {
+    runs: number;
+    thrown: unknown;
+  }
+
+  /** What a call threw at its caller, synchronously, as something two runs of the same call can share. */
+  function thrownBy(call: () => unknown): unknown {
+    try {
+      call();
+    } catch (err) {
+      return err instanceof Error ? `${err.name}: ${err.message}` : err;
+    }
+    return "nothing";
+  }
+
+  /**
+   * `pg`'s real pool, ended before it ever built a client, so no connection is made. The `Client` is a subclass of
+   * `pg`'s own so that instrumenting it patches the subclass and not the module every other test shares.
+   */
+  async function endedPool(instrumented: boolean): Promise<pg.Pool> {
+    class Client extends pg.Client {}
+    class Pool extends pg.Pool {}
+    if (instrumented) instrumentPg({ log: quiet, moduleImpl: { Client, Pool } });
+    const pool = new Pool();
+    await pool.end();
+    return pool;
+  }
+
+  /** `pg`'s real client, never connected, with a count of how many times pg's own `query` is entered. */
+  function countedClient(instrumented: boolean): { query: Call; entered: () => number } {
+    let entered = 0;
+    const query = pg.Client.prototype.query as Call;
+    class Client extends pg.Client {}
+    // Its own `query`, so it is this one the instrumentation wraps, and what is counted is the calls that reach pg.
+    (Client.prototype as unknown as Record<string, unknown>).query = function (this: unknown, ...args: unknown[]) {
+      entered += 1;
+      return query.apply(this, args);
+    };
+    if (instrumented) instrumentPg({ log: quiet, moduleImpl: { Client } });
+    const client = new Client();
+    return { query: (client as unknown as { query: Call }).query.bind(client), entered: () => entered };
+  }
+
+  /** One call of the application's, run against pg with the instrumentation or without it. */
+  type Row = [name: string, run: (instrumented: boolean) => Promise<Seen>];
+  const rows: Row[] = [
+    [
+      "pool.connect(cb) on an ended pool, whose callback rethrows",
+      async (instrumented) => {
+        const pool = await endedPool(instrumented);
+        let runs = 0;
+        const thrown = thrownBy(() =>
+          pool.connect((err) => {
+            runs += 1;
+            if (err) throw err;
+          }),
+        );
+        return { runs, thrown };
+      },
+    ],
+    [
+      "pool.query(sql, cb) on an ended pool, whose callback rethrows",
+      async (instrumented) => {
+        const pool = await endedPool(instrumented);
+        let runs = 0;
+        const thrown = thrownBy(() =>
+          pool.query("SELECT 1", (err) => {
+            runs += 1;
+            if (err) throw err;
+          }),
+        );
+        return { runs, thrown };
+      },
+    ],
+    [
+      "client.query(null, cb), which pg refuses before calling back",
+      async (instrumented) => {
+        const { query, entered } = countedClient(instrumented);
+        const thrown = thrownBy(() => query(null, () => {}));
+        return { runs: entered(), thrown };
+      },
+    ],
+    [
+      "client.query(null), the same in the promise form",
+      async (instrumented) => {
+        const { query, entered } = countedClient(instrumented);
+        const thrown = thrownBy(() => query(null));
+        return { runs: entered(), thrown };
+      },
+    ],
+  ];
+
+  type Where = [name: string, enter: () => void];
+  const where: Where[] = [
+    [
+      "inside a request",
+      () => {
+        enterRequest();
+      },
+    ],
+    ["outside a request", () => expect(currentContext(), "has to run outside a request").toBeUndefined()],
+  ];
+
+  describe.each(where)("%s", (_where, enter) => {
+    it.each(rows)("%s: as many runs and the same error as with no instrumentation", async (_row, run) => {
+      const bare = await run(false);
+      expect(bare.runs, "what pg does on its own").toBe(1);
+      enter();
+      expect(await run(true)).toEqual(bare);
     });
   });
 });
