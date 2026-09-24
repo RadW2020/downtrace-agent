@@ -38,6 +38,20 @@ const WORD = `[${ALNUM}_]`;
 const EDGE = `(?:(?<=${WORD})(?!${WORD})|(?<!${WORD})(?=${WORD}))`;
 
 /**
+ * Where a URL's authority begins, as Node's URL parser reads one: after `://`, and after the colon of a scheme the URL
+ * standard calls special when no slash follows it, since the parser reads an authority there all the same
+ * (`https:api.example.com?name=alice`). The scheme is the parser's: a name that follows a letter, a digit, a `+`, a `-`
+ * or a `.` is the end of another name (`rows:` is not `ws:`), and case does not matter. A special scheme followed by
+ * any slash but `//` is a word with a separator in it, and the path rule's (ADR 0180).
+ */
+const AUTHORITY = String.raw`(?::\/\/|(?<![a-z\d+.-])(?:https?|wss?|ftp|file):(?![/\\]))`;
+/**
+ * A host and its port, when that is all an authority is. It ends where the parser ends it: at a `/`, a `?`, a `#`, and a
+ * `\`, which is a `/` to the parser in a special scheme and which it refuses in the host of any other (ADR 0180).
+ */
+const HOST = String.raw`[^\s/\\?#@:]*(?::\d*)?`;
+
+/**
  * Anything that looks like a value. Order matters three times. A URL runs first, because the email rule would take
  * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. A path runs next to it,
  * although its place decides nothing: it takes a whole word, whatever the others left in it. An email runs before
@@ -51,7 +65,8 @@ const EDGE = `(?:(?<=${WORD})(?!${WORD})|(?<!${WORD})(?=${WORD}))`;
  * The patterns that read words are the ones they were with `\w`, `\d` and `\b` read in every script, and nothing
  * else: on a message made only of ASCII each matches exactly what it matched before, so the identity of such an
  * error does not move unless it carries a shape a rule was added for since — a backtick, a `://`, a word with a `/`
- * or a `\` in it —, and `sanitize.test.ts` checks it against the rules as they were (ADR 0170, ADR 0175).
+ * or a `\` in it, a special scheme's name and colon —, and `sanitize.test.ts` checks it against the rules as they were
+ * (ADR 0170, ADR 0175, ADR 0180).
  *
  * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
  * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
@@ -61,8 +76,9 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
   // stays, and so do the host and its port when the authority is nothing else, because that is the shape a
   // dependency target already travels in. An authority that is anything else — a user and a password, a password
   // with a `/` in it, an IPv6 literal — goes whole with the rest, rather than a rule guessing where a credential
-  // ends. The host is still read by the rules below, as any word is (ADR 0170).
-  /(?<=:\/\/)(?![^\s/?#@:]*(?::\d*)?(?:[\s/?#]|$))\S+|(?<=:\/\/[^\s/?#@:]*(?::\d*)?[/?#])\S+/g,
+  // ends. The host is still read by the rules below, as any word is (ADR 0170). Where the authority begins and where
+  // the host ends are the parser's, `\` included (ADR 0180).
+  new RegExp(String.raw`(?<=${AUTHORITY})(?!${HOST}(?:[\s/\\?#]|$))\S+|(?<=${AUTHORITY}${HOST}[/\\?#])\S+`, "gi"),
   // A path, and anything else a word carries a `/` or a `\` in: the whole word, with nothing of it left. Its segments
   // are the names of things, a plain word is all a segment needs to be, and whether a first segment is structure or a
   // tenant is what no rule can tell; the structure travels anyway, as the route and the stack signature. So a path

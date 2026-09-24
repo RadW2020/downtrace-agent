@@ -91,6 +91,20 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
     value: "payroll",
     sanitised: "could not connect to postgres://?",
   },
+  // Its host ends where Node's URL parser ends it (gh-713). A `\` is a `/` to the parser, so the path goes and the host
+  // stays; the path rule does not see it, because a word that opens with a URL is this rule's.
+  {
+    message: "request to https://api.example.com\\users\\alice failed",
+    value: "alice",
+    sanitised: "request to https://api.example.com\\? failed",
+  },
+  // And a special scheme needs no slashes after it for the parser to read a host there. With none, there is no `://`
+  // and no separator in the word, so no rule read it and its query left whole.
+  {
+    message: "request to https:api.example.com?name=alice failed",
+    value: "alice",
+    sanitised: "request to https:api.example.com? failed",
+  },
 
   // A path with no scheme in front of it, and a file path: a word with a `/` or a `\` in it goes whole, because its
   // segments are the names of things and a plain word is all a segment needs to be (gh-697). Each of these left the

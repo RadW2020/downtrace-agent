@@ -142,7 +142,10 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
 - everything in a URL after its host. The scheme and a host with its port stay, because that is what the name
   of a dependency already carries: `https://api.example.com/users/alice?name=alice` becomes
   `https://api.example.com/?`. A URL whose authority holds anything else, a user and a password for one, keeps
-  only its scheme: `postgres://?`;
+  only its scheme: `postgres://?`. The host ends where Node's URL parser ends it, so a `\` ends it as a `/` does
+  (`https://api.example.com\users\alice` becomes `https://api.example.com\?`), and a scheme such as `https:` with
+  no slashes after it is read as a URL all the same (`https:api.example.com?name=alice` becomes
+  `https:api.example.com?`);
 - any other word with a `/` or a `\` in it, whole: a path with no scheme and its query (`/users/alice?name=alice`),
   a file path on either system (`/home/alice/orders.csv`, `C:\Users\alice\orders.csv`), a relative one, and a host
   followed by a path with no scheme in front (`api.example.com/users/alice`). Nothing of it stays, not even its
@@ -151,13 +154,15 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
 
 It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. A path with a space in it ends at the
 space unless it is between quotes, so the words after the space travel. Nor, yet, does it recognise a span between
-`‹ ›` or fullwidth quotes. The guarantee is «no identifier, no address, no token», not «nothing about a person» —
-so do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not measure
-users (IMP-01), and this call cannot enforce that on prose you wrote.
+`‹ ›` or fullwidth quotes, or a query that follows neither a path nor the host of a URL with its scheme
+(`api.example.com?name=alice`). The guarantee is «no identifier, no address, no token», not «nothing about a
+person» — so do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not
+measure users (IMP-01), and this call cannot enforce that on prose you wrote.
 
 **The first version that recognises all of these changes some error signatures, once.** Earlier versions let
-through a URL's path, a path with no scheme and a file path, quotes other than `'` and `"`, backticks, and digits
-and addresses outside ASCII. An error whose message carried one of them is sanitised differently now, and the hash
+through a URL's path, whether it followed the host with a `/` or a `\`, the query of a URL with no slashes after its
+scheme, a path with no scheme and a file path, quotes other than `'` and `"`, backticks, and digits and addresses
+outside ASCII. An error whose message carried one of them is sanitised differently now, and the hash
 of that text is the error's identity, so after the upgrade Downtrace lists it as a new error and the old one stops
 being seen. Most of these were one error per value anyway — `user “alice” not found` and `user “bob” not found`
 were two — and now they group. A message made only of ASCII with no URL, no backtick and no word with a `/` or a

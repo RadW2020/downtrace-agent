@@ -103,9 +103,11 @@ describe("what actually leaves, in the bytes", () => {
     }
     // And each of those cases did arrive, as what its rule left of it: a value missing from a batch that never
     // carried its error would prove nothing. The text of a signature is the type, the message and, after a `·`,
-    // where it was thrown.
+    // where it was thrown. Looked for as JSON writes it, since these are bytes: the `\` a URL keeps after its host is
+    // `\\` in them.
     for (const { sanitised } of SANITISER_CASES) {
-      expect(body, `«${sanitised}» never reached the wire`).toContain(`Error: ${sanitised} · `);
+      const written = JSON.stringify(`Error: ${sanitised} · `).slice(1, -1);
+      expect(body, `«${sanitised}» never reached the wire`).toContain(written);
     }
     expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });

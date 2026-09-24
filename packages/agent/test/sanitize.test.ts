@@ -100,6 +100,18 @@ describe("what a URL keeps", () => {
     // A password with a `/` in it is not a URL, and it is exactly the one a rule guessing where it ends would cut.
     ["could not connect to postgres://payroll:hun/ter@db.internal/orders", "could not connect to postgres://?"],
     ["could not connect to http://[::1]:3000/alice", "could not connect to http://?"],
+    // A `\` ends a host where a `/` would, as the parser reads it (gh-713): straight after the slashes, which leaves an
+    // empty host, and after a port, which is a host and a port and keeps them.
+    ["request to https://\\api.example.com\\users\\alice failed", "request to https://\\? failed"],
+    ["request to https://api.example.com:8080\\users\\alice failed", "request to https://api.example.com:?\\? failed"],
+    // In a scheme that is not special too, where the parser refuses a `\` in a host: nothing after one is a host.
+    ["could not connect to postgres://db.internal\\orders\\alice", "could not connect to postgres://db.internal\\?"],
+    // A special scheme with no slashes after it: a user takes the rest with it, as after `://`, and the scheme is read
+    // in any case, since the parser lowercases it.
+    ["could not connect to https:payroll@localhost", "could not connect to https:?"],
+    ["request to HTTPS:api.example.com?name=alice failed", "request to HTTPS:api.example.com? failed"],
+    // What follows `file:` is a path to the parser, and a word with no separator stays wherever it is; its query goes.
+    ["open file:orders.csv?name=alice", "open file:orders.csv?"],
   ])("«%s» comes out as «%s»", (message, sanitised) => {
     expect(sanitizeMessage(message)).toBe(sanitised);
   });
@@ -108,6 +120,58 @@ describe("what a URL keeps", () => {
     expect(sanitizeMessage("request to https://api.example.com failed")).toBe(
       "request to https://api.example.com failed",
     );
+  });
+
+  // `rows` is the scheme of `rows:id:desc`, and not `ws`; read as `ws:` it would go whole, as an authority that is not
+  // a host. A scheme's name is letters, digits, `+`, `-` and `.`, and the parser reads it whole.
+  it.each(["rows", "git+ws", "x-ws", "a.ws", "sftp", "profile"])(
+    "has the scheme the parser reads, so «%s:», which only ends like a special one, is not one",
+    (name) => {
+      expect(new URL(`${name}:id:desc`).protocol).toBe(`${name}:`);
+      expect(sanitizeMessage(`sort by ${name}:id:desc`)).toBe(`sort by ${name}:id:desc`);
+    },
+  );
+});
+
+describe("where a URL's host ends", () => {
+  // Where Node's own URL parser ends it, and not where a list of separators written here says (gh-713). Each code point
+  // below 128 is put, in turn, in each place of a URL where the parser may end a host, in each of the six schemes the
+  // URL standard calls special. Wherever the parser still reads the host as written, nothing it reads outside that host
+  // may come out. Below 128 because the parser tells the parts of a URL apart by ASCII alone: a code point beyond it in
+  // a host is mapped or refused by IDNA, and none of the BMP ends a host (measured on the branch of gh-713).
+  const SPECIAL = ["http", "https", "ws", "wss", "ftp", "file"];
+  const HOST = "api.example.com";
+  // A user is written in front of a host with no dot in it, which the email rule would not take.
+  const PLACES: [string, string, (scheme: string, c: string) => string][] = [
+    ["after the host", HOST, (s, c) => `${s}://${HOST}${c}alice`],
+    ["after its port", HOST, (s, c) => `${s}://${HOST}:8080${c}alice`],
+    ["after a user", "localhost", (s, c) => `${s}://alice${c}localhost`],
+    ["straight after the slashes", HOST, (s, c) => `${s}://${c}${HOST}${c}alice`],
+    ["in place of each slash", HOST, (s, c) => `${s}:${c}${c}${HOST}${c}alice`],
+    ["with no slashes", HOST, (s, c) => `${s}:${HOST}${c}alice`],
+    ["after a user, with no slashes", "localhost", (s, c) => `${s}:alice${c}localhost`],
+  ];
+
+  /** What the parser reads outside the host of `url`: nothing when it refuses the URL or reads another host. */
+  const outsideTheHost = (url: string, host: string): string => {
+    if (!URL.canParse(url)) return "";
+    const parsed = new URL(url);
+    if (parsed.hostname !== host) return "";
+    return [parsed.username, parsed.password, parsed.pathname, parsed.search, parsed.hash].join(" ");
+  };
+
+  it.each(PLACES)("keeps nothing the parser reads outside it, %s, for every code point below 128", (_, host, url) => {
+    const asked: string[] = [];
+    for (const scheme of SPECIAL) {
+      for (let code = 0; code < 128; code++) {
+        const written = url(scheme, String.fromCharCode(code));
+        if (!outsideTheHost(written, host).includes("alice")) continue;
+        asked.push(written);
+        expect(sanitizeMessage(`request to ${written} failed`), JSON.stringify(written)).not.toContain("alice");
+      }
+    }
+    // Or this could be passing in a place where the parser never ends a host.
+    expect(asked).not.toHaveLength(0);
   });
 });
 
@@ -211,9 +275,18 @@ const hasPathWord = (message: string): boolean =>
   message.split(/\s+/).some((word) => /[/\\]/.test(word) && /[^/\\]/.test(word));
 
 /**
- * Messages made only of ASCII, with none of the three ASCII shapes a rule was added for since: a backtick and `://`
- * (gh-684), and a word with a `/` or a `\` in it (gh-697). Those three are the exceptions, and the only ones: a
- * message that carries one changes identity once, by design and said in the changeset (ADR 0170, ADR 0175).
+ * Whether the message names a special scheme with its colon: the shape gh-713 read a URL with no slashes in.
+ *
+ * Any of the six names, whatever precedes it and whatever follows its colon, so that it bounds what the rule may touch
+ * instead of copying where the rule decides a scheme begins.
+ */
+const hasSpecialScheme = (message: string): boolean => /(?:https?|wss?|ftp|file):/i.test(message);
+
+/**
+ * Messages made only of ASCII, with none of the four ASCII shapes a rule was added for since: a backtick and `://`
+ * (gh-684), a word with a `/` or a `\` in it (gh-697), and a special scheme's name and colon (gh-713). Those four are
+ * the exceptions, and the only ones: a message that carries one changes identity once, by design and said in the
+ * changeset (ADR 0170, ADR 0175, ADR 0180).
  *
  * Built from pieces each old rule catches, glued with and without spaces so that the pieces also meet, and from any
  * other printable character. Seeded, so a red names a message that comes back on the next run.
@@ -242,7 +315,9 @@ function asciiMessages(count: number): string[] {
       message += next() < 0.6 ? piece : String.fromCharCode(32 + Math.floor(next() * 95));
       if (next() < 0.5) message += " ";
     }
-    if (!message.includes("`") && !message.includes("://") && !hasPathWord(message)) messages.push(message);
+    const exception =
+      message.includes("`") || message.includes("://") || hasPathWord(message) || hasSpecialScheme(message);
+    if (!exception) messages.push(message);
   }
   return messages;
 }
@@ -250,7 +325,7 @@ function asciiMessages(count: number): string[] {
 describe("what an upgrade leaves where it was", () => {
   const messages = asciiMessages(5000);
 
-  it("is every message made only of ASCII with no backtick, no `://` and no word with a `/` or `\\` in it: it comes out as it did before gh-684", () => {
+  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it and no special scheme's name and colon: it comes out as it did before gh-684", () => {
     for (const message of messages) {
       expect(sanitizeMessage(message), `«${message}» as a message`).toBe(sanitizeWith(message, BEFORE_GH_684));
       expect(sanitizeValues(message), `«${message}» as a name`).toBe(sanitizeWith(message, VALUES_BEFORE_GH_684));
