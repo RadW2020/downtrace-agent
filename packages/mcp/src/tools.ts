@@ -31,6 +31,13 @@ const error = {
   type: "string",
   description: "The error's identifier, as `list_errors` gives it.",
 } as const;
+/**
+ * The orders `list_errors` takes, which its description is built from. The cloud defines them and refuses any
+ * other with the list of the ones it has, because a package here cannot read the cloud's (invariant 10); the
+ * end-to-end walk checks that this names every one of them.
+ */
+export const errorOrders = ["last-seen", "first-seen", "occurrences"] as const;
+
 const why = {
   type: "string",
   description:
@@ -143,12 +150,27 @@ export const tools: Tool[] = [
       "instrumentation came to see it — an instrumented operation failed, the framework turned it into a " +
       "5xx, the application reported it itself, or the process threw it outside any request. No traffic " +
       "minimum and no detector involved — an error is an observed fact, a finding is a detected " +
-      "difference, and the absence of a finding about an error says nothing either way.",
+      "difference, and the absence of a finding about an error says nothing either way. They come in the " +
+      "order you ask for, the one the page's headers give, and the answer says which order it applied " +
+      "under `sort`.",
     inputSchema: {
       type: "object",
       properties: {
         project,
         limit: { type: "number", description: "How many to return, 1 to 200. Fifty by default." },
+        sort: {
+          type: "string",
+          description:
+            `What to order them by: ${errorOrders.map((o) => `\`${o}\``).join(", ")}. The first is when ` +
+            "each was last seen, and the default; then when it was first seen, which puts first what arrived " +
+            "most recently; and how many times it was seen. Applied before the limit, so the first fifty by " +
+            "first seen are the fifty newest errors and not the fifty last seen in another order. Errors that " +
+            "tie stay in the default order.",
+        },
+        order: {
+          type: "string",
+          description: "`desc` (the default: the newest or the most first) or `asc`.",
+        },
         state: {
           type: "string",
           description:
@@ -161,7 +183,7 @@ export const tools: Tool[] = [
     },
     method: "GET",
     path: "/api/p/{slug}/errors",
-    query: ["limit", "state"],
+    query: ["limit", "state", "sort", "order"],
   },
   {
     name: "read_error",

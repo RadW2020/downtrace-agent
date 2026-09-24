@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, configFrom } from "../src/config.ts";
 import { linesOf, respondTo } from "../src/rpc.ts";
 import { createServer, PROTOCOL_VERSION, SERVER_NAME } from "../src/server.ts";
-import { tools } from "../src/tools.ts";
+import { errorOrders, toolNamed, tools } from "../src/tools.ts";
 
 /**
  * `product.md:196`: «an agent must be able to operate the product, not only read what somebody else extracted»
@@ -468,6 +468,34 @@ describe("errors", () => {
     // Neither is required: asking for nothing is the order the page shows by default.
     await s.handle("tools/call", { name: "project_status", arguments: { project: "tienda" } });
     expect(only(calls, 1).url).toBe("https://cloud.test/api/p/tienda/status");
+  });
+
+  /**
+   * gh-638: the errors come in the order the page's headers give them, asked with the same two words. Every
+   * key this tool describes, in both directions, from the list its description is built from: the cloud is
+   * the source of that list and refuses a key it does not know, and the end-to-end walk checks that the two
+   * agree.
+   */
+  it("asks for the order of the errors in the query string, for every order it describes", async () => {
+    const tool = toolNamed("list_errors");
+    const sort = tool?.inputSchema.properties.sort?.description ?? "";
+    expect(errorOrders.length).toBeGreaterThan(0);
+    for (const key of errorOrders) {
+      expect(sort).toContain(`\`${key}\``);
+      for (const order of ["desc", "asc"]) {
+        const { s, calls } = server([{}]);
+        await s.handle("tools/call", { name: "list_errors", arguments: { project: "tienda", sort: key, order } });
+        expect(only(calls, 0).url).toBe(`https://cloud.test/api/p/tienda/errors?sort=${key}&order=${order}`);
+      }
+    }
+    // Beside the limit and the filter, which it does not replace, and none of them required.
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "list_errors",
+      arguments: { project: "tienda", limit: 200, state: "all", sort: "first-seen" },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/errors?limit=200&state=all&sort=first-seen");
+    expect(tool?.inputSchema.required).toEqual(["project"]);
   });
 
   it("says which argument a triage operation is missing instead of calling the cloud without it", async () => {
