@@ -52,12 +52,14 @@ const AUTHORITY = String.raw`(?::\/\/|(?<![a-z\d+.-])(?:https?|wss?|ftp|file):(?
 const HOST = String.raw`[^\s/\\?#@:]*(?::\d*)?`;
 
 /**
- * Anything that looks like a value. Order matters three times. A URL runs first, because the email rule would take
+ * Anything that looks like a value. Order matters four times. A URL runs first, because the email rule would take
  * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. A path runs next to it,
- * although its place decides nothing: it takes a whole word, whatever the others left in it. An email runs before
- * the rest, because a rule that took part of it would leave the rest where no rule sees an address any more:
- * `ana4@cliente.com` would come out as `?@cliente.com`. And a UUID runs before the long run, for the reason given
- * beside it.
+ * although its place decides nothing: it takes a whole word, whatever the others left in it. A query runs after the
+ * URL, which puts a `?` in place of whatever followed a URL's own, and before the email and every rule after it, each
+ * of which leaves a `?` glued to whatever followed its value: read after the digit rule, `x9-alice` would lose
+ * `-alice`. An email runs before the rest, because a rule that took part of it would leave the rest where no rule sees
+ * an address any more: `ana4@cliente.com` would come out as `?@cliente.com`. And a UUID runs before the long run, for
+ * the reason given beside it.
  *
  * Deliberately eager. A false positive costs a `?` where a word would have read better; a false negative
  * puts a customer's identifier in a batch, and there is no taking that back.
@@ -65,8 +67,8 @@ const HOST = String.raw`[^\s/\\?#@:]*(?::\d*)?`;
  * The patterns that read words are the ones they were with `\w`, `\d` and `\b` read in every script, and nothing
  * else: on a message made only of ASCII each matches exactly what it matched before, so the identity of such an
  * error does not move unless it carries a shape a rule was added for since — a backtick, a `://`, a word with a `/`
- * or a `\` in it, a special scheme's name and colon —, and `sanitize.test.ts` checks it against the rules as they were
- * (ADR 0170, ADR 0175, ADR 0180).
+ * or a `\` in it, a special scheme's name and colon, a word with a `?` and a letter, a digit or an `_` after it —, and
+ * `sanitize.test.ts` checks it against the rules as they were (ADR 0170, ADR 0175, ADR 0180, ADR 0184).
  *
  * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
  * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
@@ -87,6 +89,15 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
   // separator is the `//` of a `://`, which is a URL and the rule above's. A space ends it, as it ends any word
   // (ADR 0175).
   /(?<!\S)(?![^\s/\\]*:\/\/)(?=\S*[^\s/\\])\S*[/\\]\S*/gu,
+  // A query that follows neither a path nor the host of a URL with its scheme: a word in which a `?` has a letter, a
+  // digit or an `_` after it, and no `/` or `\` before it. The whole word goes, as a path does, whatever stands in
+  // front of the `?`: a host with no scheme (`api.example.com?name=alice`), nothing (`?name=alice`), or a scheme the
+  // URL standard does not call special, with no `//` after it (`sms:ops?body=alice`). There the parser reads no host,
+  // only a path, and a scheme to it is any word with a colon, so nothing says what of the word is structure. A `?` with
+  // nothing after it, or nothing but punctuation, is punctuation (`unexpected token?`, `(?,?,?)`); a query after a
+  // separator is the path's, and one after a URL's host the URL rule's, which puts a `?` in its place. It reads a
+  // sentence after its quotes, so a word a closed quote was glued to goes too (ADR 0184).
+  new RegExp(String.raw`(?<!\S)(?=[^\s/\\?]*\?\S*${WORD})\S+`, "gu"),
   // Emails before anything splits them.
   new RegExp(String.raw`[${ALNUM}_.+-]+@[${ALNUM}_-]+\.[${ALNUM}_.-]+`, "gu"),
   // UUIDs. The long run below takes a UUID whole as well, hyphens and all, so this one hides nothing that one

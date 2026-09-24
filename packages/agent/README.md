@@ -150,23 +150,29 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
   a file path on either system (`/home/alice/orders.csv`, `C:\Users\alice\orders.csv`), a relative one, and a host
   followed by a path with no scheme in front (`api.example.com/users/alice`). Nothing of it stays, not even its
   first segment: your route templates travel as routes, and are not read by these rules. A slash on its own stays;
-  a word that only joins two words with a slash goes too (`i/o`, `application/xml`).
+  a word that only joins two words with a slash goes too (`i/o`, `application/xml`);
+- any other word with a query in it, whole: a word in which a `?` has a letter, a digit or an `_` after it. That is a
+  host with no scheme and its query (`api.example.com?name=alice`), a query on its own (`?name=alice`), and the query
+  of a scheme such as `sms:` or `mailto:` with no `//` after it (`sms:ops?body=alice`). A `?` at the end of a word, on
+  its own, or with nothing but punctuation after it stays (`unexpected token?`).
 
-It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. A path with a space in it ends at the
-space unless it is between quotes, so the words after the space travel. Nor, yet, does it recognise a span between
-`‹ ›` or fullwidth quotes, or a query that follows neither a path nor the host of a URL with its scheme
-(`api.example.com?name=alice`). The guarantee is «no identifier, no address, no token», not «nothing about a
-person» — so do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not
-measure users (IMP-01), and this call cannot enforce that on prose you wrote.
+It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. A path or a query with a space in it
+ends at the space unless it is between quotes, so the words after the space travel. Nor, yet, does it recognise a
+span between `‹ ›` or fullwidth quotes, a fragment that follows neither a path, a query nor the host of a URL with its
+scheme (`api.example.com#alice`), or a quoted value after an apostrophe such as the one in `can't`, of which the
+words after a space travel. The guarantee is «no identifier, no address, no token», not «nothing about a person» — so
+do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not measure users
+(IMP-01), and this call cannot enforce that on prose you wrote.
 
 **The first version that recognises all of these changes some error signatures, once.** Earlier versions let
 through a URL's path, whether it followed the host with a `/` or a `\`, the query of a URL with no slashes after its
-scheme, a path with no scheme and a file path, quotes other than `'` and `"`, backticks, and digits and addresses
-outside ASCII. An error whose message carried one of them is sanitised differently now, and the hash
-of that text is the error's identity, so after the upgrade Downtrace lists it as a new error and the old one stops
-being seen. Most of these were one error per value anyway — `user “alice” not found` and `user “bob” not found`
-were two — and now they group. A message made only of ASCII with no URL, no backtick and no word with a `/` or a
-`\` in it keeps its signature exactly.
+scheme, a path with no scheme and a file path, a query with no URL around it, quotes other than `'` and `"`,
+backticks, and digits and addresses outside ASCII. An error whose message carried one of them is sanitised differently
+now, and the hash of that text is the error's identity, so after the upgrade Downtrace lists it as a new error and the
+old one stops being seen. Most of these were one error per value anyway — `user “alice” not found` and
+`user “bob” not found` were two — and now they group. A message made only of ASCII keeps its signature exactly unless
+it carries a URL, a backtick, a word with a `/` or a `\` in it, or a word in which a `?` or a closing quote has a
+letter, a digit or an `_` after it.
 
 Only the **first** context for a signature in each window is sent, because what travels is counted per
 signature and not per occurrence.

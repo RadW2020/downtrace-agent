@@ -235,6 +235,100 @@ describe("what a path is", () => {
   });
 });
 
+describe("what a query is", () => {
+  // A `?` in a word with a letter, a digit or an `_` after it, and no `/` or `\` before it: a query that follows no path
+  // and no URL whose authority the URL rule reads. The whole word goes, whatever stands in front of it (gh-720).
+  it.each([
+    // A scheme that only ends like a special one is a scheme like any other that is not special.
+    ["sort by rows:id?dir=alice", "sort by ?"],
+    // Whatever is between the `?` and the value, another `?` included.
+    ["no handler for ??name=alice", "no handler for ?"],
+    ["no handler for ?&name=alice", "no handler for ?"],
+    // A URL in its query does not shield it, as it does not shield a path.
+    ["GET api.example.com?user=alice&next=https://app.example.com/home failed", "GET ? failed"],
+    // A word a closed quote is glued to: what the quote leaves is a `?` with a letter after it.
+    ["user 'alice'smith not found", "user ? not found"],
+    // A letter of any script, a digit or an `_`, as a word is read everywhere here. With a digit the digit rule would
+    // take the value and leave the host; an `_` is the name of jQuery's cache-buster, before its value.
+    ["no handler for ?имя=алиса", "no handler for ?"],
+    ["GET api.example.com?4821 failed", "GET ? failed"],
+    ["GET api.example.com?_= failed", "GET ? failed"],
+  ])("«%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // After a separator, either of them, a query is the path's, and the rule for a path takes the word whole. Were this
+  // rule to take it too, neither would decide it, and the guard of gh-651 could not tell if one of them were gone.
+  it.each(["no route for /users/alice?name=alice", "cannot read C:\\Users\\alice?name=alice"])(
+    "is not the one that decides «%s», which only the rule for a path does",
+    (message) => {
+      // Named by what it decides and not by its place in the list: the rule that takes a path with no query in it.
+      const path = decidersOf("cannot read /home/alice/orders.csv").map(String);
+      expect(path).toHaveLength(1);
+      expect(sanitizeMessage(message)).not.toContain("alice");
+      expect(decidersOf(message).map(String)).toEqual(path);
+    },
+  );
+
+  // Each of these is left as it was: a `?` with nothing after it, or nothing but punctuation, is punctuation, and so is
+  // the `?` a URL's query leaves.
+  it.each([
+    ["unexpected token?", "unexpected token?"],
+    ["expected a value, got ?", "expected a value, got ?"],
+    ["is it null?). no", "is it null?). no"],
+    // Placeholders written without spaces, which the collapse of a run of values makes one.
+    ["VALUES (?,?,?) failed", "VALUES (?) failed"],
+    ["see https://api.example.com?name=alice", "see https://api.example.com?"],
+  ])("is not in «%s», which comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  it("is not the `?` a later rule leaves, which is a value glued to a word, as `order-?` is", () => {
+    // Read after the digit rule, `x9-alice` would lose `-alice`, and a message with no `?` in it would move identity.
+    expect(sanitizeMessage("build x9-alice failed")).toBe("build ?-alice failed");
+  });
+
+  // Node's parser as the judge, as for where a URL's host ends. Each code point below 128 is put in each place of a
+  // query, after each thing a query may follow with no URL rule to read it, and wherever the parser reads the value in
+  // the query, the value may not come out. The word is read as a URL when it is one, and as a reference against a base
+  // when it is not. Whitespace is left out: to the sanitiser it ends a word, as it ends a path (ADR 0175), and what
+  // follows it is a word of its own, while the parser removes a tab or a newline and reads on.
+  const BASE = "http://base.invalid/";
+  const BEFORE = [
+    "api.example.com",
+    "",
+    "sms:ops",
+    "magnet:",
+    "mailto:ops@cliente.com",
+    // A scheme that only ends like a special one, which the URL rule leaves alone.
+    "rows:id",
+  ];
+  const PLACES: [string, (before: string, c: string) => string][] = [
+    ["right after the `?`", (before, c) => `${before}?${c}alice`],
+    ["between a name and its value", (before, c) => `${before}?name${c}alice`],
+    ["right before the `?`", (before, c) => `${before}${c}?name=alice`],
+  ];
+
+  /** What the parser reads as the query of `word`: nothing when it refuses it. */
+  const inTheQuery = (word: string): string => (URL.canParse(word, BASE) ? new URL(word, BASE).search : "");
+
+  it.each(PLACES)("keeps nothing the parser reads in it, %s, for every code point below 128", (_, place) => {
+    const asked: string[] = [];
+    for (const before of BEFORE) {
+      for (let code = 0; code < 128; code++) {
+        const c = String.fromCharCode(code);
+        if (/\s/.test(c)) continue;
+        const written = place(before, c);
+        if (!inTheQuery(written).includes("alice")) continue;
+        asked.push(written);
+        expect(sanitizeMessage(`GET ${written} failed`), JSON.stringify(written)).not.toContain("alice");
+      }
+    }
+    // Or this could be passing in a place where the parser never reads a query.
+    expect(asked).not.toHaveLength(0);
+  });
+});
+
 describe("what a quote is", () => {
   it("is not an apostrophe, although `’` is both", () => {
     expect(sanitizeMessage("can’t reach the server")).toBe("can’t reach the server");
@@ -264,6 +358,8 @@ const BEFORE_GH_684: readonly RegExp[] = [
 ];
 /** And the ones a name went through, which are the same without the quotes. */
 const VALUES_BEFORE_GH_684 = BEFORE_GH_684.slice(2);
+/** And the quotes, which a sentence goes through first: as they were, and as they are on ASCII with no backtick. */
+const QUOTES_BEFORE_GH_684 = BEFORE_GH_684.slice(0, 2);
 
 /**
  * Whether a word of the message has a `/` or a `\` in it and something besides: the shape gh-697 added a rule for.
@@ -283,10 +379,26 @@ const hasPathWord = (message: string): boolean =>
 const hasSpecialScheme = (message: string): boolean => /(?:https?|wss?|ftp|file):/i.test(message);
 
 /**
- * Messages made only of ASCII, with none of the four ASCII shapes a rule was added for since: a backtick and `://`
- * (gh-684), a word with a `/` or a `\` in it (gh-697), and a special scheme's name and colon (gh-713). Those four are
- * the exceptions, and the only ones: a message that carries one changes identity once, by design and said in the
- * changeset (ADR 0170, ADR 0175, ADR 0180).
+ * Whether a word of the message has a `?` in it with a letter, a digit or an `_` after it: the shape gh-720 added a rule
+ * for.
+ *
+ * Asked of the message as written, which is how a name reaches that rule, and once its quotes are read, which is how a
+ * sentence does: a closed quote glued to a word leaves a `?` with a letter after it (`'alice'user`), and that word goes
+ * too. Written with a split on spaces and not with that rule, so that it bounds what the rule may touch instead of
+ * copying it; and a `?` with nothing but punctuation after it is not one, so it stays in the corpus, where the rule has
+ * to leave it be.
+ */
+const hasQueryWord = (message: string): boolean => {
+  const quotesRead = QUOTES_BEFORE_GH_684.reduce((out, rule) => out.replace(rule, "?"), message);
+  return [message, quotesRead].some((text) => text.split(/\s+/).some((word) => /\?.*\w/.test(word)));
+};
+
+/**
+ * Messages made only of ASCII, with none of the five ASCII shapes a rule was added for since: a backtick and `://`
+ * (gh-684), a word with a `/` or a `\` in it (gh-697), a special scheme's name and colon (gh-713), and a word with a
+ * `?` and a letter, a digit or an `_` after it (gh-720). Those five are the exceptions, and the only ones: a message
+ * that carries one changes identity once, by design and said in the changeset (ADR 0170, ADR 0175, ADR 0180,
+ * ADR 0184).
  *
  * Built from pieces each old rule catches, glued with and without spaces so that the pieces also meet, and from any
  * other printable character. Seeded, so a red names a message that comes back on the next run.
@@ -316,7 +428,11 @@ function asciiMessages(count: number): string[] {
       if (next() < 0.5) message += " ";
     }
     const exception =
-      message.includes("`") || message.includes("://") || hasPathWord(message) || hasSpecialScheme(message);
+      message.includes("`") ||
+      message.includes("://") ||
+      hasPathWord(message) ||
+      hasSpecialScheme(message) ||
+      hasQueryWord(message);
     if (!exception) messages.push(message);
   }
   return messages;
@@ -325,7 +441,7 @@ function asciiMessages(count: number): string[] {
 describe("what an upgrade leaves where it was", () => {
   const messages = asciiMessages(5000);
 
-  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it and no special scheme's name and colon: it comes out as it did before gh-684", () => {
+  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it, no special scheme's name and colon and no word with a `?` and a letter, a digit or an `_` after it: it comes out as it did before gh-684", () => {
     for (const message of messages) {
       expect(sanitizeMessage(message), `«${message}» as a message`).toBe(sanitizeWith(message, BEFORE_GH_684));
       expect(sanitizeValues(message), `«${message}» as a name`).toBe(sanitizeWith(message, VALUES_BEFORE_GH_684));
@@ -336,6 +452,13 @@ describe("what an upgrade leaves where it was", () => {
     // Or the exception above could be hiding every slash, and the test passing on messages that have none.
     const alone = messages.filter((m) => m.split(/\s+/).some((word) => word === "/" || word === "\\"));
     expect(alone.length).toBeGreaterThan(100);
+  });
+
+  it("keeps the `?` with nothing but punctuation after it among them, on its own and at the end of a word", () => {
+    // Or the exception for a query could be hiding every `?`, and the rule for one never asked to leave them be.
+    const words = messages.flatMap((m) => m.split(/\s+/));
+    expect(words.filter((word) => word === "?").length).toBeGreaterThan(100);
+    expect(words.filter((word) => word.length > 1 && word.endsWith("?")).length).toBeGreaterThan(100);
   });
 
   it("asks each of those rules: every one of them changes some of these messages", () => {

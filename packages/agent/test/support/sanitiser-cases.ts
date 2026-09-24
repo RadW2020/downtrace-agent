@@ -118,6 +118,25 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
   // And a host with no scheme goes with its path: without a scheme nothing says the first segment is a host.
   { message: "GET api.example.com/users/alice failed", value: "alice", sanitised: "GET ? failed" },
 
+  // A query that follows neither a path nor the host of a URL with its scheme: a `?` in a word with a letter, a digit or
+  // an `_` after it takes the word whole, as a path does, whatever stands in front of it (gh-720). A host with no scheme
+  // goes with its query, as it goes with its path: without a scheme nothing says it is a host.
+  { message: "GET api.example.com?name=alice failed", value: "alice", sanitised: "GET ? failed" },
+  // With nothing at all in front of it.
+  { message: "no handler for ?name=alice", value: "alice", sanitised: "no handler for ?" },
+  // And after a scheme the URL standard does not call special, with no `//`. The parser reads no host there, only a
+  // path, which is a name like any segment; and to the parser a scheme is any word with a colon, so it goes too.
+  { message: "open sms:ops?body=alice", value: "alice", sanitised: "open ?" },
+  { message: "open magnet:?xt=urn:btih:abc&dn=alice", value: "alice", sanitised: "open ?" },
+  // Its path an address, which the email rule would take, leaving the query behind.
+  { message: "open mailto:ops@cliente.com?subject=alice", value: "alice", sanitised: "open ?" },
+  // And the word after a tab inside a URL: the parser removes the tab, and the sanitiser reads it as the end of a word.
+  {
+    message: "request to https:\tapi.example.com?name=alice failed",
+    value: "alice",
+    sanitised: "request to https: ? failed",
+  },
+
   // Letters, marks and digits of every script. Each of these is a value the ASCII reading of `\w`, `\d` and `\b` let
   // out whole: the address is cut at its accent before the `@` or before the dot, the digits are not digits, and the
   // long run is split at each accent into pieces too short to be one.
