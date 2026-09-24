@@ -275,8 +275,9 @@ process.once("SIGTERM", async () => {
 `shutdown()` is safe to call when the instrumentation is off, safe to call twice, and never throws — an
 application on its way out has nothing to do with an error from its telemetry.
 
-It waits for the cloud **at most one second in total**: the last batch and the evidence of any capture under way
-share that second, one after another. What has not landed when it passes is dropped — the last batch, if the cloud
+It waits for the cloud **at most one second in total**: a flush already under way when it is called —the regular
+one, or the one a signal started— and then the last batch and the evidence of any capture under way share that
+second, one after another. What has not landed when it passes is dropped — the last batch, if the cloud
 never answered it, and the evidence of the captures still waiting, which then expire in the cloud unless another
 instance of your service delivers them. With `DOWNTRACE_DEBUG=1` the log says which. A signal the instrumentation
 handles itself, and the flush when the event loop empties, keep the same second.

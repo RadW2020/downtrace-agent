@@ -222,6 +222,12 @@ export class Agent {
   private readonly onStart = (message: unknown): void => this.guard(() => this.requestStarted(message));
   private readonly onFinish = (message: unknown): void => this.guard(() => this.responseFinished(message));
   private readonly onSignal: Record<(typeof SIGNALS)[number], () => void>;
+  /**
+   * Every flush under way: the interval timer's, a signal's, `stop()`'s. The way out lets them finish before it
+   * takes what it sends (gh-657). Each is bounded by its requests' timeouts and leaves the set when it settles, so
+   * the set is bounded too.
+   */
+  private readonly flushing = new Set<Promise<boolean>>();
   private readonly onBeforeExit = (): void => {
     void this.flush(SHUTDOWN_FLUSH_MS, true);
   };
@@ -495,10 +501,35 @@ export class Agent {
    * that took the connection and never answered held a leaving process one second for the batch and five for
    * each capture under way — 21 s with four, against a limit that said one (gh-650). Otherwise it bounds the
    * batch, and each evidence has the sender's own default: nothing waits on a flush that is not leaving.
+   *
+   * **And the way out starts by letting every flush already under way finish**, within the same deadline. The
+   * sender has one batch in flight at a time and says `false` to a second, so a way out that found the interval's
+   * batch in flight sent nothing of its own, and the last interval left with the process (gh-657). A flush that
+   * is not leaving still waits for nothing: one per interval, each waiting behind a slow cloud, would pile up.
    */
-  private async flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
+  private flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
+    // Read before this one joins them: the way out waits for what was already under way, never for itself.
+    const underWay = leaving ? [...this.flushing] : [];
+    const flushing = this.flushOnce(timeoutMs, leaving, underWay);
+    this.flushing.add(flushing);
+    const forget = (): void => {
+      this.flushing.delete(flushing);
+    };
+    flushing.then(forget, forget);
+    return flushing;
+  }
+
+  private async flushOnce(
+    timeoutMs: number | undefined,
+    leaving: boolean,
+    underWay: Promise<boolean>[],
+  ): Promise<boolean> {
     const deadline = leaving ? AbortSignal.timeout(timeoutMs ?? SHUTDOWN_FLUSH_MS) : undefined;
     try {
+      // Before anything is taken, and not after: the batch in flight wipes, when it lands, the exceptions and the
+      // asks the sender holds for the next batch (gh-626), and a process that is leaving has no next batch. The
+      // flushes under way are not cut when the deadline passes; each keeps its own timeout.
+      if (deadline) await settledWithin(underWay, deadline);
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
       const profile = leaving ? this.profile.drain() : this.profile.rotate();
       if (profile) this.sender.enqueueProfile(profile);
@@ -869,6 +900,22 @@ export class Agent {
     };
     flush.then(resume, resume);
   }
+}
+
+/**
+ * Resolves once every one of `these` has settled or `deadline` has passed, whichever comes first. Never rejects: a
+ * flush that failed has finished all the same.
+ */
+async function settledWithin(these: Promise<unknown>[], deadline: AbortSignal): Promise<void> {
+  // An aborted signal fires no second `abort`, so waiting for one here would wait for `these` alone.
+  if (these.length === 0 || deadline.aborted) return;
+  let passed = (): void => {};
+  const timedOut = new Promise<void>((resolve) => {
+    passed = () => resolve();
+    deadline.addEventListener("abort", passed, { once: true });
+  });
+  await Promise.race([Promise.allSettled(these), timedOut]);
+  deadline.removeEventListener("abort", passed);
 }
 
 /**
