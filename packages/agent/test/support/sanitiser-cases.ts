@@ -30,6 +30,11 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
   { message: "user 'alice' not found", value: "alice", sanitised: "user ? not found" },
   // And a quote that never closes takes the rest of the message, or a malformed string would leave whole.
   { message: "user 'alice not found", value: "alice", sanitised: "user ?" },
+  // An apostrophe is not a quote (gh-732). The `'` of `can't` opened a span that closed on the value's opening quote,
+  // and the value's closing quote opened another, so the value sat between the two and what followed its space left.
+  { message: "Can't find user 'alice smith' here", value: "smith", sanitised: "Can't find user ? here" },
+  // And a quote closes only where a word ends, so an apostrophe inside the value does not end it either.
+  { message: "user 'O'Brien smith' not found", value: "smith", sanitised: "user ? not found" },
   {
     message: 'invalid input syntax for type uuid: "alice"',
     value: "alice",

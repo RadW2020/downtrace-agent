@@ -67,8 +67,9 @@ const HOST = String.raw`[^\s/\\?#@:]*(?::\d*)?`;
  * The patterns that read words are the ones they were with `\w`, `\d` and `\b` read in every script, and nothing
  * else: on a message made only of ASCII each matches exactly what it matched before, so the identity of such an
  * error does not move unless it carries a shape a rule was added for since — a backtick, a `://`, a word with a `/`
- * or a `\` in it, a special scheme's name and colon, a word with a `?` and a letter, a digit or an `_` after it —, and
- * `sanitize.test.ts` checks it against the rules as they were (ADR 0170, ADR 0175, ADR 0180, ADR 0184).
+ * or a `\` in it, a special scheme's name and colon, a word with a `?` and a letter, a digit or an `_` after it, a `'`
+ * inside a word or closed off the end of one —, and `sanitize.test.ts` checks it against the rules as they were
+ * (ADR 0170, ADR 0175, ADR 0180, ADR 0184, ADR 0189).
  *
  * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
  * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
@@ -113,6 +114,28 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * The apostrophe of an English contraction or possessive: a `'` with a word character before it and, after it, `t`,
+ * `s`, `d`, `m`, `re`, `ve` or `ll` ending the word, in either case (`can't`, `user's`, `I'd`, `I'm`, `you're`, `I've`,
+ * `it'll`, `CAN'T`).
+ *
+ * The one apostrophe the rule can tell apart. Any `'` between two letters would read `O'Brien smith` as a name, and
+ * then `user'alice smith` too, which is the same shape with a quote glued to a word: one of them would leave. What the
+ * ending could hide is one or two fixed letters, never a customer's value. So a name, an elision (`l'utilisateur`), a
+ * leading apostrophe (`'til`) and a possessive plural (`users'`) are still quotes, and cost the text after them rather
+ * than a value (ADR 0189).
+ */
+const CONTRACTION = `(?<=${WORD})'(?:t|s|d|m|re|ve|ll)(?!${WORD})`;
+/**
+ * Where a quote closes: where a word ends, at a `'` with something other than a space before it and nothing after it
+ * but punctuation, up to the next space or quote (`'alice'.`, `'alice'),`, and MySQL's `'alice'@'localhost'`).
+ *
+ * Not only «no word character right after it»: a value may begin with punctuation (`'@alice'`, `'(alice)'`), and its
+ * opening quote would then close a span that a name or a possessive plural before it had opened, leaving the value out
+ * (ADR 0189).
+ */
+const WORD_END = String.raw`(?<=\S)'(?![^\s']*${WORD})`;
+
+/**
  * Quoted spans, including an unterminated one — the same reasoning as the SQL scanner: a pattern that requires the
  * closing quote lets a malformed string through whole.
  *
@@ -122,12 +145,17 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
  * of `can’t`. A backtick is a quote too, although Prisma and MySQL name a field with it: the same character carries a
  * value in other messages, and `(?)` is the cost ADR 0083 already accepted for `relation "users"` (ADR 0170).
  *
+ * The ASCII `'` is both a quote and an apostrophe, so it is read by what stands on either side of it (ADR 0189). The
+ * apostrophe of an English contraction or possessive opens nothing, and any other `'` opens a span, one inside a word
+ * included; a span closes only where a word ends. So neither an apostrophe nor a quote that opens a word closes one,
+ * and nothing counts the quotes: a quote left open takes the rest of the message, whatever came before it.
+ *
  * Separate from the list above because they only mean «value» **in prose**. In an error message, what is
  * between quotes is the thing the message is about. Inside a SQL identifier there is nothing to quote: the
  * whole name is already between quotes, and a `"` in there is a character of the name (gh-350).
  */
 const QUOTED_SPANS: readonly RegExp[] = [
-  /'[^']*'?/g,
+  new RegExp(`(?!${CONTRACTION})'(?:[^']|(?!${WORD_END})')*'?`, "giu"),
   /"[^"]*"?/g,
   /[“„][^“”]*[“”]?/g,
   /[‘‚][^‘’]*[‘’]?/g,

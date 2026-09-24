@@ -246,8 +246,9 @@ describe("what a query is", () => {
     ["no handler for ?&name=alice", "no handler for ?"],
     // A URL in its query does not shield it, as it does not shield a path.
     ["GET api.example.com?user=alice&next=https://app.example.com/home failed", "GET ? failed"],
-    // A word a closed quote is glued to: what the quote leaves is a `?` with a letter after it.
-    ["user 'alice'smith not found", "user ? not found"],
+    // A word a closed quote is glued to: what the quote leaves is a `?` with a letter after it. A double quote, since a
+    // `'` with a letter after it no longer closes a span (gh-732).
+    ['user "alice"smith not found', "user ? not found"],
     // A letter of any script, a digit or an `_`, as a word is read everywhere here. With a digit the digit rule would
     // take the value and leave the host; an `_` is the name of jQuery's cache-buster, before its value.
     ["no handler for ?имя=алиса", "no handler for ?"],
@@ -338,6 +339,115 @@ describe("what a quote is", () => {
     // One rule for every quote would stop at `’` and let `alice` out.
     expect(sanitizeMessage("user “it’s alice” not found")).toBe("user ? not found");
   });
+
+  // The ASCII `'` is both as well, and it is read by what stands on either side of it (gh-732). The ticket's rows came
+  // out as `?`, `?`, `? smith?` and `can?`: the `'` of the contraction opened a span that closed on the value's opening
+  // quote. The last two are what Prisma 7.7.0 builds when the database does not answer and what mysql2 3.15.3 throws on
+  // a closed connection, and both travelled as `Can?`.
+  it.each([
+    ["can't find user 'alice'", "can't find user ?"],
+    ["user's 'alice' missing", "user's ? missing"],
+    ["Can't find user 'alice smith' here", "Can't find user ? here"],
+    ["can't reach the server", "can't reach the server"],
+    ["Can't reach database server at db.internal:5432", "Can't reach database server at db.internal:?"],
+    [
+      "Can't add new command when connection is in closed state",
+      "Can't add new command when connection is in closed state",
+    ],
+  ])("is not the apostrophe of a contraction: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // The endings of an English contraction or possessive, in either case: a `'` with a word character before it and one
+  // of these after it, ending the word, opens nothing, before a quoted value or with none after it. A word character of
+  // any script, as everywhere here.
+  it.each(["can't", "user's", "I'd", "I'm", "you're", "I've", "it'll", "CAN'T", "YOU'RE", "José's"])(
+    "is not the `'` of «%s»",
+    (word) => {
+      expect(sanitizeMessage(`${word} find 'alice smith' here`)).toBe(`${word} find ? here`);
+      expect(sanitizeMessage(`${word} find nothing here`)).toBe(`${word} find nothing here`);
+    },
+  );
+
+  // Any other `'` is a quote, one inside a word included. A quote glued to a word and a name with an apostrophe in it are
+  // the same shape, and only the ending of a contraction tells an apostrophe apart, so these go as they did.
+  it.each([
+    ["user'alice' not found", "user? not found"],
+    ["user'alice smith not found", "user?"],
+    ["near E'alice smith' at line 1", "near E? at line ?"],
+    ["user O'Brien not found", "user O?"],
+    // The letters after it are an ending only when they end the word, and only after a word: an initial after an opening
+    // quote is not a contraction.
+    ["user'sally smith' not found", "user? not found"],
+    ["user 'D Smith' not found", "user ? not found"],
+    // A possessive plural opens one too, and costs the rest of the message, as it did: that is text, not a value.
+    ["the users' records", "the users?"],
+  ])("is any other `'`: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // And a span closes only where a word ends: at a `'` with something other than a space before it and nothing but
+  // punctuation after it, up to the next space or quote. So neither an apostrophe nor a quote that opens a word closes
+  // one, whatever opened it.
+  it.each([
+    ["user 'alice's cart' not found", "user ? not found"],
+    // After punctuation too, and after nothing at all: anything but a space before it.
+    ["invalid name '(alice smith)' given", "invalid name ? given"],
+    ["invalid name '' given", "invalid name ? given"],
+    // MySQL's own shape: punctuation after it, and then another quote.
+    [
+      "Access denied for user 'alice'@'localhost' (using password: YES)",
+      "Access denied for user ?@? (using password: YES)",
+    ],
+    // A quote glued to the word after it does not close there, and the word goes with it, in any script: Turkish glues
+    // a suffix to a name with an apostrophe, and `ı` is a letter.
+    ["user 'alice'smith not found", "user ?"],
+    ["kullanıcı 'Burak'ı bulamadı", "kullanıcı ?"],
+    // A stray `'` opens a span, and the quote that opens the value does not close it: not after a space, and not after
+    // punctuation when the value begins with punctuation too.
+    ["can't trim the users' name ' alice smith'", "can't trim the users?"],
+    ["user O'Neil has no handle ('@alice smith')", "user O?)"],
+  ])("closes where a word ends: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // An apostrophe is one `'` more than the quotes, so a count would not say which `'` is left over: nothing is counted,
+  // and a quote left open takes the rest of the message, whatever came before it.
+  it.each([
+    ["can't find user 'alice smith", "can't find user ?"],
+    ["user 'alice' can't", "user ? can't"],
+  ])("counts nothing: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  it("keeps nothing of a quoted value, whatever apostrophes stand around it or inside it", () => {
+    // Every combination of what may stand before a value, what may open and close its quotes, what the value may be,
+    // and what may follow it. The apostrophes are of every kind above: a contraction, a name, a possessive plural, an
+    // elision and a leading one; the value may begin and end with punctuation; and its quote may be left open.
+    const before = [
+      "",
+      "can't find",
+      "user's",
+      "CAN'T",
+      "O'Neil",
+      "the users'",
+      "'til",
+      "l'utilisateur",
+      "rock 'n' roll",
+    ];
+    const opening = [" '", " ('", ": '", " name='", " x:'", " ['"];
+    const values = ["alice smith", "alice's cart", "O'Brien smith", "@alice smith", "(alice smith)", "alice smith."];
+    const closing = ["' here", "')", "',", "'", "'.", "'; retry", ""];
+    const after = ["", " can't", " it's", " users'", " O'Neil"];
+    for (const b of before)
+      for (const o of opening)
+        for (const v of values)
+          for (const c of closing)
+            for (const a of after) {
+              const message = `${b}${o}${v}${c}${a}`.trimStart();
+              expect(sanitizeMessage(message), JSON.stringify(message)).not.toMatch(/alice|smith|Brien/);
+            }
+  });
 });
 
 /**
@@ -394,11 +504,28 @@ const hasQueryWord = (message: string): boolean => {
 };
 
 /**
- * Messages made only of ASCII, with none of the five ASCII shapes a rule was added for since: a backtick and `://`
- * (gh-684), a word with a `/` or a `\` in it (gh-697), a special scheme's name and colon (gh-713), and a word with a
- * `?` and a letter, a digit or an `_` after it (gh-720). Those five are the exceptions, and the only ones: a message
- * that carries one changes identity once, by design and said in the changeset (ADR 0170, ADR 0175, ADR 0180,
- * ADR 0184).
+ * Whether the message has a `'` that the rule of gh-732 may read otherwise than the old one: one with a word character
+ * on both sides, which may be an apostrophe, or one at which the old rule closed a span though a space came before it or
+ * a word character came after it, before the next space or `'`.
+ *
+ * Written from the old rule's own pairing, which closed a span at every second `'`, and not with the new rule, so that
+ * it bounds what the new rule may touch instead of copying it. A quote that opens after a space or punctuation and closes
+ * before them is not one, so it stays in the corpus, where the new rule has to read it as the old one did.
+ */
+const hasQuoteOffAWordEdge = (message: string): boolean =>
+  [...message.matchAll(/'/g)].some(({ index }, i) => {
+    const before = message[index - 1] ?? "";
+    const after = message.slice(index + 1);
+    if (/\w/.test(before) && /^\w/.test(after)) return true;
+    return i % 2 === 1 && (/\s/.test(before) || /^[^\s']*\w/.test(after));
+  });
+
+/**
+ * Messages made only of ASCII, with none of the six ASCII shapes a rule was added for since: a backtick and `://`
+ * (gh-684), a word with a `/` or a `\` in it (gh-697), a special scheme's name and colon (gh-713), a word with a `?`
+ * and a letter, a digit or an `_` after it (gh-720), and a `'` inside a word or one the old rule closed off the end of a
+ * word (gh-732). Those six are the exceptions, and the only ones: a message that carries one changes identity once, by
+ * design and said in the changeset (ADR 0170, ADR 0175, ADR 0180, ADR 0184, ADR 0189).
  *
  * Built from pieces each old rule catches, glued with and without spaces so that the pieces also meet, and from any
  * other printable character. Seeded, so a red names a message that comes back on the next run.
@@ -432,7 +559,8 @@ function asciiMessages(count: number): string[] {
       message.includes("://") ||
       hasPathWord(message) ||
       hasSpecialScheme(message) ||
-      hasQueryWord(message);
+      hasQueryWord(message) ||
+      hasQuoteOffAWordEdge(message);
     if (!exception) messages.push(message);
   }
   return messages;
@@ -441,7 +569,7 @@ function asciiMessages(count: number): string[] {
 describe("what an upgrade leaves where it was", () => {
   const messages = asciiMessages(5000);
 
-  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it, no special scheme's name and colon and no word with a `?` and a letter, a digit or an `_` after it: it comes out as it did before gh-684", () => {
+  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it, no special scheme's name and colon, no word with a `?` and a letter, a digit or an `_` after it, and no `'` inside a word or closed off the end of one: it comes out as it did before gh-684", () => {
     for (const message of messages) {
       expect(sanitizeMessage(message), `«${message}» as a message`).toBe(sanitizeWith(message, BEFORE_GH_684));
       expect(sanitizeValues(message), `«${message}» as a name`).toBe(sanitizeWith(message, VALUES_BEFORE_GH_684));
@@ -459,6 +587,14 @@ describe("what an upgrade leaves where it was", () => {
     const words = messages.flatMap((m) => m.split(/\s+/));
     expect(words.filter((word) => word === "?").length).toBeGreaterThan(100);
     expect(words.filter((word) => word.length > 1 && word.endsWith("?")).length).toBeGreaterThan(100);
+  });
+
+  it("keeps the quote closed at the end of a word among them, and the one left open", () => {
+    // Or the exception for a `'` could be hiding every quote but one never closed, and the rule for `'` never asked to
+    // close a span where the old one did.
+    const quotes = messages.map((m) => m.split("'").length - 1);
+    expect(quotes.filter((count) => count >= 2).length).toBeGreaterThan(100);
+    expect(quotes.filter((count) => count % 2 === 1).length).toBeGreaterThan(100);
   });
 
   it("asks each of those rules: every one of them changes some of these messages", () => {

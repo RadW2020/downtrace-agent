@@ -138,7 +138,9 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
 - an email (`ana@müller.de`);
 - a long run of letters, digits, `_` and `-`;
 - whatever is between quotes, closed or not: `'…'`, `"…"`, `“…”`, `„…“`, `‘…’`, `‚…‘`, `«…»`, `»…«`, `「…」`,
-  `『…』` and backticks;
+  `『…』` and backticks. An apostrophe is not a quote: the `'` of `can't` or `user's` opens nothing, and a quote closes
+  only where a word ends, so `Can't find user 'alice smith' here` becomes `Can't find user ? here`. Any other `'`
+  inside a word still opens one (`O'Brien` becomes `O?`), because a quote glued to a word looks the same;
 - everything in a URL after its host. The scheme and a host with its port stay, because that is what the name
   of a dependency already carries: `https://api.example.com/users/alice?name=alice` becomes
   `https://api.example.com/?`. A URL whose authority holds anything else, a user and a password for one, keeps
@@ -159,20 +161,21 @@ sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass t
 It cannot recognise a plain word, so `{ customer: "alice" }` travels whole. A path or a query with a space in it
 ends at the space unless it is between quotes, so the words after the space travel. Nor, yet, does it recognise a
 span between `‹ ›` or fullwidth quotes, a fragment that follows neither a path, a query nor the host of a URL with its
-scheme (`api.example.com#alice`), or a quoted value after an apostrophe such as the one in `can't`, of which the
-words after a space travel. The guarantee is «no identifier, no address, no token», not «nothing about a person» — so
-do not put a name, an email or anything else that identifies somebody in a context. Downtrace does not measure users
-(IMP-01), and this call cannot enforce that on prose you wrote.
+scheme (`api.example.com#alice`), or a value between `‘ ’` with the apostrophe `’` inside it (`‘it’s alice smith’`),
+of which the words after the apostrophe travel. The guarantee is «no identifier, no address, no token», not «nothing
+about a person» — so do not put a name, an email or anything else that identifies somebody in a context. Downtrace
+does not measure users (IMP-01), and this call cannot enforce that on prose you wrote.
 
 **The first version that recognises all of these changes some error signatures, once.** Earlier versions let
 through a URL's path, whether it followed the host with a `/` or a `\`, the query of a URL with no slashes after its
-scheme, a path with no scheme and a file path, a query with no URL around it, quotes other than `'` and `"`,
-backticks, and digits and addresses outside ASCII. An error whose message carried one of them is sanitised differently
-now, and the hash of that text is the error's identity, so after the upgrade Downtrace lists it as a new error and the
-old one stops being seen. Most of these were one error per value anyway — `user “alice” not found` and
-`user “bob” not found` were two — and now they group. A message made only of ASCII keeps its signature exactly unless
-it carries a URL, a backtick, a word with a `/` or a `\` in it, or a word in which a `?` or a closing quote has a
-letter, a digit or an `_` after it.
+scheme, a path with no scheme and a file path, a query with no URL around it, a quoted value after an apostrophe,
+quotes other than `'` and `"`, backticks, and digits and addresses outside ASCII. An error whose message carried one
+of them is sanitised differently now, and the hash of that text is the error's identity, so after the upgrade
+Downtrace lists it as a new error and the old one stops being seen. Most of these were one error per value anyway —
+`user “alice” not found` and `user “bob” not found` were two — and now they group. A message made only of ASCII keeps
+its signature exactly unless it carries a URL, a backtick, a word with a `/` or a `\` in it, an apostrophe inside a
+word, a closing quote with a space before it, or a word in which a `?` or a closing quote has a letter, a digit or an
+`_` after it.
 
 Only the **first** context for a signature in each window is sent, because what travels is counted per
 signature and not per occurrence.
