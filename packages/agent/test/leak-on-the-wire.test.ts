@@ -7,6 +7,7 @@ import { FingerprintCache } from "../src/fingerprint.ts";
 import type { Logger } from "../src/log.ts";
 import { PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
 import { Sender } from "../src/transport.ts";
+import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -40,8 +41,19 @@ const THROWN: [string, unknown][] = [
   ["an Error", new Error("user ana@cliente.com not found")],
   ["a thrown object", { message: "token sk-live-9f1c rejected" }],
   ["a thrown string", "id 4821 is gone"],
+  // And one error for each rule of the sanitiser, each a case that rule and no other catches. The three above all
+  // carry a digit or an email, so they only ever asked two of the rules (gh-651).
+  ...SANITISER_CASES.map(({ message }): [string, unknown] => [message, new Error(message)]),
 ];
-const SECRETS = ["confidential_customer_name", "ana@cliente.com", "sk-live-9f1c", "4821", "étiquette", "token="];
+const SECRETS = [
+  "confidential_customer_name",
+  "ana@cliente.com",
+  "sk-live-9f1c",
+  "4821",
+  "étiquette",
+  "token=",
+  ...SANITISER_CASES.map(({ value }) => value),
+];
 
 describe("what actually leaves, in the bytes", () => {
   it("carries none of it, and is still a batch the schema accepts", async () => {
@@ -87,6 +99,12 @@ describe("what actually leaves, in the bytes", () => {
 
     for (const secret of SECRETS) {
       expect(body, `«${secret}» reached the wire`).not.toContain(secret);
+    }
+    // And each of those cases did arrive, as what its rule left of it: a value missing from a batch that never
+    // carried its error would prove nothing. The text of a signature is the type, the message and, after a `·`,
+    // where it was thrown.
+    for (const { sanitised } of SANITISER_CASES) {
+      expect(body, `«${sanitised}» never reached the wire`).toContain(`Error: ${sanitised} · `);
     }
     expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });

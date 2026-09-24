@@ -133,8 +133,10 @@ unchanged, so `stage` and `willRetry` travel and `order_12345` or `sk_live_…` 
 sent half-replaced. A tracker's `{ extra, tags, user }` hint is not read: pass the flat fields you want.
 
 **What that guarantees, and what is yours.** The sanitising replaces what *looks like* a value: anything with
-a digit in it, an email, a long run of hex or base64, whatever is between quotes. It cannot recognise a plain
-word, so `{ customer: "alice" }` travels whole. The guarantee is «no identifier, no address, no token», not
+a digit in it, an email, a long run of hex or base64, whatever is between `'` or `"`. It cannot recognise a plain
+word, so `{ customer: "alice" }` travels whole. Nor, yet, does it recognise a digit or an address written
+outside ASCII (`４８２１`, `ana@müller.de`), a span between `“ ”`, `« »` or backticks, or the path and query of
+a URL: those travel as written (gh-684). The guarantee is «no identifier, no address, no token», not
 «nothing about a person» — so do not put a name, an email or anything else that identifies somebody in a
 context. Downtrace does not measure users (IMP-01), and this call cannot enforce that on prose you wrote.
 

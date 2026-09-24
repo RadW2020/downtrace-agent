@@ -18,6 +18,7 @@ import {
 } from "../src/report.ts";
 import { testConfig } from "./support/agent-config.ts";
 import { escapedFrom } from "./support/escaped.ts";
+import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
 
 /**
  * `product.md:372` (ERR-02): the application hands over an error it handled itself, with structural context,
@@ -451,6 +452,16 @@ describe("what a context may be", () => {
   it("cannot recognise a plain word, and the README says so", () => {
     expect(sanitizeContext({ customer: "alice" })).toEqual({ customer: "alice" });
   });
+
+  // What it can recognise, one rule at a time: a value is sanitised as prose, as an error message is, so the cases
+  // only one rule of the sanitiser catches are caught here too — the quoted ones among them, which a value sanitised
+  // as a name would let out whole with every other test green (gh-651).
+  it.each(SANITISER_CASES.map((c) => [c.message, c.sanitised]))(
+    "keeps out what only one rule catches: «%s»",
+    (message, sanitised) => {
+      expect(sanitizeContext({ reason: message })).toEqual({ reason: sanitised });
+    },
+  );
 
   it("keeps at most eight keys, in the order they were written", () => {
     const many: Record<string, string> = {};

@@ -24,17 +24,25 @@
 const MIN_MEANING = 0.5;
 
 /**
- * Anything that looks like a value. Order matters: the wider patterns run first so a UUID is not eaten as
- * three separate hex runs.
+ * Anything that looks like a value. Order matters twice. An email runs first, because a rule that took part of
+ * it would leave the rest where no rule sees an address any more: `ana4@cliente.com` would come out as
+ * `?@cliente.com`. And a UUID runs before the long run, for the reason given beside it.
  *
  * Deliberately eager. A false positive costs a `?` where a word would have read better; a false negative
  * puts a customer's identifier in a batch, and there is no taking that back.
+ *
+ * Each of these, and each quoted span below, decides a case that no other rule does, and `sanitize.test.ts`
+ * checks it by taking each one out of this very list (gh-651). A rule added here needs its case.
  */
-const VALUE_PATTERNS: RegExp[] = [
+export const VALUE_PATTERNS: readonly RegExp[] = [
   // Emails before anything splits them.
   /[\w.+-]+@[\w-]+\.[\w.-]+/g,
-  // UUIDs, then any long hex or base64-ish run: tokens, hashes, ids.
+  // UUIDs. The long run below takes a UUID whole as well, hyphens and all, so this one hides nothing that one
+  // does not: what it decides is the word glued to it, `order-?` where the long run would leave `?`. It stays
+  // for that, because taking it out would change the identity of every error and name that carries one
+  // (ADR 0167).
   /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
+  // Any long hex or base64-ish run: tokens, hashes, ids.
   /\b[0-9a-zA-Z_-]{16,}\b/g,
   // Anything with a digit in it. A word that carries a number is a value or a version, and neither belongs
   // in an identity.
@@ -49,7 +57,10 @@ const VALUE_PATTERNS: RegExp[] = [
  * between quotes is the thing the message is about. Inside a SQL identifier there is nothing to quote: the
  * whole name is already between quotes, and a `"` in there is a character of the name (gh-350).
  */
-const QUOTED_SPANS: RegExp[] = [/'[^']*'?/g, /"[^"]*"?/g];
+const QUOTED_SPANS: readonly RegExp[] = [/'[^']*'?/g, /"[^"]*"?/g];
+
+/** Every rule a sentence goes through, in the order it does: first what it put between quotes, then the rest. */
+export const MESSAGE_RULES: readonly RegExp[] = [...QUOTED_SPANS, ...VALUE_PATTERNS];
 
 /** A run of values separated by nothing but punctuation is one value as far as identity goes: «expected 1,
  * 2, 3» and «expected 4, 5» are the same error, and leaving three question marks would make them two. */
@@ -59,19 +70,26 @@ const collapse = (out: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+/**
+ * Replaces whatever each of `rules` matches, in order, then collapses what is left.
+ *
+ * The one loop both functions below run. Exported so that a test can run it with one rule taken out and see what
+ * that rule decides, rather than run a copy of it that could drift from this one.
+ */
+export function sanitizeWith(text: string, rules: readonly RegExp[]): string {
+  let out = text;
+  for (const rule of rules) out = out.replace(rule, "?");
+  return collapse(out);
+}
+
 /** Replaces everything that is a value wherever it appears. For text that is a name and not a sentence. */
 export function sanitizeValues(text: string): string {
-  let out = text;
-  for (const pattern of VALUE_PATTERNS) out = out.replace(pattern, "?");
-  return collapse(out);
+  return sanitizeWith(text, VALUE_PATTERNS);
 }
 
 /** The same, plus what is only a value in prose: whatever the sentence put between quotes. */
 export function sanitizeMessage(message: string): string {
-  let out = message;
-  for (const pattern of QUOTED_SPANS) out = out.replace(pattern, "?");
-  for (const pattern of VALUE_PATTERNS) out = out.replace(pattern, "?");
-  return collapse(out);
+  return sanitizeWith(message, MESSAGE_RULES);
 }
 
 /**
