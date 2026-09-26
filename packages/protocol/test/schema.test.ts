@@ -17,6 +17,7 @@ const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
+ajv.addKeyword("x-since");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
@@ -45,6 +46,21 @@ describe("aggregates schema v0", () => {
     // as `dist/`, they are read without the schema at hand, so a copy that drifts from it would be believed.
     expect([...ACCEPTED_PROTOCOL_VERSIONS_V0]).toEqual(accepted);
     expect(PROTOCOL_VERSION).toBe(accepted[accepted.length - 1]);
+  });
+
+  it("says, for every kind of operation and of process exception, the first minor that carries it", () => {
+    // A reader tells a kind a sender cannot send from one it did not by this, so a value without it would be read as
+    // carried by every sender, and one with a version nobody published as carried by none. The keys are compared
+    // with the enum itself, so a value added to it without its minor fails here.
+    const accepted = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;
+    const defs = (AGGREGATES_SCHEMA_V0 as { $defs: Record<string, { properties?: Record<string, unknown> }> }).$defs;
+    for (const name of ["Operation", "ProcessException"]) {
+      const kind = defs[name]?.properties?.kind as { enum?: string[]; "x-since"?: Record<string, string> } | undefined;
+      expect(kind?.enum?.length, name).toBeGreaterThan(0);
+      const since = kind?.["x-since"] ?? {};
+      expect(Object.keys(since).sort(), name).toEqual([...(kind?.enum ?? [])].sort());
+      for (const version of Object.values(since)) expect(accepted, `${name}: ${version}`).toContain(version);
+    }
   });
 
   it("never drops a minor it once published", () => {

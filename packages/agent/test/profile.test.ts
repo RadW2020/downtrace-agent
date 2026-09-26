@@ -22,6 +22,7 @@ const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
+ajv.addKeyword("x-since");
 ajv.compile(AGGREGATES_SCHEMA_V0);
 const validateOperation = ajv.getSchema("https://downtrace.io/schema/v0/aggregates.schema.json#/$defs/Operation");
 const validateProfile = ajv.getSchema("https://downtrace.io/schema/v0/aggregates.schema.json#/$defs/Profile");

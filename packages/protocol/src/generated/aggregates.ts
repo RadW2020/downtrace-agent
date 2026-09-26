@@ -517,7 +517,7 @@ export interface ProfileEndpoint {
  */
 export interface Operation {
   /**
-   * What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). The last two since 0.9.0.
+   * What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not.
    */
   kind: "query" | "error" | "framework" | "explicit";
   /**
@@ -574,7 +574,7 @@ export interface CaptureProgress {
  */
 export interface ProcessException {
   /**
-   * How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. Since 0.9.0, `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02).
+   * How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02). `x-since` says which minor first carries each value.
    */
   kind: "uncaught" | "unhandled-rejection" | "framework" | "explicit";
   /**

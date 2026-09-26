@@ -25,6 +25,7 @@ const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
+ajv.addKeyword("x-since");
 ajv.addKeyword("x-evidence-path");
 // The one format the contract uses; ajv knows none on its own.
 ajv.addFormat("date-time", /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/);

@@ -498,6 +498,17 @@ describe("errors", () => {
     expect(tool?.inputSchema.required).toEqual(["project"]);
   });
 
+  /**
+   * gh-685: an empty list from an instrumentation whose protocol cannot carry an error is not an absence of errors,
+   * and the answer says which kinds cannot arrive under `reporting`. A coding agent reads what the description
+   * names, so it has to name it.
+   */
+  it("names, in the description of list_errors, the field that says which errors cannot reach the list", () => {
+    const description = String(toolNamed("list_errors")?.description ?? "");
+    expect(description).toContain("`reporting`");
+    expect(description).toContain("not an absence of errors");
+  });
+
   it("says which argument a triage operation is missing instead of calling the cloud without it", async () => {
     const { s, calls } = server();
     const out = (await s.handle("tools/call", {

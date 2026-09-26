@@ -162,6 +162,7 @@ describe("Sender, carrying the profile", () => {
     ajv.addKeyword("x-latency-boundaries-ms");
     ajv.addKeyword("x-calls-per-request-boundaries");
     ajv.addKeyword("x-ingest-path");
+    ajv.addKeyword("x-since");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
@@ -577,6 +578,7 @@ describe("Sender, bounded on every array a batch carries", () => {
     ajv.addKeyword("x-latency-boundaries-ms");
     ajv.addKeyword("x-calls-per-request-boundaries");
     ajv.addKeyword("x-ingest-path");
+    ajv.addKeyword("x-since");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
     expect(carried(calls[0], "triggers")).toHaveLength(signals.length);
@@ -701,6 +703,7 @@ describe("Sender, delivering what the process threw", () => {
     ajv.addKeyword("x-latency-boundaries-ms");
     ajv.addKeyword("x-calls-per-request-boundaries");
     ajv.addKeyword("x-ingest-path");
+    ajv.addKeyword("x-since");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(last), JSON.stringify(validate.errors)).toBe(true);
   });

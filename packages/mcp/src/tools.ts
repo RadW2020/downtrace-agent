@@ -152,7 +152,8 @@ export const tools: Tool[] = [
       "minimum and no detector involved — an error is an observed fact, a finding is a detected " +
       "difference, and the absence of a finding about an error says nothing either way. They come in the " +
       "order you ask for, the one the page's headers give, and the answer says which order it applied " +
-      "under `sort`.",
+      "under `sort`. `reporting` says which kinds of error cannot reach the list at all from the instances " +
+      "reporting now, by the protocol each one speaks: an empty list from those is not an absence of errors.",
     inputSchema: {
       type: "object",
       properties: {

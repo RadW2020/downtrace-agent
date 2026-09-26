@@ -461,7 +461,8 @@
       "properties": {
         "kind": {
           "enum": ["query", "error", "framework", "explicit"],
-          "description": "What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). The last two since 0.9.0."
+          "x-since": { "query": "0.6.0", "error": "0.6.0", "framework": "0.9.0", "explicit": "0.9.0" },
+          "description": "What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not."
         },
         "hash": {
           "type": "string",
@@ -587,7 +588,8 @@
       "properties": {
         "kind": {
           "enum": ["uncaught", "unhandled-rejection", "framework", "explicit"],
-          "description": "How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. Since 0.9.0, `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02)."
+          "x-since": { "uncaught": "0.7.0", "unhandled-rejection": "0.7.0", "framework": "0.9.0", "explicit": "0.9.0" },
+          "description": "How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02). `x-since` says which minor first carries each value."
         },
         "hash": {
           "type": "string",
