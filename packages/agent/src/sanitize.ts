@@ -99,6 +99,15 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
   // separator is the path's, and one after a URL's host the URL rule's, which puts a `?` in its place. It reads a
   // sentence after its quotes, so a word a closed quote was glued to goes too (ADR 0184).
   new RegExp(String.raw`(?<!\S)(?=[^\s/\\?]*\?\S*${WORD})\S+`, "gu"),
+  // A fragment that follows neither a path, a query nor the host of a URL with its scheme: a word in which a `#`
+  // has something before it and a letter, a digit or an `_` after it. The whole word goes, as a query does: the part
+  // before the `#` is a host or a scheme, and the part after it is the value (`api.example.com#alice`,
+  // `sms:ops#alice`, which the parser reads as a URL with a fragment and no host). What is not a fragment keeps
+  // its words, because they are structure: a `#` at the start of a word is how V8 names a private member
+  // (`Cannot read private member #name …`), a ticket or a channel, and a `#` with nothing after it is how a
+  // language is named (`C#`); `Object#method` has the fragment's shape, and no rule tells one from the other
+  // (ADR 0193).
+  new RegExp(String.raw`(?<!\S)(?=[^\s]*\S#[^\s]*${WORD})\S+`, "gu"),
   // Emails before anything splits them.
   new RegExp(String.raw`[${ALNUM}_.+-]+@[${ALNUM}_-]+\.[${ALNUM}_.-]+`, "gu"),
   // UUIDs. The long run below takes a UUID whole as well, hyphens and all, so this one hides nothing that one

@@ -145,6 +145,13 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
     sanitised: "request to https: ? failed",
   },
 
+  // A fragment that follows neither a path, a query nor the host of a URL with its scheme: a `#` in a word with
+  // something before it and a word character after it takes the word whole, as a query does (gh-733). The `#` of a
+  // private field, at the start of a word, and the one of a language, with nothing after it, are not one, and their
+  // cases are in `sanitize.test.ts`, where they must stay.
+  { message: "GET api.example.com#alice failed", value: "alice", sanitised: "GET ? failed" },
+  { message: "open sms:ops#alice", value: "alice", sanitised: "open ?" },
+
   // Letters, marks and digits of every script. Each of these is a value the ASCII reading of `\w`, `\d` and `\b` let
   // out whole: the address is cut at its accent before the `@` or before the dot, the digits are not digits, and the
   // long run is split at each accent into pieces too short to be one.

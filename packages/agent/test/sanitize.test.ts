@@ -330,6 +330,78 @@ describe("what a query is", () => {
   });
 });
 
+describe("what a fragment is", () => {
+  // The URL rule reads the fragment after a host it reads, the path rule one in a word with a separator, and the
+  // query rule one after a `?`. What none of them reads is a `#` inside a word with something before it and a word
+  // character after it, and the whole word goes, as a query does: the part before the `#` is a host or a scheme,
+  // and the part after it is the value (gh-733, ADR 0193).
+  it.each([
+    ["GET api.example.com#alice failed", "GET ? failed"],
+    ["open sms:ops#alice", "open ?"],
+    ["GET magnet:?xt=urn:btih:abc#alice failed", "GET ? failed"],
+    // The cost the decision accepts: the same shape as a fragment, and no rule tells one from the other.
+    ["failed in Object#method", "failed in ?"],
+  ])("goes with its word: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // What is not a fragment, and stays: a `#` at the start of a word names a private field of V8, a ticket or a
+  // channel, and a `#` with nothing after it names a language. Taking either would change the signature of an error
+  // whose text is structure, and take from it what it says.
+  it.each([
+    [
+      "Cannot read private member #alice from an object whose class did not declare it",
+      "Cannot read private member #alice from an object whose class did not declare it",
+    ],
+    ["issue #alice is open", "issue #alice is open"],
+    ["the C# compiler failed", "the C# compiler failed"],
+    ["F# code at line 3", "F# code at line ?"],
+  ])("is not one: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  // Node's parser as the judge, as for where a URL's host ends. Each code point below 128 is put in each place of a
+  // fragment, after each thing a fragment may follow with no URL rule to read it, and wherever the parser reads the
+  // value in the fragment, the value may not come out. The word is read as a URL when it is one, and as a reference
+  // against a base when it is not. Whitespace is left out: to the sanitiser it ends a word, as it ends a query
+  // (ADR 0184), and what follows it is a word of its own, while the parser removes a tab or a newline and reads on.
+  const BASE = "http://base.invalid/";
+  const BEFORE = [
+    "api.example.com",
+    "",
+    "sms:ops",
+    "magnet:",
+    // A scheme that only ends like a special one, which the URL rule leaves alone.
+    "rows:id",
+  ];
+  // A word that opens with a `#` is the shape a private field, a ticket or a channel takes, and it stays by
+  // decision: the `#` must have something before it within the word, so the first place asks for a word of its own.
+  const PLACES: [string, (before: string, c: string) => string | null][] = [
+    ["right after the word", (before, c) => (before === "" ? null : `${before}#${c}alice`)],
+    ["between a name and its value", (before, c) => `${before}ops#${c}alice`],
+  ];
+
+  /** What the parser reads as the fragment of `word`: nothing when it refuses it. */
+  const inTheFragment = (word: string): string => (URL.canParse(word, BASE) ? new URL(word, BASE).hash : "");
+
+  it.each(PLACES)("keeps nothing the parser reads in it, %s, for every code point below 128", (_, place) => {
+    const asked: string[] = [];
+    for (const before of BEFORE) {
+      for (let code = 0; code < 128; code++) {
+        const c = String.fromCharCode(code);
+        if (/\s/.test(c)) continue;
+        const written = place(before, c);
+        if (written === null) continue;
+        if (!inTheFragment(written).includes("alice")) continue;
+        asked.push(written);
+        expect(sanitizeMessage(`GET ${written} failed`), JSON.stringify(written)).not.toContain("alice");
+      }
+    }
+    // Or this could be passing in a place where the parser never reads a fragment.
+    expect(asked).not.toHaveLength(0);
+  });
+});
+
 describe("what a quote is", () => {
   it("is not an apostrophe, although `’` is both", () => {
     expect(sanitizeMessage("can’t reach the server")).toBe("can’t reach the server");
@@ -559,6 +631,20 @@ const hasQueryWord = (message: string): boolean => {
 };
 
 /**
+ * Whether a word of the message has a `#` with something before it and a letter, a digit or an `_` after it: the
+ * shape gh-733 added a rule for.
+ *
+ * Asked of the message as written and once its quotes are read, as the query is, and written with a split on spaces
+ * and not with that rule, so that it bounds what the rule may touch instead of copying it. A `#` at the start of a
+ * word — a private field, a ticket, a channel — and one with nothing after it — a language's name — are not one, so
+ * they stay in the corpus, where the rule has to leave them be.
+ */
+const hasFragmentWord = (message: string): boolean => {
+  const quotesRead = QUOTES_BEFORE_GH_684.reduce((out, rule) => out.replace(rule, "?"), message);
+  return [message, quotesRead].some((text) => text.split(/\s+/).some((word) => /.\S*#\S*\w/.test(word)));
+};
+
+/**
  * Whether the message has a `'` that the rule of gh-732 may read otherwise than the old one: one with a word character
  * on both sides, which may be an apostrophe, or one at which the old rule closed a span though a space came before it or
  * a word character came after it, before the next space or `'`.
@@ -576,11 +662,12 @@ const hasQuoteOffAWordEdge = (message: string): boolean =>
   });
 
 /**
- * Messages made only of ASCII, with none of the six ASCII shapes a rule was added for since: a backtick and `://`
+ * Messages made only of ASCII, with none of the seven ASCII shapes a rule was added for since: a backtick and `://`
  * (gh-684), a word with a `/` or a `\` in it (gh-697), a special scheme's name and colon (gh-713), a word with a `?`
- * and a letter, a digit or an `_` after it (gh-720), and a `'` inside a word or one the old rule closed off the end of a
- * word (gh-732). Those six are the exceptions, and the only ones: a message that carries one changes identity once, by
- * design and said in the changeset (ADR 0170, ADR 0175, ADR 0180, ADR 0184, ADR 0189).
+ * and a letter, a digit or an `_` after it (gh-720), a word with a `#` that has something before it and a word
+ * character after it (gh-733), and a `'` inside a word or one the old rule closed off the end of a word (gh-732).
+ * Those seven are the exceptions, and the only ones: a message that carries one changes identity once, by design and
+ * said in the changeset (ADR 0170, ADR 0175, ADR 0180, ADR 0184, ADR 0189, ADR 0193).
  *
  * Built from pieces each old rule catches, glued with and without spaces so that the pieces also meet, and from any
  * other printable character. Seeded, so a red names a message that comes back on the next run.
@@ -615,6 +702,7 @@ function asciiMessages(count: number): string[] {
       hasPathWord(message) ||
       hasSpecialScheme(message) ||
       hasQueryWord(message) ||
+      hasFragmentWord(message) ||
       hasQuoteOffAWordEdge(message);
     if (!exception) messages.push(message);
   }
@@ -624,7 +712,7 @@ function asciiMessages(count: number): string[] {
 describe("what an upgrade leaves where it was", () => {
   const messages = asciiMessages(5000);
 
-  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it, no special scheme's name and colon, no word with a `?` and a letter, a digit or an `_` after it, and no `'` inside a word or closed off the end of one: it comes out as it did before gh-684", () => {
+  it("is every message made only of ASCII with no backtick, no `://`, no word with a `/` or `\\` in it, no special scheme's name and colon, no word with a `?` and a letter, a digit or an `_` after it, no word with a `#` that has something before it and a word character after it, and no `'` inside a word or closed off the end of one: it comes out as it did before gh-684", () => {
     for (const message of messages) {
       expect(sanitizeMessage(message), `«${message}» as a message`).toBe(sanitizeWith(message, BEFORE_GH_684));
       expect(sanitizeValues(message), `«${message}» as a name`).toBe(sanitizeWith(message, VALUES_BEFORE_GH_684));
