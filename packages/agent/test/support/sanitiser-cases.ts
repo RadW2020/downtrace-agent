@@ -72,6 +72,9 @@ export const SANITISER_CASES: readonly SanitiserCase[] = [
   { message: "user ‘alice’ not found", value: "alice", sanitised: "user ? not found" },
   { message: "user ‚alice‘ not found", value: "alice", sanitised: "user ? not found" },
   { message: "user ‘alice not found", value: "alice", sanitised: "user ?" },
+  // And a `’` inside the span is the apostrophe of `it’s`, not its end: the span closes where a word ends, as the
+  // ASCII `'` does (gh-743).
+  { message: "user ‘it’s alice smith’ not found", value: "it’s alice smith", sanitised: "user ? not found" },
   { message: "user «alice» not found", value: "alice", sanitised: "user ? not found" },
   { message: "user »alice« not found", value: "alice", sanitised: "user ? not found" },
   { message: "user «alice not found", value: "alice", sanitised: "user ?" },

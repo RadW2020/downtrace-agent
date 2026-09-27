@@ -420,6 +420,61 @@ describe("what a quote is", () => {
     expect(sanitizeMessage(message)).toBe(sanitised);
   });
 
+  // The typographic `’` is both as well, and the `‘…’` span closes where it closes for the ASCII `'`: where a word
+  // ends (gh-743, ADR 0192). A `’` between two letters is the apostrophe of `it’s` and the span goes on; one at the
+  // end of a word closes it. `’` opens nothing, as ADR 0170 kept it, so there is no apostrophe to read it by and no
+  // contraction list to carry: the end of the word is the only thing the rule reads.
+  it.each([
+    // The ticket's rows, measured on `origin/main` before the change: the words after the apostrophe left.
+    ["user ‘it’s alice smith’ not found", "user ? not found"],
+    ["user ‘alice’s cart’ not found", "user ? not found"],
+    // A span that carries no `’` inside it closes exactly where it did before: nothing else of the family moves.
+    ["user ‘alice smith’ not found", "user ? not found"],
+    ["user ‚it’s alice smith‘ not found", "user ? not found"],
+    // After punctuation too, and nothing but punctuation after it, up to the next space or a mark of the family.
+    ["invalid name ‘(alice smith)’ given", "invalid name ? given"],
+    [
+      "Access denied for user ‘alice’@‘localhost’ (using password: YES)",
+      "Access denied for user ?@? (using password: YES)",
+    ],
+    // A quote glued to the word after it does not close there, and the word goes with it, as for the ASCII `'`.
+    ["user ‘alice’smith not found", "user ?"],
+    // The plural possessive closes early: a value that carries a word-end `’` inside it leaves the words after it.
+    // The cost the decision accepts, pinned here so it is not discovered later (ADR 0192).
+    ["the ‘users’ cart’ was empty", "the ? cart’ was empty"],
+    // And a quote left open takes the rest of the message, whatever apostrophes it carries.
+    ["user ‘it’s alice smith", "user ?"],
+  ])("closes the `‘…’` span where a word ends: «%s» comes out as «%s»", (message, sanitised) => {
+    expect(sanitizeMessage(message)).toBe(sanitised);
+  });
+
+  it("keeps nothing of a `‘…’` value, whatever apostrophes stand around it or inside it", () => {
+    // Every combination of what may stand before a value, what may open and close its quotes, what the value may be
+    // and what may follow it, the typographic kind of ADR 0189's eleven thousand and three hundred forty: the
+    // apostrophes are a contraction, a name, a possessive plural and an elision; the value may carry an apostrophe
+    // in it and begin and end with punctuation; and its quote may be left open.
+    const before = ["", "can’t find", "user’s", "CAN’T", "O’Neil", "the users’", "l’utilisateur"];
+    const opening = [" ‘", " (‘", ": ‘", " name=‘", " x:‘", " [‘"];
+    const values = [
+      "alice smith",
+      "it’s alice smith",
+      "O’Brien smith",
+      "@alice smith",
+      "(alice smith)",
+      "alice smith.",
+    ];
+    const closing = ["’ here", "’)", "’,", "’", "’.", "’; retry", ""];
+    const after = ["", " can’t", " it’s", " users’", " O’Neil"];
+    for (const b of before)
+      for (const o of opening)
+        for (const v of values)
+          for (const c of closing)
+            for (const a of after) {
+              const message = `${b}${o}${v}${c}${a}`.trimStart();
+              expect(sanitizeMessage(message), JSON.stringify(message)).not.toMatch(/alice|smith|Brien/);
+            }
+  });
+
   it("keeps nothing of a quoted value, whatever apostrophes stand around it or inside it", () => {
     // Every combination of what may stand before a value, what may open and close its quotes, what the value may be,
     // and what may follow it. The apostrophes are of every kind above: a contraction, a name, a possessive plural, an

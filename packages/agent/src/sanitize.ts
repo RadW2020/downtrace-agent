@@ -134,6 +134,13 @@ const CONTRACTION = `(?<=${WORD})'(?:t|s|d|m|re|ve|ll)(?!${WORD})`;
  * (ADR 0189).
  */
 const WORD_END = String.raw`(?<=\S)'(?![^\s']*${WORD})`;
+/**
+ * Where a `‘…’` span closes: the same reading, at a `’`, up to the next space or a mark of the family. `’` opens
+ * nothing, as ADR 0170 kept it, so the rule has no apostrophe to set aside: it only says where the span ends. A `’`
+ * between two letters is the apostrophe of `it’s` and the span goes on; a possessive plural (`users’`) at a word's
+ * end inside the value closes it early, and that cost is the one the decision accepts (ADR 0192).
+ */
+const CURLY_WORD_END = String.raw`(?<=\S)’(?![^\s‘’]*${WORD})`;
 
 /**
  * Quoted spans, including an unterminated one — the same reasoning as the SQL scanner: a pattern that requires the
@@ -150,6 +157,10 @@ const WORD_END = String.raw`(?<=\S)'(?![^\s']*${WORD})`;
  * included; a span closes only where a word ends. So neither an apostrophe nor a quote that opens a word closes one,
  * and nothing counts the quotes: a quote left open takes the rest of the message, whatever came before it.
  *
+ * The `‘…’` span closes the same way (ADR 0192): a `’` with a word character after it — the apostrophe of `it’s`, or a
+ * quote glued to the next word — does not end it, and one where a word ends does. `’` opens nothing, so the span has
+ * no apostrophe to read by and no contraction to set aside: what it reads is only the end of the word.
+ *
  * Separate from the list above because they only mean «value» **in prose**. In an error message, what is
  * between quotes is the thing the message is about. Inside a SQL identifier there is nothing to quote: the
  * whole name is already between quotes, and a `"` in there is a character of the name (gh-350).
@@ -158,7 +169,7 @@ const QUOTED_SPANS: readonly RegExp[] = [
   new RegExp(`(?!${CONTRACTION})'(?:[^']|(?!${WORD_END})')*'?`, "giu"),
   /"[^"]*"?/g,
   /[“„][^“”]*[“”]?/g,
-  /[‘‚][^‘’]*[‘’]?/g,
+  new RegExp(`[‘‚](?:[^‘’]|(?!${CURLY_WORD_END})’)*[‘’]?`, "gu"),
   /[«»][^«»]*[«»]?/g,
   /[「『][^」』]*[」』]?/g,
   /`[^`]*`?/g,
