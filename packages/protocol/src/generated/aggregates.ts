@@ -196,6 +196,10 @@ export interface AggregatesBatch {
     | [LocalTrigger, LocalTrigger]
     | [LocalTrigger, LocalTrigger, LocalTrigger]
     | [LocalTrigger, LocalTrigger, LocalTrigger, LocalTrigger];
+  /**
+   * This batch is the last one: the process is leaving deliberately and has already been handed everything the instrumentation was holding. `signal`, a SIGTERM or SIGINT the instrumentation's own handler saw; `exit`, an application that awaited `shutdown()` before calling `process.exit()`; `idle`, an event loop that emptied. Absent means **this sender did not say**, the same reading as `observers` — never that it ended badly: an instrumentation older than this never says it, and a process an exception killed says nothing because it cannot. It is the half of ERR-04 the cloud cannot infer — from outside, every ending looks like batches stopping — and it carries no instant, because the one that matters is when the batch arrived, which the cloud measures.
+   */
+  ending?: "signal" | "exit" | "idle";
 }
 export interface AgentInfo {
   name: string;

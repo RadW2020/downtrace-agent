@@ -232,6 +232,22 @@ describe("when something goes wrong", () => {
     expect(said(out)).toContain("already closed");
   });
 
+  // Invariant 13, on the sentence that matters most in a status: what a process's ending left behind. A coding
+  // agent has to read the same words a person reads on the page, not a summary of them (gh-598, ESC-14).
+  it("hands back what the cloud says about a process that stopped, word for word", async () => {
+    const says =
+      "It stopped sending and said nothing about ending. This cloud cannot tell a process that died from " +
+      "one that was stopped or has gone quiet; if it died, what it had not sent is lost: the interval in " +
+      "hand and any exception that killed it. Nothing here is proof that no error happened.";
+    const { s, calls } = server([{ body: JSON.stringify({ endings: [{ id: "i-0", state: "stopped", says }] }) }]);
+    const out = (await s.handle("tools/call", {
+      name: "project_status",
+      arguments: { project: "tienda" },
+    })) as { content: Array<{ text: string }> };
+    expect(only(calls, 0).url).toContain("/api/p/tienda/status");
+    expect(said(out)).toContain(says);
+  });
+
   it("turns an unreachable cloud into a result too", async () => {
     const { s } = server([new Error("connect ECONNREFUSED")]);
     const out = (await s.handle("tools/call", {

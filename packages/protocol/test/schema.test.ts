@@ -108,6 +108,37 @@ describe("aggregates schema v0", () => {
     expect(reason("capture-without-a-start.json")).toMatch(/must have required property 'startedAt'/);
     // An exception that happened zero times did not happen (gh-341).
     expect(reason("exception-that-did-not-happen.json")).toMatch(/count must be >= 1/);
+    // A way of ending the schema does not declare is a sender that is broken or ahead of the cloud, and it
+    // gets a 400 at the door rather than being stored as something nobody can read (ADR 0008, gh-598).
+    expect(reason("an-ending-nobody-declared.json")).toMatch(/ending must be equal to one of the allowed values/);
+  });
+
+  it("reads a batch that says it is the last one of its process", async () => {
+    const doc = byName(await load("valid"), "the-last-batch-of-a-process.json") as unknown as {
+      ending?: string;
+    };
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+    expect(doc.ending).toBe("signal");
+  });
+
+  it("takes every declared ending and nothing else", async () => {
+    // Enumerated from the schema: a hand-written list only checks the endings somebody remembered, and the
+    // cloud writes one sentence per ending (gh-598, ERR-04).
+    const declared = (AGGREGATES_SCHEMA_V0.properties as { ending: { enum: string[] } }).ending.enum;
+    expect(declared).toEqual(["signal", "exit", "idle"]);
+    for (const ending of declared) {
+      const doc = byName(await load("valid"), "minimal.json") as unknown as { ending?: string };
+      doc.ending = ending;
+      expect(validate(doc), `${ending}: ${ajv.errorsText(validate.errors)}`).toBe(true);
+    }
+  });
+
+  it("takes a batch with no ending at all, which is what every sender says today", async () => {
+    // Absent is «this sender did not say», never «it ended badly»: an instrumentation older than 0.9.0 never
+    // says it, and a process an exception killed cannot (ADR 0093's reading, applied here).
+    const doc = byName(await load("valid"), "minimal.json") as unknown as { ending?: string };
+    expect(doc.ending).toBeUndefined();
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
   });
 
   it("reads a declaration of what the sender withholds", async () => {

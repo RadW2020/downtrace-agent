@@ -229,6 +229,28 @@ through `beforeExit`, and there is no synchronous channel to send it on. It arri
 survives what it threw — because it has its own `uncaughtException` handler, or because the rejection did
 not kill it — which is the common case for the ones you can still do something about.
 
+### What each way of ending keeps, and what it loses
+
+Three ways a process ends, and they are not the same for your telemetry. What is in this table is what the
+tests in `test/` assert, with real processes, because a process that does not end cannot prove any of this
+from the inside.
+
+| How it ends | What reaches Downtrace | What is lost | Where it is asked |
+| --- | --- | --- | --- |
+| SIGTERM or SIGINT, with the instrumentation's own handler | everything it was holding: the interval in hand, the profile's window closed whatever the clock says, the evidence of any capture under way, and the exceptions it had recorded | nothing it was holding | `endings.test.ts`, `profile.test.ts` |
+| `process.exit()`, after `await shutdown()` | the same | nothing it was holding | `shutdown.test.ts` |
+| `process.exit()`, without waiting | nothing of the last flush — the call waits for no promise and fires no `beforeExit` | the interval in hand, the profile's window, any capture evidence | `shutdown.test.ts` |
+| An exception nobody caught | what had already been sent: the earlier intervals with their runtime signals, and the exceptions that rode an earlier batch | **the exception that killed it**, the interval in hand, the profile's window, any capture evidence | `endings.test.ts`, `uncaught.test.ts` |
+
+Two things hold in every row. The **black box** — the fine detail, the coarse summary and the reference
+samples — never leaves your process except inside a capture, so it always goes with the process; that is
+what it is for. And a send that fails on the very last flush is the one loss the instrumentation cannot
+report to you, because what it lost travels in the next batch and there is no next batch.
+
+The cloud says which of these happened, per process: one that ended in order says so in that last batch, and
+one that simply stopped is shown as having stopped, with the sentence that if it died, what it had not sent
+is lost — and that none of that is evidence that nothing went wrong.
+
 ## Beside your error tracker
 
 You probably already have one installed, and you are not going to remove it the day you install this. Both
