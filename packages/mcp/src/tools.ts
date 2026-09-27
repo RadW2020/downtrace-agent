@@ -47,6 +47,20 @@ const why = {
 
 export const tools: Tool[] = [
   {
+    name: "list_projects",
+    description:
+      "The list of projects, in the order the front page reads them: the ones with open findings first, then by " +
+      "name. For each, its slug, its name, how many findings are open, when its last batch arrived —null when " +
+      "nothing ever arrived, which is not the same as quiet— and the word of the front page's column: `N open`, " +
+      "`none` or `not compared`, which is nothing arrived in the last hour, so the detectors had nothing to " +
+      "compare. The front page is about every project, so it opens with the shared administration password and " +
+      "with no other credential; a project's own key does not list the others. Ask it to learn a project's slug " +
+      "before you ask about it.",
+    inputSchema: { type: "object", properties: {} },
+    method: "GET",
+    path: "/api/projects",
+  },
+  {
     name: "project_status",
     description:
       "What a project looks like right now: traffic, endpoints, dependencies, runtime health, coverage " +

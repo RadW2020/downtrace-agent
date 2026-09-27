@@ -98,6 +98,8 @@ describe("the handshake", () => {
     for (const must of ["read_report", "verify_recovery", "request_capture", "close_finding", "annotate_finding"]) {
       expect(names).toContain(must);
     }
+    // And the front page, which is about every project: its list is a capability of the interface (gh-688).
+    expect(names).toContain("list_projects");
     // Every journey a team uses a tracker for is one a coding agent can walk, triage included (ERR-03).
     for (const must of [
       "list_errors",
