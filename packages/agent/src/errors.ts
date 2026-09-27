@@ -33,8 +33,10 @@ function frameOf(line: string): string | undefined {
   const trimmed = line.trim();
   if (!trimmed.startsWith("at ")) return undefined;
   const body = trimmed.slice(3);
-  // `at fn (/abs/path/file.js:12:5)` or `at /abs/path/file.js:12:5`
-  const open = body.lastIndexOf("(");
+  // `at fn (/abs/path/file.js:12:5)` or `at /abs/path/file.js:12:5`. A name holds no `(`, so the place opens at
+  // the first `(` and closes at the final `)`, and a `(` in the path — `Program Files (x86)` — pairs with its
+  // own `)` inside the place (gh-712).
+  const open = body.endsWith(")") ? body.indexOf("(") : -1;
   const fn = open > 0 ? body.slice(0, open).trim() : "";
   const where = open > 0 ? body.slice(open + 1).replace(/\)$/, "") : body;
 
@@ -44,7 +46,12 @@ function frameOf(line: string): string | undefined {
   const dep = /node_modules[\\/](@[^\\/]+[\\/][^\\/]+|[^\\/]+)/.exec(where);
   if (dep) return `(${dep[1]})`;
 
-  const at = /([^\\/]+):(\d+):\d+$/.exec(where);
+  // An eval frame's place holds two places — the eval call's and the evaluated code's,
+  // `eval at fn (/path/file.js:1:1), <anonymous>:2:3` — and the frame's is the last one; the read of the place
+  // would cross the `), ` between them and keep both. A place that does not open with `eval at ` is never cut.
+  const cut = where.startsWith("eval at ") ? where.lastIndexOf("), ") : -1;
+  const site = cut >= 0 ? where.slice(cut + 3) : where;
+  const at = /([^\\/]+):(\d+):\d+$/.exec(site);
   const place = at ? `${at[1]}:${at[2]}` : "";
   if (!place) return fn || undefined;
   return fn ? `${fn}@${place}` : place;

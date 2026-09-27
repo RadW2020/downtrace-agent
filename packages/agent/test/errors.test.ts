@@ -77,6 +77,36 @@ describe("the stack signature", () => {
   });
 });
 
+describe("a frame whose directory holds a parenthesis", () => {
+  /** Decision 5 of ADR 0083 takes the directory from every frame; a parenthesis in it is the ticket's case of it surviving. */
+  it("loses the directory as it loses any other, whatever the system writes the path in", () => {
+    expect(stackSignature("at load (/home/alice/Projects (old)/app/src/orders.js:42:11)")).toBe("load@orders.js:42");
+    expect(stackSignature("at C:\\Users\\alice\\Copy (2)\\app\\x.js:1:1")).toBe("x.js:1");
+    expect(stackSignature("at load (C:\\Program Files (x86)\\Shop\\app\\orders.js:42:11)")).toBe("load@orders.js:42");
+    expect(stackSignature("at /home/alice/Projects (old)/app/x.js:5:5")).toBe("x.js:5");
+  });
+
+  it("does not let the machine out of an eval frame under such a directory", () => {
+    const signature = stackSignature("at eval (eval at load (/home/alice/Projects (old)/x.js:1:1), <anonymous>:2:3)");
+    expect(signature).not.toContain("alice");
+    expect(signature).not.toContain("Projects");
+  });
+
+  it("signs an eval frame at the place of the evaluated code, and no other place of the frame in it", () => {
+    expect(stackSignature("at eval (eval at <anonymous> ([eval]:11:11), <anonymous>:3:7)")).toBe("eval@<anonymous>:3");
+  });
+
+  /** The frames the ticket names as handled well: the fix may not move what it does not repair. */
+  it("leaves the odd frames as they were made", () => {
+    expect(stackSignature("at async fn (/app/src/a.js:1:1)")).toBe("async fn@a.js:1");
+    expect(stackSignature("at new A (/app/src/a.js:2:2)")).toBe("new A@a.js:2");
+    expect(stackSignature("at [eval]:8:29")).toBe("[eval]:8");
+    expect(stackSignature("at file:///private/tmp/frames/main.mjs:2:1")).toBe("main.mjs:2");
+    expect(stackSignature("at run (node:internal/x:1:1)")).toBe("run (node)");
+    expect(stackSignature("at Query.handleError (/app/node_modules/pg/lib/client.js:100:1)")).toBe("(pg)");
+  });
+});
+
 describe("the signature", () => {
   function thrownAt(message: string, file: string, line: number): Error {
     const err = new Error(message);
