@@ -200,6 +200,19 @@ function bodyOf(tool: Tool, args: Record<string, unknown>): Record<string, unkno
     // neither, which is the common case.
     return { scope: args.scope, until: args.until, why: args.why };
   }
+  if (tool.name === "give_feedback") {
+    // The caller of this server is by construction a coding agent, and the product keeps its ratings
+    // apart from the person's (FDB-01, product.md:296). The server declares the kind rather than the
+    // argument: the body carries every argument that does not address the resource, so a hand-written
+    // `kind` would have reached the cloud — the one that says `person` letting an agent rate as a
+    // person — and the cloud defaults a missing one to `person` (gh-746).
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(args)) {
+      if (k !== "kind" && !skip.has(k) && !(tool.query ?? []).includes(k) && v !== undefined) out[k] = v;
+    }
+    out.kind = "coding-agent";
+    return out;
+  }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) {
     if (!skip.has(k) && !(tool.query ?? []).includes(k) && v !== undefined) out[k] = v;

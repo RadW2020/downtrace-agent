@@ -444,7 +444,9 @@ export const tools: Tool[] = [
     name: "give_feedback",
     description:
       "Rate a finding on the two axes: was the diagnosis right, and was the alert worth having. It changes " +
-      "nothing about the finding." +
+      "nothing about the finding. It is recorded as a rating given by a coding agent, which is what calls " +
+      "this server, and counts apart from the person's: an agent that confirms the diagnosis it has just " +
+      "used is agreeing with itself, so it counts as a signal, not as accuracy." +
       idempotentRetry,
     inputSchema: {
       type: "object",

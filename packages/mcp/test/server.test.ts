@@ -418,6 +418,88 @@ describe("the version of the report a decision was read from", () => {
   });
 });
 
+/**
+ * FDB-01, where the surface decides (product.md:296): the product counts the coding agent's ratings
+ * apart from the person's, because an agent that confirms the diagnosis it has just used is agreeing
+ * with itself, and the accuracy metric is the person's. Who calls this server is by construction a
+ * coding agent, so the rating it gives is declared as the agent's where it is sent: the cloud
+ * defaults a missing kind to a person, and an argument the agent does not see in `tools/list` is an
+ * argument it does not send (gh-746).
+ */
+describe("the rating of a finding, given through this server", () => {
+  // The case the ticket names: the rating an agent gives was stored as a person's, because the body
+  // carried no kind and the cloud defaults to one. The body says who it is.
+  it("sends the rating as a coding agent's, so the cloud does not default it to a person's", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "give_feedback",
+      arguments: { project: "tienda", finding: "7", accuracy: "correct", usefulness: "useful", by: "claude" },
+    });
+    expect(only(calls, 0).body).toEqual({
+      accuracy: "correct",
+      usefulness: "useful",
+      by: "claude",
+      kind: "coding-agent",
+    });
+  });
+
+  it("does not offer the kind in the schema, and does not let a hand-written one override it", async () => {
+    // What is not in the schema is not offered: the caller of this server is by construction a coding
+    // agent, and there is nothing to choose.
+    const tool = toolNamed("give_feedback");
+    expect(tool?.inputSchema.properties.kind).toBeUndefined();
+    expect(tool?.inputSchema.required).not.toContain("kind");
+
+    // A kind hand-written into the call would have reached the cloud, because the body carries every
+    // argument that does not address the resource: the one that says `person` would have let an agent
+    // rate as a person. It does not get through, whatever it says or what type it is.
+    for (const written of ["person", 42]) {
+      const { s, calls } = server([{}]);
+      await s.handle("tools/call", {
+        name: "give_feedback",
+        arguments: {
+          project: "tienda",
+          finding: "7",
+          accuracy: "correct",
+          usefulness: "useful",
+          by: "claude",
+          kind: written,
+        },
+      });
+      expect(only(calls, 0).body).toEqual({
+        accuracy: "correct",
+        usefulness: "useful",
+        by: "claude",
+        kind: "coding-agent",
+      });
+    }
+  });
+
+  // The agent reads `tools/list` before it calls, and the description is where it learns that its
+  // rating is the agent's and how it counts.
+  it("says in the tool's description that the rating is the agent's and counts apart from the person's", () => {
+    const description = String(toolNamed("give_feedback")?.description ?? "");
+    expect(description).toContain("coding agent");
+    expect(description).toContain("apart from the person's");
+    expect(description).toContain("signal, not as accuracy");
+  });
+
+  it("keeps the two axes and the attribution beside the declared kind", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "give_feedback",
+      arguments: { project: "tienda", finding: "7", usefulness: "useful", by: "claude", note: "worth having" },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/findings/7/feedback");
+    expect(only(calls, 0).body).toEqual({
+      usefulness: "useful",
+      by: "claude",
+      note: "worth having",
+      kind: "coding-agent",
+    });
+  });
+});
+
 describe("when something goes wrong", () => {
   // A failure is a result the agent can read, never an exception that ends the session.
   it("turns an API error into a readable result and stays alive", async () => {
