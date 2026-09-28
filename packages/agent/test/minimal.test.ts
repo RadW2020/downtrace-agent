@@ -201,6 +201,7 @@ describe("the minimal mode", () => {
     const sent = JSON.parse(body) as {
       requests: { method: string; route: string }[];
       reference: { samples: { route: string }[] };
+      coarse?: { routes: { method: string; route: string }[] };
     };
     // The samples carry routes too, and they are the operator's words like any other (gh-307).
     expect(sent.reference.samples.length, "no samples, so the loop below checks nothing").toBeGreaterThan(0);
@@ -212,6 +213,11 @@ describe("the minimal mode", () => {
     // And the same hash as the batch, or the cloud cannot tell which endpoint this evidence is about.
     expect(sent.requests[0]?.route).toBe(withheldName(THEIRS.route));
     expect(sent.requests[0]?.method).toBe("GET");
+    // The coarse minutes are named by the same nameOf the fine requests are, so the minute a route was doing
+    // belongs to the endpoint the capture was asked for — withheld, never the template the operator wrote.
+    expect(sent.coarse?.routes.length, "the coarse summary carried no route").toBeGreaterThan(0);
+    expect(sent.coarse?.routes[0]?.route).toBe(withheldName(THEIRS.route));
+    expect(sent.coarse?.routes[0]?.route).toBe(sent.requests[0]?.route);
   });
 
   it("leaves the finer control doing exactly what it did", async () => {

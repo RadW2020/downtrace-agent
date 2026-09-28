@@ -479,6 +479,10 @@ describe("agent v0 (integration)", () => {
     }) as unknown as typeof fetch;
 
     const clock = testClock();
+    // The clock starts at the real now, whose place inside its second is unknown. Put the fake present on a
+    // second boundary, so the 60 ms the test advances at the end can never spill into a fourth second the test
+    // did not drive — a zero the assertions below would read as a silent second.
+    clock.advance(Math.ceil(clock.now() / 1000) * 1000 - clock.now());
     const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
       log: quiet,
       fetchImpl,

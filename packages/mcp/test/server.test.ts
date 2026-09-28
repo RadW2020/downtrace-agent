@@ -227,6 +227,25 @@ describe("calling a tool", () => {
     await s.handle("tools/call", { name: "read_finding", arguments: { project: "a/b", finding: "7" } });
     expect(only(calls, 0).url).toBe("https://cloud.test/api/p/a%2Fb/findings/7");
   });
+
+  /**
+   * Invariant 13, on the coarse summary a capture froze: it is in the resource under `fromService`, and
+   * `read_capture` is that resource. A server that filtered it out would have given an agent less than the
+   * page and the API carry, and the summary is where "how it began" is read from (gh-680).
+   */
+  it("hands back a capture with its coarse summary, as the resource serves it", async () => {
+    const resource = `{"id":"cap-1","evidence":[{"instance":"i-1","fromService":{"requests":[],"coarse":{"windowSeconds":300,"routesDropped":0,"routes":[{"method":"GET","route":"/checkout","seconds":[{"second":1757517900,"requests":4,"errors":0,"latencySumMs":48.2,"latencyMaxMs":12.1,"calls":8}]}],"eventLoop":[{"second":1757517900,"maxDelayMs":0.8}]}}}]}`;
+    const { s, calls } = server([{ body: resource }]);
+    const out = (await s.handle("tools/call", {
+      name: "read_capture",
+      arguments: { project: "tienda", capture: "cap-1" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(out.isError).toBeUndefined();
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/captures/cap-1");
+    // Verbatim: the summary the resource carries is the summary the agent gets.
+    expect(said(out)).toBe(resource);
+  });
 });
 
 /**
