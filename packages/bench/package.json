@@ -14,6 +14,7 @@
     "test:integration": "DOWNTRACE_REQUIRE_DB=1 vitest run integration",
     "typecheck": "tsc -p tsconfig.json",
     "instruments": "node src/instruments-cli.ts",
+    "coexistence": "node src/coexistence-cli.ts",
     "test:measure": "DOWNTRACE_REQUIRE_DB=1 vitest run measure"
   },
   "devDependencies": {

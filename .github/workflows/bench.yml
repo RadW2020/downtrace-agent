@@ -18,10 +18,11 @@ on:
         description: >-
           bench: the overhead campaign (default). instruments: what each observer and each half of the black box
           costs, seven head-to-head benchmarks in one run (ADR 0027, gh-570) — 20 seconds per round is plenty
-          there, and 60 takes over two hours.
+          there, and 60 takes over two hours. coexistence: what the tracker costs beside the agent, one
+          head-to-head benchmark (ESC-16, gh-615) — a reported cost, not a verdict of the budget.
         default: bench
         type: choice
-        options: [bench, instruments]
+        options: [bench, instruments, coexistence]
       rounds:
         description: B/A rounds
         default: "9"
@@ -113,10 +114,13 @@ jobs:
           set -euo pipefail
           args=(--rounds "$ROUNDS" --measure "$MEASURE" --rps "$RPS")
           if [ -n "$SOURCE_COMMIT" ]; then args+=(--source-commit "$SOURCE_COMMIT"); fi
-          # Both scripts take the same flags and both write a JSON report the next step keeps; only the question
-          # differs — how much the whole agent costs, or which part of it costs what (gh-570).
+          # The three scripts take the same flags and each writes the JSON report the next step keeps; only the
+          # question differs — how much the whole agent costs, which part of it costs what (gh-570), or what the
+          # tracker costs beside it (gh-615).
           if [ "$MODE" = instruments ]; then
             pnpm --filter @downtrace/bench run instruments "${args[@]}"
+          elif [ "$MODE" = coexistence ]; then
+            pnpm --filter @downtrace/bench run coexistence "${args[@]}"
           else
             pnpm --filter @downtrace/bench run bench "${args[@]}"
           fi
@@ -134,7 +138,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ "$MODE" = instruments ]; then report=packages/bench/instruments-report.json; else report=packages/bench/bench-report.json; fi
+          case "$MODE" in
+            instruments) report=packages/bench/instruments-report.json ;;
+            coexistence) report=packages/bench/coexistence-report.json ;;
+            *) report=packages/bench/bench-report.json ;;
+          esac
           if [ ! -f "$report" ]; then echo "no report was written, so there is nothing to keep"; exit 0; fi
 
           # The name and the message come out of the report itself, through a script a test runs — not code inside

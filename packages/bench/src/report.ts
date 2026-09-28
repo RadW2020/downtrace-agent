@@ -5,6 +5,7 @@ import type { PoolWait, ResourceUsage } from "./process-sampler.ts";
 import type { SinkStats } from "./sink.ts";
 import { round } from "./stats.ts";
 import { type BenchSubject, describeSubject } from "./subject.ts";
+import type { TrackerSinkStats } from "./tracker-sink.ts";
 import type { MetricVerdict, Verdict } from "./verdict.ts";
 import type { WarmupResult } from "./warmup.ts";
 export type Variant = "baseline" | "agent";
@@ -31,6 +32,8 @@ export interface RoundResult {
   firstErrors?: readonly string[] | undefined;
   /** What the cloud stand-in received; only for the agent variant. */
   sink?: SinkStats | undefined;
+  /** What the tracker's local sink received; only for the variant that loaded the tracker (ESC-16). */
+  tracker?: TrackerSinkStats | undefined;
 }
 
 export interface BenchConfig {

@@ -6,6 +6,7 @@ import { checkpointsSince, ProcessSampler, poolWaitSince, resetDatabase } from "
 import type { BenchConfig, BenchReport, RoundResult, Variant } from "./report.ts";
 import { Sink } from "./sink.ts";
 import { subjectOf } from "./subject.ts";
+import { TrackerSink } from "./tracker-sink.ts";
 import {
   type Aborted,
   applyCheckpointStorms,
@@ -24,8 +25,15 @@ import { runWarmup, type WarmupResult } from "./warmup.ts";
 
 export const DEFAULT_AGENT_PATH = fileURLToPath(new URL("../../agent/src/register.ts", import.meta.url));
 
+/**
+ * The tracker's entry point in the reference app: the module the coexistence campaign loads beside the agent
+ * with `--import` (ESC-16). It is the reference app's own file, not a copy here — the tracker has one entry
+ * point, and this benchmark measures what a migrating application loads.
+ */
+export const DEFAULT_TRACKER_PATH = fileURLToPath(new URL("../../reference-app/src/sentry.ts", import.meta.url));
+
 /** The repository this package lives in, so a path inside it is recorded relative and carries no home directory. */
-function repoRoot(): string {
+export function repoRoot(): string {
   return fileURLToPath(new URL("../../..", import.meta.url));
 }
 
@@ -51,6 +59,13 @@ export interface BenchOptions {
    * independent measurements are being differenced.
    */
   baselineEnv?: Record<string, string> | undefined;
+  /**
+   * A module the agent variant loads with `--import` beside the agent, after it: the tracker's entry point,
+   * the way a migrating application loads it (ESC-16). The harness owns the two faces of the tracker together:
+   * the module and a per-round local tracker sink the `SENTRY_DSN` is pointed at, so the tracker's egress never
+   * leaves this machine and a start-up can never have one without the other.
+   */
+  agentTracker?: string | undefined;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -83,20 +98,28 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
       // compared head to head instead of each against nothing.
       const agentHere = variant === "agent" || opts.baselineEnv !== undefined;
       const sink = agentHere ? new Sink() : undefined;
+      // The tracker is loaded beside the agent on the side that names it, and only there: the coexistence
+      // campaign's baseline is the agent alone (ESC-16).
+      const trackerHere = variant === "agent" && opts.agentTracker !== undefined;
+      const tracker = trackerHere ? new TrackerSink() : undefined;
       const variantEnv = variant === "agent" ? opts.agentEnv : opts.baselineEnv;
       let app: AppHandle;
       try {
         const sinkUrl = sink ? await sink.listen() : undefined;
+        const trackerDsn = tracker ? await tracker.listen() : undefined;
         app = await startReferenceApp({
           importPath: agentHere ? config.agentPath : undefined,
+          extraImportPath: trackerDsn !== undefined ? opts.agentTracker : undefined,
           env: {
             APP_VERSION: `bench-${variant}`,
             ...opts.appEnv,
             ...(sinkUrl ? { DOWNTRACE_TOKEN: "bench", DOWNTRACE_URL: sinkUrl, ...variantEnv } : {}),
+            ...(trackerDsn !== undefined ? { SENTRY_DSN: trackerDsn } : {}),
           },
         });
       } catch (err) {
         await sink?.close(); // the app never started: nothing else will close the sink's server
+        await tracker?.close();
         throw err;
       }
       try {
@@ -163,6 +186,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         // agent configuration and also ships, so discarding its batches hid half of a paired comparison
         // that could be just as broken (gh-152). Without it the baseline has no sink and this stays undefined.
         const sinkStats = sink ? { ...sink.stats } : undefined;
+        const trackerStats = tracker ? { ...tracker.stats } : undefined;
         const firstErrors = load.errors > 0 && app.firstErrors().length > 0 ? [...app.firstErrors()] : undefined;
         rounds.push({
           round,
@@ -175,6 +199,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
           checkpointWriteMs,
           checkpointCount,
           sink: sinkStats,
+          tracker: trackerStats,
           firstErrors,
         });
         const errs = load.errors ? ` · errors ${load.errors} (${describeStatuses(load.errorStatuses)})` : " · errors 0";
@@ -185,6 +210,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
       } finally {
         await app.stop();
         await sink?.close();
+        await tracker?.close();
       }
     }
   }

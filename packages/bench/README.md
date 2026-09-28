@@ -7,6 +7,7 @@ Deterministic load generator and benchmark of the agent's overhead over the refe
 ```sh
 make bench                                  # 3 rounds, 200 rps, 3 clean seconds of warm-up + 20 s of measurement
 make bench BENCH_ARGS="--warmup 3 --warmup-max 30 --measure 12"
+make bench-coexistence                      # what @sentry/node costs beside the agent (ESC-16): one head-to-head campaign
 pnpm --filter @downtrace/bench run load --url http://127.0.0.1:4000 --rps 100 --duration 10 --seed 1
 ```
 
@@ -101,3 +102,43 @@ Each step compares **two configurations of the agent head to head**, not each on
 It does not run in CI: it is a full run of the benchmark per instrument, and it is a tool for deciding, not a guardrail.
 
 The budget lives in `src/budget.ts`. `fixtures/slow-agent.ts` is a fake agent that delays one request in every 50 by 200 ms (a tail regression, the kind the p99 watches): it proves that the benchmark knows how to fail on noisy machines too.
+
+### What it costs to live beside the tracker
+
+`make bench-coexistence` measures what it costs the reference app to have `@downtrace/agent` and `@sentry/node`
+loaded at the same time (ESC-16). It is one head-to-head campaign, same app, same seeded load, changing
+**one thing**:
+
+- base: `node --import @downtrace/agent/register src/main.ts` — the whole agent.
+- contra: `node --import @downtrace/agent/register --import ./src/sentry.ts src/main.ts` — the same agent with
+  the tracker loaded beside it, the agent first and the tracker after, the order that loses least (ADR 0147).
+
+The tracker's `SENTRY_DSN` points at a local sink of the bench (`src/tracker-sink.ts`, beside the sink of the
+batches): the tracker's own transport, its own envelopes — and nothing leaves the machine, because the sink
+binds `127.0.0.1` on a port that only the round knows. The report says how many envelopes, transactions and
+events the tracker actually shipped, which is what proves it was live in the comparison. The tracker is the
+reference app's own entry point (`packages/reference-app/src/sentry.ts`), and `@sentry/node` is a development
+dependency of `@downtrace/reference-app` alone: this package reaches it through the workspace and adds nothing
+of its own.
+
+The reading, with the rules this package already has (ADR 0027 for significance, ADR 0137 for noise, ADR 0111
+for corroboration by rounds):
+
+1. **Δ p99, Δ CPU and Δ RSS between the two configurations** — what it costs to have the tracker beside.
+   Reported apart, because it is **not this package's budget**: the budget of invariant 3 is the
+   instrumentation's, and it is what the `bench` campaign measures, the agent against no agent. Declaring a
+   `pass` or a `fail` of it against this pair would be a verdict the measurement does not make; what comes out
+   is a reported number.
+2. **The agent's own estimate (`agent.resources.hookMsPerRequest`, ADR 0080), in the two configurations.** It
+   is what the budget measures, sampled inside `guard`, so it cannot contain the tracker's work by
+   construction. That it does not move is the half of the clause that says the tracker's cost is not attributed
+   to the agent.
+
+Each row is decided by a permutation test over the paired per-round differences — no assumption about their
+shape — at a level shared among the run's four comparisons, the three deltas and the hook estimate
+(Bonferroni, ADR 0027). The default is the fewest rounds at which any of the rows could clear that gate, and
+the tool says so before spending the machine. It writes `coexistence-report.json` beside the Markdown, and the
+mirror's `bench` workflow runs it when dispatched with `mode: coexistence`, keeping the report on
+`bench-reports` under a `coexistence` name.
+
+It does not run in CI: it is a full run of the benchmark, and it is a tool for reading, not a gate.

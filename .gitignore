@@ -8,6 +8,7 @@ coverage/
 .DS_Store
 cloud/bin/
 bench-report.json
+coexistence-report.json
 .demo/
 .secrets/
 *.swp

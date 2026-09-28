@@ -34,6 +34,19 @@ const instruments: KeptReport = {
   ],
 };
 
+const coexistence: KeptReport = {
+  kind: "coexistence",
+  generatedAt: "2026-09-28T09:30:00.000Z",
+  subject: { version: "0.8.1", commit: "deadbeef01234567", sourceCommit: "ca54abc9999999" },
+  config: { rounds: 8, measureSec: 12, rps: 200 },
+  metrics: [
+    { metric: "p99Ms", delta: 0.4, unit: "ms", noise: 0.8, p: 0.5, resolved: false },
+    { metric: "cpuPct", delta: 1.9, unit: "pp", noise: 0.3, p: 0.0313, resolved: true },
+    { metric: "rssMb", delta: 8, unit: "MiB", noise: 20, p: 0.25, resolved: false },
+  ],
+  hook: { baseline: 0.05, agent: 0.051, p: 0.5, resolved: false },
+};
+
 describe("naming a kept report", () => {
   it("a campaign: stamp, agent, version and the monorepo commit when the sync left one", () => {
     expect(reportFileName(campaign)).toBe("2026-09-15T13-00-05Z-agent-0.8.1-bcc11dc.json");
@@ -61,6 +74,18 @@ describe("naming a kept report", () => {
       "bench-instruments: agent 0.8.1 — 1 of 2 resolved on 9×20s at 200 rps\n\n" +
         "the agent itself: ΔCPU +1.2 pp ± 0.3 (p 0.0039) resolved\n" +
         "the fine detail: ΔCPU -0.05 pp ± 0.4 (p 0.5) not resolved\n\n",
+    );
+  });
+
+  it("a coexistence run: named apart from the campaigns, the deltas reported without a budget", () => {
+    expect(reportFileName(coexistence)).toBe("2026-09-28T09-30-00Z-coexistence-0.8.1-ca54abc.json");
+    expect(reportMessage(coexistence)).toBe(
+      "bench-coexistence: agent 0.8.1 — what the tracker costs beside it on 8×12s at 200 rps\n\n" +
+        "p99Ms +0.4 ms (noise 0.8, p 0.5) not resolved\n" +
+        "cpuPct +1.9 pp (noise 0.3, p 0.0313) resolved\n" +
+        "rssMb +8 MiB (noise 20, p 0.25) not resolved\n" +
+        "\n" +
+        "hook estimate 0.05 → 0.051 ms/request (p 0.5, not resolved)\n\n",
     );
   });
 

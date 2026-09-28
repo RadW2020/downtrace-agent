@@ -52,6 +52,12 @@ export function summarizeErrorLine(line: string): ErrorLine {
 export interface StartOptions {
   /** Module preloaded with `node --import` (the agent, or a fixture). Absolute path. */
   importPath?: string | undefined;
+  /**
+   * A second module preloaded with `node --import`, after the first one: the tracker's entry point, loaded
+   * beside the agent the way its own documentation asks and the way a migrating application loads it (ESC-16).
+   * The order is the one the coexistence campaign names — the agent first, then the tracker (ADR 0147).
+   */
+  extraImportPath?: string | undefined;
   env?: Record<string, string> | undefined;
   readyTimeoutMs?: number | undefined;
 }
@@ -81,10 +87,18 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
   }
   const args: string[] = [];
   if (opts.importPath) args.push("--import", pathToFileURL(opts.importPath).href);
+  if (opts.extraImportPath) args.push("--import", pathToFileURL(opts.extraImportPath).href);
   args.push(REF_APP_MAIN);
 
+  // The tracker is a property of the start-up this benchmark chooses, not of the ambient environment. An
+  // inherited `SENTRY_DSN` would either abort a process the harness did not load a tracker into (the app
+  // refuses to start with a DSN and no initialised tracker) or, worse, point a loaded tracker at something
+  // outside this machine. Two numbers measured from different start-ups cannot be subtracted (ADR 0023).
+  const inherited: NodeJS.ProcessEnv = { ...process.env };
+  if (!("SENTRY_DSN" in (opts.env ?? {}))) delete inherited.SENTRY_DSN;
+
   const child = spawn(process.execPath, args, {
-    env: { ...process.env, PORT: "0", PROVIDER_PORT: "0", ADMIN_ENABLED: "1", REGRESSIONS: "", ...opts.env },
+    env: { ...inherited, PORT: "0", PROVIDER_PORT: "0", ADMIN_ENABLED: "1", REGRESSIONS: "", ...opts.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

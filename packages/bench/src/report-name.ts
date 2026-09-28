@@ -38,7 +38,21 @@ interface InstrumentsReport {
   steps: { name: string; cpuPp: number; cpuNoise2se: number; p: number; resolved: boolean }[];
 }
 
-export type KeptReport = CampaignReport | InstrumentsReport;
+interface CoexistenceReport {
+  kind: "coexistence";
+  generatedAt: string;
+  subject?: Subject | undefined;
+  config: { rounds: number; measureSec: number; rps: number };
+  /** The tracker's cost, per metric: no budget, no verdict — what is reported, not what is judged (ESC-16). */
+  metrics: { metric: string; delta: number; unit: string; noise: number; p: number; resolved: boolean }[];
+  /** The agent's own hook estimate in the two configurations; undefined when no round was measured. */
+  hook?:
+    | { baseline?: number | undefined; agent?: number | undefined; p?: number | undefined; resolved: boolean }
+    | undefined;
+  reason?: string | undefined;
+}
+
+export type KeptReport = CampaignReport | InstrumentsReport | CoexistenceReport;
 
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
@@ -52,9 +66,9 @@ function identity(r: KeptReport): { stamp: string; version: string; commit: stri
 
 export function reportFileName(r: KeptReport): string {
   const { stamp, version, commit } = identity(r);
-  return r.kind === "instruments"
-    ? `${stamp}-instruments-${version}-${commit}.json`
-    : `${stamp}-agent-${version}-${commit}.json`;
+  if (r.kind === "instruments") return `${stamp}-instruments-${version}-${commit}.json`;
+  if (r.kind === "coexistence") return `${stamp}-coexistence-${version}-${commit}.json`;
+  return `${stamp}-agent-${version}-${commit}.json`;
 }
 
 export function reportMessage(r: KeptReport): string {
@@ -65,6 +79,17 @@ export function reportMessage(r: KeptReport): string {
     const step = (s: InstrumentsReport["steps"][number]) =>
       `${s.name}: ΔCPU ${signed(s.cpuPp)} pp ± ${s.cpuNoise2se} (p ${s.p}) ${s.resolved ? "resolved" : "not resolved"}`;
     return `bench-instruments: agent ${version} — ${resolved} of ${r.steps.length} resolved ${where}\n\n${r.steps.map(step).join("\n")}\n\n`;
+  }
+  if (r.kind === "coexistence") {
+    const metric = (m: CoexistenceReport["metrics"][number]) =>
+      `${m.metric} ${signed(m.delta)} ${m.unit} (noise ${m.noise}, p ${m.p}) ${m.resolved ? "resolved" : "not resolved"}`;
+    const hook = r.hook
+      ? `\nhook estimate ${r.hook.baseline ?? "—"} → ${r.hook.agent ?? "—"} ms/request (p ${r.hook.p ?? "—"}, ${r.hook.resolved ? "resolved" : "not resolved"})\n`
+      : "";
+    return (
+      `bench-coexistence: agent ${version} — what the tracker costs beside it ${where}\n\n` +
+      `${r.metrics.map(metric).join("\n")}\n${hook}${r.reason ? `\n${r.reason}\n` : ""}\n`
+    );
   }
   const metric = (m: CampaignReport["metrics"][number]) =>
     `${m.metric} ${signed(m.delta)} ${m.unit} (budget ${m.budget}, noise ${m.noise}) ${m.status}`;
