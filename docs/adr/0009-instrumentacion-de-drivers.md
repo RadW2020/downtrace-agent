@@ -1,6 +1,6 @@
 # ADR 0009 — Cómo el agente observa el driver de base de datos
 
-Estado: aceptado; su consecuencia sobre que el bench comprueba el presupuesto en cada ejecución de CI está **superada por el ADR 0032** · Fecha: 2026-09-05 · Alcance: público
+Estado: aceptado; su consecuencia sobre que el bench comprueba el presupuesto en cada ejecución de CI está **superada por el ADR 0032**, y su decisión de cargar el driver al arrancar está **superada por el ADR 0209** (el arranque lo resuelve sin cargarlo, y el parche entra desde la primera request) · Fecha: 2026-09-05 · Alcance: público
 
 ## Contexto
 
@@ -15,7 +15,7 @@ Se probaron tres mecanismos sobre Node 26 antes de decidir (las pruebas están e
 ## Decisión
 
 - **Contexto por request con `AsyncLocalStorage` y `enterWith`** desde el subscriptor de `http.server.request.start`. Node publica ese evento dentro del contexto asíncrono de la propia request, así que el store alcanza al handler y a todo lo que este espere. Verificado con 24 requests concurrentes sobre conexiones reutilizadas: ninguna cuenta el trabajo de otra.
-- **El agente resuelve `pg` desde la raíz de la aplicación y parchea el prototipo al arrancar.** El agente se carga antes que la aplicación (`node --import`); los módulos CommonJS se cachean por ruta resuelta, de modo que la instancia que la aplicación importe después es la que ya está instrumentada. Sirve igual si la aplicación es ESM o CommonJS, no añade dependencias y no toca el resolutor de módulos.
+- **El agente resuelve `pg` desde la raíz de la aplicación y parchea el prototipo al arrancar.** El agente se carga antes que la aplicación (`node --import`); los módulos CommonJS se cachean por ruta resuelta, de modo que la instancia que la aplicación importe después es la que ya está instrumentada. Sirve igual si la aplicación es ESM o CommonJS, no añade dependencias y no toca el resolutor de módulos. El «al arrancar» está **superado por el ADR 0209**: el arranque resuelve `pg` sin cargarla, y el parche entra en el arranque de la primera request en que la aplicación ya la ha cargado —un `require` que da en la caché y no reejecuta nada—, porque cargarla aquí calienta la caché antes que los hooks de un tracker que instrumenta por carga de módulos (gh-614). El mecanismo —resolver desde la raíz, parchear el prototipo, sin hooks de carga ni dependencias— no cambia.
 - **El envoltorio no cambia nada de lo que ve la aplicación**: mismos argumentos, mismo resultado, mismo error, mismo orden de resolución. Cubre la forma de promesa y la de callback; un `Cursor` o un `QueryStream` no es *thenable* y pasa de largo sin medirse. Cualquier fallo del envoltorio ejecuta la query original.
 - **Solo se cuenta**: número de queries, suma de duraciones y máximo. Nunca el texto de la query ni sus valores, en v1 ni siquiera su huella.
 - **`DOWNTRACE_INSTRUMENT=none`** desactiva el envoltorio sin desactivar el agente.

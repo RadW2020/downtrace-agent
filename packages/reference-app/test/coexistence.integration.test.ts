@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 /**
  * ESC-16: the tracker Downtrace is meant to replace, loaded in the same process.
  *
- * covers: ERR-01, ERR-02
+ * covers: ERR-01, ERR-02, ESC-16
  *
  * «Each instrumentation observes what it would observe alone —requests, operations per request, errors— and
  * neither disables the other.» The only way to check that is to run the four configurations —each alone, and
@@ -22,9 +22,6 @@ import { afterEach, describe, expect, it } from "vitest";
  * one that would be sent— to a file (ADR 0033). No sink, no token, and above all no egress of ours to confuse
  * the comparison. The tracker's side is read through a **DSN pointing at a local HTTP server**: its real
  * transport, its real envelopes, nothing that leaves this machine.
- *
- * What this file does **not** claim is in `it("the tracker's own pg spans…")` below, and it is the reason
- * ESC-16 is still listed as not covered in `scripts/check-commitments.sh`.
  */
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -599,26 +596,24 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
   }, 180_000);
 
   /**
-   * The half of ESC-16 that is **not** met, pinned so that meeting it turns this red.
+   * The half of ESC-16 that gh-614 fixed, pinned so that breaking it turns this red.
    *
-   * `instrumentPg` resolves `pg` from the application's root and requires it at start-up (ADR 0009): no loader
-   * hooks, no dependency, works for an ESM application and a CommonJS one alike. `@sentry/node` instruments
-   * `pg` the other way, by hooking module loading — and a module that is already in the cache is a module its
-   * hook never sees. The two do not compose:
+   * `@sentry/node` instruments `pg` by hooking module loading — and a module that is already in the cache is
+   * a module whose `pg-pool` half its hook never sees, while a driver named once more under it is wrapped
+   * again on top of whatever sits there. The agent's own `require("pg")` at start-up changed the shape of
+   * every load: with the tracker loaded second, it had run `pg`'s body — and `pg-pool`'s with it — before
+   * any hook existed, so the tracker never patched the pool and lost its connect span; with the tracker
+   * loaded first, it made the first load happen under the hooks, so the application's own `import "pg"` was
+   * a re-naming the tracker wrapped again on top of our wrapper, which it does not recognise as one, and it
+   * sent every query span twice.
    *
-   * - Downtrace loaded first: `pg-pool` is in the cache before the tracker's hooks exist, so its
-   *   `Pool.prototype.connect` is never patched and **the tracker loses its connect span**. The query spans
-   *   are right.
-   * - The tracker loaded first: its hook fires on *our* `require("pg")` and again on the application's
-   *   `import "pg"`, and our wrapper sitting on top of the first patch is not recognised as a wrapper, so
-   *   nothing is unwrapped and **every query span is sent twice**.
-   *
-   * Downtrace observes the same thing either way — that is the test above — so what is broken is one half of
-   * «each observes what it would observe alone», and it is ours to fix: nothing the tracker does would help.
-   * gh-614 carries the fix; until it lands, the README says which order loses least and ESC-16 stays in
-   * `NOT_YET_COVERED`.
+   * The fix (ADR 0209) is that the agent never loads `pg` itself: it only resolves it at start-up, and it
+   * patches the prototypes when the application has loaded the driver — from the start of the first request
+   * at which the driver is in the module cache, a cache hit that re-executes nothing. Whatever order the two
+   * are loaded in, the application's own load of `pg` is the only one the tracker's hooks ever see, and the
+   * tracker observes what it would alone: one connect span and one query span per request, and not one more.
    */
-  it("the tracker's own pg spans do not survive our start-up require: the gap gh-614 fixes", async () => {
+  it("the tracker's own pg spans survive either load order, without duplicates", async () => {
     const [alone, downtraceFirst, trackerFirst] = await Promise.all([
       observe(["tracker"]),
       observe(["downtrace", "tracker"]),
@@ -627,15 +622,22 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
     const spans = (run: Observed) => run.tracker?.dbSpans["GET /products"] ?? [];
     const query = "SELECT id, name, price_cents, stock FROM products ORDER BY id";
 
-    // Alone: one connect span and one query span per request, three requests.
-    expect(spans(alone).filter((d) => d === "pg-pool.connect")).toHaveLength(3);
-    expect(spans(alone).filter((d) => d === query)).toHaveLength(3);
-    // Downtrace first: the connect span is gone, the query spans are still one per request.
-    expect(spans(downtraceFirst).filter((d) => d === "pg-pool.connect")).toHaveLength(0);
-    expect(spans(downtraceFirst).filter((d) => d === query)).toHaveLength(3);
-    // The tracker first: the connect span is back and every query span is duplicated.
-    expect(spans(trackerFirst).filter((d) => d === "pg-pool.connect")).toHaveLength(3);
-    expect(spans(trackerFirst).filter((d) => d === query)).toHaveLength(6);
+    for (const [order, run] of [
+      ["the tracker alone", alone],
+      ["downtrace first", downtraceFirst],
+      ["the tracker first", trackerFirst],
+    ] as const) {
+      // One connect span and one query span per request, three requests — in every configuration, and not
+      // one more: a missing span is the tracker not seeing its driver, a duplicate one is a double wrap.
+      expect(
+        spans(run).filter((d) => d === "pg-pool.connect"),
+        order,
+      ).toHaveLength(3);
+      expect(
+        spans(run).filter((d) => d === query),
+        order,
+      ).toHaveLength(3);
+    }
   }, 180_000);
 });
 

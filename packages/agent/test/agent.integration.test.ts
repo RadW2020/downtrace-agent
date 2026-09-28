@@ -1,5 +1,6 @@
 import { channel, tracingChannel } from "node:diagnostics_channel";
 import http from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import {
   AGGREGATES_PATH,
@@ -257,6 +258,9 @@ describe("agent v0 (integration)", () => {
     // The pg line used to appear twice: instrumentPg writes it, and the agent wrote it again from the returned
     // version. Nothing was instrumented twice — the symbol guard sees to that — but the log said it was, and a
     // log that lies sends whoever reads it looking for a problem that is not there.
+    //
+    // The line lands when the observer patches, and with the deferred attach (ADR 0209) that is the start of
+    // the first request at which the application has loaded the driver — not `start()`.
     const sink = await startSink();
     const lines: string[] = [];
     const agent = new Agent(config(sink.url, { instrument: new Set(["pg"]) }), {
@@ -264,8 +268,18 @@ describe("agent v0 (integration)", () => {
     });
     cleanups.push(() => agent.stop(), sink.close);
     agent.start();
+    // Not yet: the application has not loaded the driver, and no request has started.
+    expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(0);
 
+    // The application loads the driver — from the same root the agent resolved it — and a request starts:
+    // the observer patches and announces, once.
+    const appRequire = createRequire(process.argv[1] ?? `${process.cwd()}/`);
+    appRequire("pg");
+    channel("http.server.request.start").publish({ request: { method: "GET", url: "/products/7" } });
     // Exactly one: zero would mean the observer never ran and the test proves nothing.
+    expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(1);
+    // And a second request does not say it again.
+    channel("http.server.request.start").publish({ request: { method: "GET", url: "/products/8" } });
     expect(lines.filter((l) => l.includes("instrumented pg"))).toHaveLength(1);
   });
   // gh-371: a process that lives less than a minute used to send no profile at all. The window is 60 s and

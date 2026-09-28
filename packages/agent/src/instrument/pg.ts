@@ -63,14 +63,20 @@ export interface InstrumentPgDeps {
 }
 
 /**
- * Wraps `pg`'s `Client.prototype.query` so every query counts towards the request that issued it.
- *
- * The agent loads before the application (`node --import`), resolves `pg` from the application's own root and
- * patches the prototype. CommonJS modules are cached by resolved path, so the instance the application later
- * imports is the one patched here: no loader hooks, no dependency, and it works whether the app is ESM or CJS.
- *
- * Returns the instrumented module's version, or undefined when there is nothing to instrument.
+ * What `armPg` leaves behind at start-up: what the batch can already report, and the attach that runs the
+ * patch from the start of a request.
  */
+export interface PgArmed {
+  /** Resolved from the application's root: «on», or «unavailable» when there is no `pg` to instrument. */
+  state: "on" | "unavailable";
+  /**
+   * Patches the driver once the application has loaded it. Called from the start of each request until it
+   * settles: `true` when the attach is done — patched, or decided there is nothing to patch — and `false`
+   * while the application has not loaded the driver yet.
+   */
+  attach: () => boolean;
+}
+
 /**
  * Records what a failed operation threw, beside the operation itself.
  *
@@ -101,6 +107,16 @@ function recordErrorIn(
   });
 }
 
+/**
+ * Wraps `pg`'s `Client.prototype.query` so every query counts towards the request that issued it.
+ *
+ * The module is handed over already loaded — a test gives one, or the caller resolves and requires it from
+ * the application's root — and the patch lands on the prototype the application actually uses: no loader
+ * hooks, no dependency, and it works whether the app is ESM or CJS. The production start-up does not call
+ * this one; it calls `armPg`, which defers the load to the application (ADR 0209).
+ *
+ * Returns the instrumented module's version, or undefined when there is nothing to instrument.
+ */
 export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   let pg: PgModule;
   let version = "unknown";
@@ -124,6 +140,88 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
     return undefined;
   }
   if (proto[MARK] === true) return version;
+  patchClientAndPool(pg, version, deps);
+  return version;
+}
+
+/**
+ * The start-up half of `pg`'s instrumentation: it resolves the driver from the application's root and does
+ * not load it (ADR 0209).
+ *
+ * Loading it here would warm the module cache before the application's own load, and a tracker that
+ * instruments `pg` by hooking module loading would then never see the driver the way it would alone: with
+ * this observer loaded first, its hook for `pg-pool` would never run at all (the application loads `pg` once,
+ * from the cache this observer warmed); with the tracker loaded first, its hook would run a second time on
+ * top of this observer's wrapper, which it does not recognise as one, and would wrap the query twice.
+ * Resolving keeps the patch where it has to be — on the prototype the application actually uses, whatever
+ * order the two are loaded in — without taking the load from the application.
+ *
+ * The patch itself runs in `attach`, from the start of the first request at which the driver is in the
+ * module cache: by then the application has loaded it (a server that answers a request has finished its
+ * start-up), the `require` is a cache hit that re-executes nothing, and the wrapper is in place before the
+ * request's handler runs. What that moment gives up is said in ADR 0209: a query the application makes in
+ * the very request that loads the driver for the first time — a lazy import in a handler — is the one this
+ * observer does not count; from the next request it counts again.
+ */
+export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): PgArmed {
+  const base = deps.from ?? process.argv[1] ?? `${process.cwd()}/`;
+  const require = createRequire(base);
+  let resolved: string;
+  try {
+    resolved = require.resolve("pg");
+  } catch {
+    deps.log.debug("pg is not resolvable from the application's root; not instrumenting");
+    return { state: "unavailable", attach: () => true };
+  }
+  // The version of the log, read at start-up where the old start-up require read it, and not in a request.
+  let version = "unknown";
+  try {
+    const pkg = require("pg/package.json") as { version?: unknown };
+    if (typeof pkg.version === "string") version = pkg.version;
+  } catch {
+    deps.log.debug("pg resolved but its version could not be read; it stays unknown");
+  }
+  let settled = false;
+  const attach = (): boolean => {
+    if (settled) return true;
+    try {
+      // Until the application loads the driver there is nothing to patch, and nothing is lost by waiting:
+      // a query cannot run before the driver is loaded, and a query outside a request is not counted
+      // (`context.ts`). The check is one property read on the module cache, once per request until then.
+      if (require.cache[resolved] === undefined) return false;
+      settled = true;
+      const pg = require("pg") as PgModule;
+      const proto = pg.Client?.prototype;
+      if (!proto || typeof proto.query !== "function") {
+        deps.log.debug("pg found but Client.prototype.query is not a function; not instrumenting");
+        return true;
+      }
+      if (proto[MARK] === true) return true;
+      patchClientAndPool(pg, version, deps);
+      return true;
+    } catch (err) {
+      // A failure of the attach is a failure of the instrumentation's own: counted like any other
+      // (invariant 2, ADR 0161), and never handed to the request that asked for it.
+      settled = true;
+      deps.internalError(err);
+      return true;
+    }
+  };
+  return { state: "on", attach };
+}
+
+/**
+ * The patch both entry points share: the wrapper on `Client.prototype.query`, the wait on
+ * `Pool.prototype.connect`, and the marks that keep it to one. The shape of the module was checked by the
+ * caller, which is the one that knows how to say it is wrong.
+ */
+function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDeps): void {
+  const proto = pg.Client?.prototype;
+  if (!proto || typeof proto.query !== "function") {
+    deps.log.debug("pg found but Client.prototype.query is not a function; not instrumenting");
+    return;
+  }
+  if (proto[MARK] === true) return;
 
   const { fingerprints, internalError } = deps;
   const original = proto.query as (...args: unknown[]) => unknown;
@@ -238,7 +336,6 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
   proto[MARK] = true;
   wrapPoolConnect(pg, deps);
   deps.log.debug(`instrumented pg ${version}`);
-  return version;
 }
 
 /**

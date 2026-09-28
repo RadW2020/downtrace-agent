@@ -1,14 +1,20 @@
 import { AsyncResource } from "node:async_hooks";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "../src/agent.ts";
 import { currentContext, enterRequest } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
-import { instrumentPg } from "../src/instrument/pg.ts";
+import { armPg, instrumentPg } from "../src/instrument/pg.ts";
 import type { Logger } from "../src/log.ts";
 import { testConfig } from "./support/agent-config.ts";
 
@@ -899,5 +905,135 @@ describe("what pg throws or calls back reaches the application once", () => {
       enter();
       expect(await run(true)).toEqual(bare);
     });
+  });
+});
+
+/**
+ * The deferred attach (ADR 0209): the agent resolves `pg` from the application's root without loading it,
+ * and patches it from the start of the first request at which the application has loaded it. A `node_modules`
+ * of its own per test, so the resolution and the module cache are the real ones — the mechanism being tested
+ * is the cache, and a stub for it would be a stub for the answer.
+ */
+describe("armPg, the deferred attach", () => {
+  interface StubApp {
+    /** The root the agent and the application resolve `pg` from. */
+    from: string;
+    /** The application's own require, for loading the driver. */
+    appRequire: NodeRequire;
+  }
+
+  const apps: Array<{ cleanup: () => Promise<void> }> = [];
+  afterEach(async () => {
+    for (const app of apps.splice(0)) await app.cleanup();
+  });
+
+  /**
+   * A `node_modules` holding a `pg`: resolvable from `from`, loaded into the shared module cache by
+   * `appRequire`, with the version in its `package.json` that the log line carries.
+   */
+  async function stubApp(indexJs: string): Promise<StubApp> {
+    const dir = await mkdtemp(join(tmpdir(), "downtrace-armpg-"));
+    const pgDir = join(dir, "node_modules", "pg");
+    await mkdir(pgDir, { recursive: true });
+    await writeFile(join(pgDir, "package.json"), JSON.stringify({ name: "pg", version: "8.99.0", main: "index.js" }));
+    await writeFile(join(pgDir, "index.js"), indexJs);
+    const from = join(dir, "app.js");
+    apps.push({ cleanup: () => rm(dir, { recursive: true, force: true }) });
+    return { from, appRequire: createRequire(from) };
+  }
+
+  const DRIVER = `
+    class Client { query() { return Promise.resolve({ rows: [] }); } }
+    class Pool { connect() { return new Promise((resolve) => setTimeout(() => resolve(new Client()), 1)); } }
+    module.exports = { Client, Pool };
+  `;
+
+  it("resolves without loading, so the application's own load is still the first load", async () => {
+    const app = await stubApp(DRIVER);
+    const armed = armPg({ ...deps, from: app.from });
+    expect(armed.state).toBe("on");
+    // The agent's resolution did not warm the module cache: a tracker that instruments pg by hooking module
+    // loading still sees the application's load as the first one, in whatever order the two were loaded.
+    expect(app.appRequire.cache[app.appRequire.resolve("pg")]).toBeUndefined();
+    // And the attach, from a request before the application has loaded the driver, waits rather than fails.
+    expect(armed.attach()).toBe(false);
+    expect(armed.attach()).toBe(false);
+  });
+
+  it("patches at the first request after the application has loaded the driver, and counts its queries", async () => {
+    const app = await stubApp(DRIVER);
+    const armed = armPg({ ...deps, from: app.from });
+    expect(armed.attach()).toBe(false); // the application has not loaded the driver yet
+    app.appRequire("pg"); // the application loads the driver
+    expect(armed.attach()).toBe(true); // the first request that finds it there
+    const proto = app.appRequire("pg").Client.prototype as unknown as Record<PropertyKey, unknown>;
+    expect(proto[Symbol.for("downtrace.pg.instrumented")], "the driver the application loaded is the one patched").toBe(
+      true,
+    );
+    expect(armed.attach()).toBe(true); // settled: a second request says nothing and patches nothing
+    const client = new (app.appRequire("pg").Client as new () => { query: (sql: string) => Promise<unknown> })();
+    const ctx = enterRequest();
+    await client.query("select 1");
+    expect(pgWork(ctx).calls).toBe(1);
+  });
+
+  it("settles at once when the application loaded the driver before the observer armed", async () => {
+    const app = await stubApp(DRIVER);
+    app.appRequire("pg");
+    const armed = armPg({ ...deps, from: app.from });
+    expect(armed.state).toBe("on");
+    expect(armed.attach()).toBe(true);
+    const proto = app.appRequire("pg").Client.prototype as unknown as Record<PropertyKey, unknown>;
+    expect(proto[Symbol.for("downtrace.pg.instrumented")]).toBe(true);
+  });
+
+  it("announces once, with the version of the module it patched", async () => {
+    const app = await stubApp(DRIVER);
+    const lines: string[] = [];
+    const armed = armPg({ ...deps, log: { warn: () => {}, debug: (m: string) => lines.push(m) }, from: app.from });
+    app.appRequire("pg");
+    armed.attach();
+    armed.attach();
+    expect(lines.filter((l) => l.includes("instrumented pg 8.99.0"))).toHaveLength(1);
+  });
+
+  it("says unavailable when the driver cannot be resolved, and its attach settles at once", async () => {
+    // The test process itself resolves `pg` from anywhere (its own module paths), so the question is asked of
+    // a process of its own, with no fallback paths and a root that holds no `node_modules`: the same answer an
+    // application that does not use pg gets.
+    const dir = await mkdtemp(join(tmpdir(), "downtrace-armpg-"));
+    apps.push({ cleanup: () => rm(dir, { recursive: true, force: true }) });
+    const src = fileURLToPath(new URL("../src/instrument/pg.ts", import.meta.url));
+    const script = `
+      import { armPg } from ${JSON.stringify(src)};
+      const armed = armPg({
+        log: { warn: () => {}, debug: () => {} },
+        internalError: (err) => { console.error(String(err)); process.exit(2); },
+        from: process.argv[1],
+      });
+      console.log(armed.state);
+      console.log(armed.attach());
+      console.log(armed.attach());
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, join(dir, "app.js")], {
+      env: { ...process.env, NODE_PATH: "" },
+    });
+    let stdout = "";
+    child.stdout.on("data", (c: Buffer) => {
+      stdout += c.toString();
+    });
+    const code = await new Promise<number>((resolve) => child.on("exit", resolve));
+    expect(code, stdout).toBe(0);
+    expect(stdout.trim().split("\n")).toEqual(["unavailable", "true", "true"]);
+  });
+
+  it("settles without patching when the resolved module is not the driver", async () => {
+    const app = await stubApp("module.exports = {};");
+    const armed = armPg({ ...deps, from: app.from });
+    app.appRequire("pg");
+    expect(armed.attach()).toBe(true); // settled: there is nothing to patch
+    expect(armed.attach()).toBe(true);
+    // And nothing reached the request that asked for the attach.
+    expect(handedOver()).toEqual([]);
   });
 });

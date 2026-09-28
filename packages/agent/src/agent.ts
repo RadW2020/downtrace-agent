@@ -30,7 +30,7 @@ import { FineRegister } from "./fine.ts";
 import { type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
-import { instrumentPg } from "./instrument/pg.ts";
+import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
@@ -212,6 +212,12 @@ export class Agent {
   private readonly excludedEndpoints: Excluded;
   private readonly excludedDependencies: Excluded;
   private instrumented = false;
+  /**
+   * The `pg` observer's deferred attach (ADR 0209): it patches the driver the application has loaded, from
+   * the start of the first request at which the driver is in the module cache. Set in `start()` when `pg` is
+   * asked for and no module was handed over, and cleared once the attach settles.
+   */
+  private pgAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
@@ -425,18 +431,33 @@ export class Agent {
     // A failure while an observer records is one of the instrumentation's own, and is counted like any other:
     // at the tenth the instrumentation disables itself (invariant 2, ADR 0161).
     const internalError = (err: unknown): void => this.internalError(err);
-    // instrumentPg announces itself, and knows the version: saying it again here made the log claim two
+    // The pg observer announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
     if (on.has("pg")) {
-      const version = instrumentPg({
-        log: this.log,
-        internalError,
-        fingerprints: this.fingerprints,
-        errors: this.errors,
-        ...(this.pgModule !== undefined ? { moduleImpl: this.pgModule } : {}),
-      });
-      // The only observer that resolves a module, so the only one that can be asked for and not attach.
-      observers.pg = version === undefined ? "unavailable" : "on";
+      if (this.pgModule !== undefined) {
+        const version = instrumentPg({
+          log: this.log,
+          internalError,
+          fingerprints: this.fingerprints,
+          errors: this.errors,
+          moduleImpl: this.pgModule,
+        });
+        observers.pg = version === undefined ? "unavailable" : "on";
+      } else {
+        // The production path (ADR 0209): resolve without loading, and patch from the start of the first
+        // request at which the application has loaded the driver. A tracker loaded beside this observer
+        // instruments pg by hooking module loading, and a driver this observer loaded at start-up is one its
+        // hook never sees — or sees a second time, on top of this observer's own wrapper.
+        const armed = armPg({
+          log: this.log,
+          internalError,
+          fingerprints: this.fingerprints,
+          errors: this.errors,
+        });
+        // The only observer that resolves a module, so the only one that can be asked for and not attach.
+        observers.pg = armed.state;
+        this.pgAttach = armed.attach;
+      }
     }
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
@@ -849,6 +870,11 @@ export class Agent {
     const startedAt = performance.now();
     this.starts.set(request, startedAt);
     this.runtime.requestStarted();
+    // The pg observer's deferred attach (ADR 0209): by the time a request starts the application has
+    // finished loading its modules, so this is the moment the patch goes in if the driver is in the module
+    // cache, and it is before the handler runs. One property read per request until the attach settles;
+    // nothing after, because the reference goes with the settle.
+    if (this.pgAttach?.()) this.pgAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
     // from there would be state this repository does not keep.

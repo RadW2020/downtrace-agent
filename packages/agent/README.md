@@ -277,24 +277,24 @@ can run in the same process. Verified against `@sentry/node` **10.75.0**, with a
 node --import @downtrace/agent/register --import ./instrument.mjs server.js
 ```
 
-**Load this one first.** Both orders work and neither breaks the other; the difference is what the tracker
-loses. This instrumentation resolves `pg` from your application's root and patches it when it starts, with
-no loader hooks (that is what lets it work without you importing anything). A tracker built on
-OpenTelemetry patches `pg` the other way, by hooking module loading — so whichever order you pick, the
-module cache is warm before one of them expects it to be:
+**Either order is exact.** Both instrumentations end up wrapping the same `pg` prototype, and this one no
+longer loads the driver at start-up: it resolves it from your application's root (with no loader hooks,
+which is what lets it work without you importing anything) and patches it from the first request at which
+your application has loaded it — a cache hit that re-executes nothing. So whichever order the two are
+loaded in, your application's own load of `pg` is the only one the tracker's hooks ever see, and each one
+observes what it would alone: same requests, calls per request and errors on this side, and the tracker's
+own `pg` spans on its side — one `pg-pool.connect` and one query span per request, with no duplicates. A
+test runs the three configurations — each one alone, and both in each order — against one another.
 
-| order | what this instrumentation sees | what the tracker sees |
-| --- | --- | --- |
-| Downtrace, then the tracker | everything | everything but its `pg-pool.connect` span |
-| the tracker, then Downtrace | everything | **every `pg` query span twice** |
+**The one thing it gives up is said here, not found.** If your application loads `pg` lazily — an
+`import("pg")` inside a handler — the queries of the request that loads it for the first time are not
+counted; from the next request they are. An application that imports `pg` where it imports the rest loses
+nothing.
 
-Duplicated spans are worse than a missing one, so put `@downtrace/agent/register` first. Tracked as gh-614;
-when it is fixed, either order will be exact and this table goes.
-
-**The table was measured with an ESM application** — the one place the two designs meet is your own
-`import "pg"`, and in a CommonJS application that is a `require` sharing one cache with ours, so the split
-between what survives and what does not may differ. Not verified. If your application is CommonJS and you
-care about your tracker's `pg` spans while both are installed, check them.
+**That was verified with an ESM application.** A CommonJS application shares the module cache the same
+way, but the tracker's hooks only fire on a real load there, so whether its `pg` spans survive is a matter
+of its own load order; it is not verified, so if your application is CommonJS and you care about your
+tracker's `pg` spans while both are installed, check them.
 
 Everything else composes cleanly, in both orders, and there is a test that compares exact counts —
 requests, calls per request, errors — against each one running alone:
