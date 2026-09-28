@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const TESTS = new URL("./", import.meta.url).pathname;
@@ -14,9 +14,14 @@ const TESTS = new URL("./", import.meta.url).pathname;
  *
  * Not named `measures.test.ts`, which is what it was called first: that matches the very pattern the fast
  * suite excludes, so the guard would have been excluded from the suite it guards.
+ *
+ * Every test file, read from the directory and not from a list, **and from every directory under it**: a list
+ * written by hand only checks the files somebody remembered to put in it. The first version of this guard
+ * read `test/` and not `test/support/`, which is a list with one entry: the root — and vitest was already
+ * running the file it said it checked (gh-624, the same shape as gh-610 in `clock.test.ts`).
  */
 function fastSuite(): string[] {
-  return readdirSync(TESTS)
+  return readdirSync(TESTS, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".test.ts") && !name.includes("measure"))
     .sort();
 }
@@ -32,6 +37,26 @@ describe("what the fast suite is allowed to assert", () => {
   it("has files to check", () => {
     // A rule that reads nothing passes for the wrong reason.
     expect(fastSuite().length).toBeGreaterThan(20);
+  });
+
+  // A test file in a subdirectory is a test file the way vitest runs it — its include is `**/*.test.ts` —
+  // so the guard must read it. The first version of this guard read the directory and not its
+  // subdirectories, which is a list with one entry: the root. The one that breaks this rule next is the one
+  // added after it (gh-624, the same shape as gh-610 in `clock.test.ts`).
+  it("reads every directory that contains a fast suite test, not only the first", () => {
+    const entries = readdirSync(TESTS, { recursive: true, withFileTypes: true });
+    const withTests = new Set(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts") && !entry.name.includes("measure"))
+        .map((entry) => entry.parentPath.slice(TESTS.length)),
+    );
+    const read = new Set(fastSuite().map((file) => dirname(file)));
+    const directories = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(entry.parentPath, entry.name).slice(TESTS.length))
+      .filter((directory) => withTests.has(directory));
+    expect(directories.length, "there is a subdirectory with tests to read, or this says nothing").toBeGreaterThan(0);
+    for (const directory of directories) expect(read, `${directory} was never read`).toContain(directory);
   });
 
   // Measuring an elapsed time and comparing it against a constant is the shape. Reading the clock is not:
