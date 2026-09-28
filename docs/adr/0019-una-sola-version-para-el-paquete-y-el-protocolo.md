@@ -1,6 +1,6 @@
 # ADR 0019 — La versión de `@downtrace/protocol` y la del protocolo son un solo número
 
-Estado: aceptado · Fecha: 2026-09-07 · Alcance: público
+Estado: aceptado; la comprobación no corre en el PR de versiones, como decía su párrafo del check, sino en `release.yml`, en el push que construye el PR (ADR 0205) · Fecha: 2026-09-07 · Alcance: público
 
 ## Contexto
 
