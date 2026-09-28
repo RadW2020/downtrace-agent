@@ -221,6 +221,84 @@ describe("calling a tool", () => {
   });
 });
 
+/**
+ * gh-747, RES-01: the retry the README promises is the agent's — it calls the operation again after a failure
+ * or a dropped connection. For that retry to carry the first call's key, the operation has to let the agent
+ * pass the key in; before, no tool declared it, so every call got a key of its own and the retry was a second
+ * operation.
+ */
+describe("a retry of an operation", () => {
+  it("passes the key the caller gives straight into the header, and keeps it out of the body", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "annotate_finding",
+      arguments: { project: "tienda", finding: "7", note: "reverted at 15:02", idempotencyKey: "one note" },
+    });
+    expect(only(calls, 0).headers["idempotency-key"]).toBe("one note");
+    // The key says which operation this is the retry of; it is not part of what the operation records.
+    expect(only(calls, 0).body).toEqual({ note: "reverted at 15:02" });
+  });
+
+  it("keeps the same key on the retry after a dropped connection, which is the retry the README promises", async () => {
+    // The first call dies on the wire, the way a dropped connection does; the agent calls the same operation
+    // again, with the same key.
+    const { s, calls } = server([new Error("socket hang up"), {}]);
+    const first = (await s.handle("tools/call", {
+      name: "resolve_error",
+      arguments: { project: "tienda", error: "abc123", why: "x", idempotencyKey: "resolve-abc123" },
+    })) as { isError?: boolean };
+    expect(first.isError).toBe(true);
+
+    const retry = (await s.handle("tools/call", {
+      name: "resolve_error",
+      arguments: { project: "tienda", error: "abc123", why: "x", idempotencyKey: "resolve-abc123" },
+    })) as { isError?: boolean };
+    expect(retry.isError).toBeUndefined();
+
+    // The same operation, with the same key: the cloud claims it once, so the retry is not a second
+    // operation (RES-01).
+    expect(only(calls, 0).url).toBe(only(calls, 1).url);
+    expect(only(calls, 0).headers["idempotency-key"]).toBe("resolve-abc123");
+    expect(only(calls, 1).headers["idempotency-key"]).toBe("resolve-abc123");
+  });
+
+  // The schema says string. Whatever else arrives must not be sent: a number is not a key, and an empty
+  // string would reach the cloud as an empty header, for which its gate does nothing at all.
+  it("treats a key that is not a usable string as absent, rather than sending it", async () => {
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", {
+      name: "annotate_finding",
+      arguments: { project: "tienda", finding: "7", note: "x", idempotencyKey: 42 },
+    });
+    expect(only(calls, 0).headers["idempotency-key"]).toBe("key-1");
+
+    await s.handle("tools/call", {
+      name: "annotate_finding",
+      arguments: { project: "tienda", finding: "7", note: "x", idempotencyKey: "" },
+    });
+    expect(only(calls, 1).headers["idempotency-key"]).toBe("key-1");
+  });
+
+  // Enumerated from the source, not from a list here (repo rule): an operation added later that does not
+  // declare the key would make the README false again, and this is the test that says so.
+  it("declares the idempotency key in every operation, and in no read", () => {
+    const operating = tools.filter((t) => t.operates);
+    expect(operating.length).toBeGreaterThan(0);
+    for (const t of operating) {
+      expect(t.inputSchema.properties.idempotencyKey?.type, t.name).toBe("string");
+      // Optional: a call that is not a retry passes none.
+      expect(t.inputSchema.required ?? [], t.name).not.toContain("idempotencyKey");
+      // And the description says when a key is reused and when it is not, where the agent reads it.
+      expect(t.description, t.name).toContain("`idempotencyKey`");
+      expect(t.description, t.name).toContain("same `idempotencyKey`");
+      expect(t.description, t.name).toContain("new operation");
+    }
+    for (const t of tools.filter((t) => !t.operates)) {
+      expect(t.inputSchema.properties.idempotencyKey, t.name).toBeUndefined();
+    }
+  });
+});
+
 describe("when something goes wrong", () => {
   // A failure is a result the agent can read, never an exception that ends the session.
   it("turns an API error into a readable result and stays alive", async () => {

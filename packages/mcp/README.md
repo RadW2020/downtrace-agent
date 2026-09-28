@@ -52,7 +52,7 @@ Named after the capability, not the route: an agent looks for "verify the recove
 | `annotate_finding`, `record_regression`, `list_regressions` | what you know and Downtrace could not measure |
 | `silence_alerts`, `lift_silence` | stop being told, with a scope and an end |
 
-Every operation carries an idempotency key, so a retry after a dropped connection is not a second operation. The three the product names as depending on a report — closing, assessing a hypothesis, accepting a reference — take an optional `version`: pass the report's and the cloud refuses, without changing anything, if it moved since you read it.
+Every operation carries an idempotency key, so a retry after a dropped connection is not a second operation. Each operation takes an optional `idempotencyKey`, and its description says when a key may be reused: the retry of the same operation after a failure or a dropped connection passes the same key, and the cloud answers it with the result of the first call; a new operation passes a different key or none, and without a key the server generates one. A key identifies one operation — the same note written twice on purpose needs two keys — and the cloud refuses a key that was already used for a different request. The three the product names as depending on a report — closing, assessing a hypothesis, accepting a reference — take an optional `version`: pass the report's and the cloud refuses, without changing anything, if it moved since you read it.
 
 ## Observed content is data
 

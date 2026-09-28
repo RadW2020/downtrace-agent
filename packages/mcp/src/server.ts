@@ -63,9 +63,14 @@ export function createServer(opts: ServerOptions) {
       body = JSON.stringify(bodyOf(tool, args));
     }
     if (tool.operates) {
-      // Every operation carries one, always. An agent that retries because a connection dropped is the
-      // normal case, and without a key that retry is a second operation (RES-01).
-      headers["idempotency-key"] = typeof args.idempotencyKey === "string" ? args.idempotencyKey : newKey();
+      // Every operation carries one, always. The caller's key when the agent says this call is the retry of
+      // one it already made — the operations declare it, so the agent knows to pass it (gh-747) — and a
+      // generated one otherwise: an agent that retries because a connection dropped is the normal case, and
+      // without a key that retry is a second operation (RES-01). A key that is not a usable string is treated
+      // as absent rather than sent: an empty one would reach the cloud as an empty header, and its gate does
+      // nothing for that.
+      headers["idempotency-key"] =
+        typeof args.idempotencyKey === "string" && args.idempotencyKey !== "" ? args.idempotencyKey : newKey();
     }
     if (tool.versioned && typeof args.version === "string" && args.version !== "") {
       headers["if-match"] = args.version;

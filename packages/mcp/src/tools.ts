@@ -45,6 +45,29 @@ const why = {
     "password, which cannot say who you are.",
 } as const;
 
+/**
+ * The key of an operation, declared by every tool that operates (gh-747). The server sends the caller's
+ * key when it is given and generates one when it is not, and the cloud keeps a retry of an operation from
+ * being a second one (RES-01).
+ */
+const idempotencyKey = {
+  type: "string",
+  description:
+    "Idempotency key of this operation. Pass the same key when you retry the operation after a failure " +
+    "or a dropped connection: the cloud answers the retry with the result of the first call, so the retry " +
+    "is not a second operation. A new operation passes a different key, or none — without one the server " +
+    "generates it. Two operations that only look alike, the same note written twice on purpose, must not " +
+    "share a key.",
+} as const;
+
+/**
+ * What each operation's description says about the key, where the agent reads it: when a key says «this
+ * call is the retry of the operation I just attempted», and when it must not (gh-747).
+ */
+const idempotentRetry =
+  " A retry of this operation after a failure or a dropped connection passes the same `idempotencyKey` " +
+  "again, so it is not a second operation; a new operation passes a different one, or none.";
+
 export const tools: Tool[] = [
   {
     name: "list_projects",
@@ -224,10 +247,11 @@ export const tools: Tool[] = [
       "detector and proves nothing about the code, and the occurrences go on being counted. If this error " +
       "happens again in a deployed version the project first sees after you resolve it, it comes back on " +
       "its own as a reappearance of the same error, naming both versions — not as a new error. Resolving " +
-      "one that is already resolved is refused, because it would overwrite who resolved it.",
+      "one that is already resolved is refused, because it would overwrite who resolved it." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, error, why },
+      properties: { project, error, why, idempotencyKey },
       required: ["project", "error"],
     },
     method: "POST",
@@ -239,7 +263,8 @@ export const tools: Tool[] = [
     description:
       "Take an error out of the default list until a moment you choose, after which it comes back on its " +
       "own. It silences no detector and no alert, and every occurrence is still counted: no news must never " +
-      "be able to mean nothing is happening. An error that is already resolved cannot be ignored.",
+      "be able to mean nothing is happening. An error that is already resolved cannot be ignored." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -247,6 +272,7 @@ export const tools: Tool[] = [
         error,
         until: { type: "string", description: "RFC 3339 instant, at most thirty days away. Required." },
         why,
+        idempotencyKey,
       },
       required: ["project", "error", "until"],
     },
@@ -256,10 +282,10 @@ export const tools: Tool[] = [
   },
   {
     name: "unignore_error",
-    description: "Bring an ignored error back into the default list before its time is up.",
+    description: "Bring an ignored error back into the default list before its time is up." + idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, error, why },
+      properties: { project, error, why, idempotencyKey },
       required: ["project", "error"],
     },
     method: "POST",
@@ -271,10 +297,16 @@ export const tools: Tool[] = [
     description:
       "Say what you know about an error and Downtrace could not measure: 'only with the legacy checkout', " +
       "'the provider confirms an incident'. It is kept beside the evidence and never on top of it — it " +
-      "moves no state and changes no measurement.",
+      "moves no state and changes no measurement." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, error, note: { type: "string", description: "What you know. Required." } },
+      properties: {
+        project,
+        error,
+        note: { type: "string", description: "What you know. Required." },
+        idempotencyKey,
+      },
       required: ["project", "error", "note"],
     },
     method: "POST",
@@ -310,7 +342,8 @@ export const tools: Tool[] = [
     name: "request_capture",
     description:
       "Ask for detail on a route or a dependency for a while. Accepting is not observing: the answer says " +
-      "it is queued, and nothing recovers detail that was not kept.",
+      "it is queued, and nothing recovers detail that was not kept." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -322,6 +355,7 @@ export const tools: Tool[] = [
         target: { type: "string", description: "Dependency target, when watching a dependency." },
         windowSeconds: { type: "number", description: "How long to watch for." },
         why,
+        idempotencyKey,
       },
       required: ["project", "why"],
     },
@@ -333,7 +367,8 @@ export const tools: Tool[] = [
     name: "close_finding",
     description:
       "Close a finding by hand, with one of the three reasons the product allows. This is not observed " +
-      "recovery and is never presented as one.",
+      "recovery and is never presented as one." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -341,6 +376,7 @@ export const tools: Tool[] = [
         finding,
         reason: { type: "string", description: "expected | noise | resolved-without-telemetry" },
         why,
+        idempotencyKey,
       },
       required: ["project", "finding", "reason", "why"],
     },
@@ -351,10 +387,10 @@ export const tools: Tool[] = [
   },
   {
     name: "accept_reference",
-    description: "Accept the current behaviour as the new normal for this finding.",
+    description: "Accept the current behaviour as the new normal for this finding." + idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, finding, why },
+      properties: { project, finding, why, idempotencyKey },
       required: ["project", "finding", "why"],
     },
     method: "POST",
@@ -364,7 +400,8 @@ export const tools: Tool[] = [
   },
   {
     name: "assess_hypothesis",
-    description: "Record your own reading of a hypothesis. It sits beside Downtrace's and never overwrites it.",
+    description:
+      "Record your own reading of a hypothesis. It sits beside Downtrace's and never overwrites it." + idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -373,6 +410,7 @@ export const tools: Tool[] = [
         hypothesis: { type: "string", description: "The hypothesis' stable id." },
         state: { type: "string", description: "supported | weakened | discarded | not-assessed" },
         why,
+        idempotencyKey,
       },
       required: ["project", "finding", "hypothesis", "state", "why"],
     },
@@ -385,7 +423,8 @@ export const tools: Tool[] = [
     name: "give_feedback",
     description:
       "Rate a finding on the two axes: was the diagnosis right, and was the alert worth having. It changes " +
-      "nothing about the finding.",
+      "nothing about the finding." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -394,6 +433,7 @@ export const tools: Tool[] = [
         accuracy: { type: "string", description: "correct | partial | incorrect | not-assessable" },
         usefulness: { type: "string", description: "useful | unnecessary" },
         by: { type: "string", description: "Who is saying it." },
+        idempotencyKey,
       },
       required: ["project", "finding"],
     },
@@ -405,7 +445,8 @@ export const tools: Tool[] = [
     name: "annotate_finding",
     description:
       "Say what Downtrace could not measure: 'reverted at 15:02', 'the provider confirms an incident'. " +
-      "Also acknowledge, hand back, or reopen a finding that was closed by hand.",
+      "Also acknowledge, hand back, or reopen a finding that was closed by hand." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -413,6 +454,7 @@ export const tools: Tool[] = [
         finding,
         kind: { type: "string", description: "note | acknowledge | unacknowledge | reopen. Default note." },
         note: { type: "string", description: "What you know. Required." },
+        idempotencyKey,
       },
       required: ["project", "finding", "note"],
     },
@@ -424,10 +466,11 @@ export const tools: Tool[] = [
     name: "record_regression",
     description:
       "Record something Downtrace did not detect. Nothing reads these yet; they are the record of what the " +
-      "detector missed.",
+      "detector missed." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, note: { type: "string", description: "What happened. Required." } },
+      properties: { project, note: { type: "string", description: "What happened. Required." }, idempotencyKey },
       required: ["project", "note"],
     },
     method: "POST",
@@ -438,7 +481,8 @@ export const tools: Tool[] = [
     name: "silence_alerts",
     description:
       "Stop being told about something, with a scope and an end. It silences the alert, never the detector: " +
-      "the finding still opens and still counts.",
+      "the finding still opens and still counts." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
@@ -446,6 +490,7 @@ export const tools: Tool[] = [
         scope: { type: "string", description: "project | footprint" },
         until: { type: "string", description: "RFC 3339 instant, at most thirty days away." },
         why,
+        idempotencyKey,
       },
       required: ["project", "scope", "until", "why"],
     },
@@ -455,10 +500,10 @@ export const tools: Tool[] = [
   },
   {
     name: "lift_silence",
-    description: "End a silence before its time.",
+    description: "End a silence before its time." + idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, silence: { type: "string", description: "The silence's id." } },
+      properties: { project, silence: { type: "string", description: "The silence's id." }, idempotencyKey },
       required: ["project", "silence"],
     },
     method: "DELETE",
