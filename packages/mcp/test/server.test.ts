@@ -144,7 +144,13 @@ describe("calling a tool", () => {
 
     await s.handle("tools/call", {
       name: "close_finding",
-      arguments: { project: "tienda", finding: "7", reason: "expected", why: "a planned migration" },
+      arguments: {
+        project: "tienda",
+        finding: "7",
+        reason: "expected",
+        why: "a planned migration",
+        version: "abc123",
+      },
     });
     expect(only(calls, 1).body).toEqual({ reason: "expected", why: "a planned migration" });
   });
@@ -163,7 +169,9 @@ describe("calling a tool", () => {
     expect(only(calls, 1).headers["idempotency-key"]).toBe("key-1");
   });
 
-  // ADR 0074: the three operations RES-01 names can say which report they were decided on.
+  // ADR 0074: the three operations RES-01 names say which report they were decided on. The argument is
+  // declared and required on them (gh-748): the test that proves it for every one of them, enumerated from
+  // the source, is in "the version of the report a decision was read from".
   it("passes the report version when the caller gives one", async () => {
     const { s, calls } = server([{}]);
     await s.handle("tools/call", {
@@ -299,13 +307,124 @@ describe("a retry of an operation", () => {
   });
 });
 
+/**
+ * gh-748, RES-01: closing a finding, accepting a reference and assessing a hypothesis are decisions taken
+ * on the report they were read from, so they name its version and the cloud checks it (ADR 0074). The
+ * cloud keeps the header optional — forcing it there would break the published contract — but over MCP the
+ * agent is the caller, and an argument it does not see in `tools/list` is an argument it does not send:
+ * the check goes off and the decision is made blind, the trap gh-493 closed on the page. Declared and
+ * optional would leave the trap: the optional argument is the one a model leaves out, and the operation
+ * would then succeed, so nothing teaches it otherwise.
+ */
+describe("the version of the report a decision was read from", () => {
+  const versioned = tools.filter((t) => t.versioned);
+
+  // RES-01 names three, and ADR 0074 decision 4 says not the ones that seem to: the set is the product's.
+  it("is exactly the three operations RES-01 names as depending on the state that was read", () => {
+    expect(versioned.map((t) => t.name).sort()).toEqual(["accept_reference", "assess_hypothesis", "close_finding"]);
+  });
+
+  // Enumerated from the source rather than from a list here (repo rule): a fourth tool that is versioned
+  // but does not declare the argument would let an agent decide blind again, and this is the test that
+  // says so.
+  it("declares the version as required in every tool that is versioned, and in no other", () => {
+    expect(versioned.length).toBeGreaterThan(0);
+    for (const t of tools) {
+      const declared = t.inputSchema.properties.version;
+      if (t.versioned) {
+        expect(declared?.type, t.name).toBe("string");
+        expect(t.inputSchema.required, t.name).toContain("version");
+        // And the agent is told where the value comes from, where the agent reads: only the report's matches,
+        // and the refusal changes nothing.
+        expect(declared?.description, t.name).toContain("`read_report`");
+        expect(declared?.description, t.name).toContain("without changing anything");
+      } else {
+        expect(declared, t.name).toBeUndefined();
+      }
+    }
+  });
+
+  // The agent chooses what to read before it sees the tool it will call, and the version of any other read
+  // looks exactly like the right one: `read_report` has to say its own is the one the operations take.
+  it("names, in the description of read_report, every tool that is versioned", () => {
+    const description = String(toolNamed("read_report")?.description ?? "");
+    expect(description).toContain("`version`");
+    for (const t of versioned) expect(description, t.name).toContain(t.name);
+  });
+
+  it("refuses a versioned call without the version, and sends nothing", async () => {
+    for (const t of versioned) {
+      const { s, calls } = server();
+      const args: Record<string, unknown> = {};
+      for (const k of t.inputSchema.required ?? []) if (k !== "version") args[k] = "x";
+      const out = (await s.handle("tools/call", { name: t.name, arguments: args })) as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+      expect(out.isError, t.name).toBe(true);
+      expect(said(out), t.name).toBe("missing required argument(s): version");
+      expect(calls, t.name).toHaveLength(0);
+    }
+  });
+
+  it("sends the version as If-Match on every tool that is versioned, and keeps it out of the body", async () => {
+    for (const t of versioned) {
+      const { s, calls } = server([{}]);
+      const args: Record<string, unknown> = { version: "abc123" };
+      for (const k of t.inputSchema.required ?? []) if (k !== "version") args[k] = "x";
+      await s.handle("tools/call", { name: t.name, arguments: args });
+      expect(only(calls, 0).headers["if-match"], t.name).toBe("abc123");
+      expect(calls[0]?.body, t.name).not.toHaveProperty("version");
+    }
+    // Quoted, the way an ETag copy arrives: the cloud takes quoted or not, so the server sends it verbatim.
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "close_finding",
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: `"abc123"` },
+    });
+    expect(only(calls, 0).headers["if-match"]).toBe(`"abc123"`);
+  });
+
+  // A version the agent made up, or copied from the wrong place, is not one: dropped, it would reach the
+  // cloud as no version and the operation would go ahead having checked nothing, while the agent believes
+  // it was careful. The refusal comes before anything is sent, and says where a real one comes from.
+  it("refuses a version that is not a usable string, and sends nothing", async () => {
+    for (const bad of [42, "   "]) {
+      const { s, calls } = server();
+      const out = (await s.handle("tools/call", {
+        name: "close_finding",
+        arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: bad },
+      })) as { content: Array<{ text: string }>; isError?: boolean };
+      expect(out.isError).toBe(true);
+      expect(said(out)).toContain("`read_report`");
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  // ESC-09, where the agent reads it: the conflict is a result it can read, it names what the cloud says,
+  // and the server neither retries nor re-reads — the next decision is the agent's.
+  it("hands a 412 back as a readable result, and sends exactly one request", async () => {
+    const { s, calls } = server([
+      { status: 412, body: `{"error":"the report changed since the version you read","current":"def456"}` },
+    ]);
+    const out = (await s.handle("tools/call", {
+      name: "close_finding",
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("412");
+    expect(said(out)).toContain("the report changed since the version you read");
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("when something goes wrong", () => {
   // A failure is a result the agent can read, never an exception that ends the session.
   it("turns an API error into a readable result and stays alive", async () => {
     const { s } = server([{ status: 409, body: `{"error":"already closed"}` }]);
     const out = (await s.handle("tools/call", {
       name: "close_finding",
-      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x" },
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
     })) as { content: Array<{ text: string }>; isError?: boolean };
     expect(out.isError).toBe(true);
     expect(said(out)).toContain("409");
@@ -378,7 +497,7 @@ describe("without a credential", () => {
   it("says what is missing when one is called", async () => {
     const out = (await readOnly().handle("tools/call", {
       name: "close_finding",
-      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x" },
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
     })) as { content: Array<{ text: string }>; isError?: boolean };
     expect(out.isError).toBe(true);
     expect(said(out)).toContain("DOWNTRACE_TOKEN");

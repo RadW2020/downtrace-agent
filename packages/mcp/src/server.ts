@@ -128,6 +128,22 @@ export function createServer(opts: ServerOptions) {
         const args = (p.arguments ?? {}) as Record<string, unknown>;
         const missing = (tool.inputSchema.required ?? []).filter((k) => args[k] === undefined || args[k] === "");
         if (missing.length > 0) return text(`missing required argument(s): ${missing.join(", ")}`, true);
+        if (tool.versioned) {
+          // The missing one is refused above; this is the one that is there and is not a version: not a
+          // string, or a string the cloud trims to nothing. Dropped, it would reach the check as no
+          // version — the operation applied having checked nothing, while the caller believes it was
+          // careful (gh-493's trap, over MCP). Refuse it here, before anything is sent.
+          const v = args.version;
+          if (typeof v !== "string" || v.trim() === "") {
+            return text(
+              "`version` is not a version: it must be the string the report of this finding carries as " +
+                "its `version` field, the one `read_report` gives. The operation is decided on that " +
+                "report, and the cloud refuses it without changing anything if the report moved since " +
+                "you read it.",
+              true,
+            );
+          }
+        }
         return call(tool, args);
       }
       default:

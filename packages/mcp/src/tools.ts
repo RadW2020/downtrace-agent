@@ -68,6 +68,23 @@ const idempotentRetry =
   " A retry of this operation after a failure or a dropped connection passes the same `idempotencyKey` " +
   "again, so it is not a second operation; a new operation passes a different one, or none.";
 
+/**
+ * The version of the report a decision on this finding was read from. Required by every tool that is
+ * `versioned` (gh-748): the cloud keeps the header optional for its HTTP callers, where forcing it would
+ * break the published contract (ADR 0074), but the caller of this server is an agent that reads
+ * `tools/list`, and an argument it does not see is not sent — the operation would then be applied having
+ * checked nothing, which is deciding blind.
+ */
+const version = {
+  type: "string",
+  description:
+    "The version of the report you read before deciding, the `version` field the report of this finding " +
+    "carries, the one `read_report` gives. The operation is checked against it: if the report moved since " +
+    "you read it, the cloud refuses it without changing anything and says the version it has now. Only the " +
+    "report's `version` matches — the `version` of any other read never does — and an assessment or an " +
+    "annotation of your own moves it, so read the report again before the next decision.",
+} as const;
+
 export const tools: Tool[] = [
   {
     name: "list_projects",
@@ -131,7 +148,9 @@ export const tools: Tool[] = [
     name: "read_report",
     description:
       "The report of a finding: facts, hypotheses with their state and evidence, recommendations tied to " +
-      "the hypothesis they rest on, and everything it cannot say. Start here.",
+      "the hypothesis they rest on, and everything it cannot say. Start here. It carries a `version`, and " +
+      "that is the one `close_finding`, `accept_reference` and `assess_hypothesis` take: they are decisions " +
+      "on this report, and the cloud refuses them without changing anything if the report moved since.",
     inputSchema: { type: "object", properties: { project, finding }, required: ["project", "finding"] },
     method: "GET",
     path: "/api/p/{slug}/findings/{id}/report",
@@ -376,9 +395,10 @@ export const tools: Tool[] = [
         finding,
         reason: { type: "string", description: "expected | noise | resolved-without-telemetry" },
         why,
+        version,
         idempotencyKey,
       },
-      required: ["project", "finding", "reason", "why"],
+      required: ["project", "finding", "reason", "why", "version"],
     },
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/close",
@@ -390,8 +410,8 @@ export const tools: Tool[] = [
     description: "Accept the current behaviour as the new normal for this finding." + idempotentRetry,
     inputSchema: {
       type: "object",
-      properties: { project, finding, why, idempotencyKey },
-      required: ["project", "finding", "why"],
+      properties: { project, finding, why, version, idempotencyKey },
+      required: ["project", "finding", "why", "version"],
     },
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/accept-reference",
@@ -410,9 +430,10 @@ export const tools: Tool[] = [
         hypothesis: { type: "string", description: "The hypothesis' stable id." },
         state: { type: "string", description: "supported | weakened | discarded | not-assessed" },
         why,
+        version,
         idempotencyKey,
       },
-      required: ["project", "finding", "hypothesis", "state", "why"],
+      required: ["project", "finding", "hypothesis", "state", "why", "version"],
     },
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/hypotheses/{hypothesis}/assessment",
