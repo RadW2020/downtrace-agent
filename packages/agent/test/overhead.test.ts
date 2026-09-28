@@ -273,8 +273,45 @@ describe("the agent", () => {
       expect(agent.stats.shed).toBe(Sheddable.Nothing);
       expect(fine.snapshot().coverage.requests).toBe(400);
       // The arithmetic the tripwire reads: the two registers at their reserve fit under the two budgets of
-      // invariant 3, which is why the line is the reserve and not a fraction of a mebibyte (ADR 0067).
-      expect(fine.bytes() + coarse.reservedBytes()).toBeLessThanOrEqual(FINE_MAX_BYTES + COARSE_MAX_BYTES);
+      // invariant 3, which is why the line is the reserve and not a fraction of a mebibyte (ADR 0067). The
+      // reserves include the label tables the traffic fills (gh-765), so this is the worst case, whatever
+      // the routes the process has seen.
+      expect(fine.reservedBytes() + coarse.reservedBytes()).toBeLessThanOrEqual(FINE_MAX_BYTES + COARSE_MAX_BYTES);
+    } finally {
+      void agent.stop();
+    }
+  });
+
+  /**
+   * The case gh-756 is about: a route that carries a value per request — a scanner through the heuristic, or
+   * an Express 404 — where every request is a route nobody has seen. The tables the registers key by it had
+   * no bound and no accounting, so the growth was invisible to both (gh-765). Now each register is compared
+   * against its own reserve, the reserves include the tables, and bounded growth is within the reserve.
+   */
+  it("a new route per request does not shed the detail, and the loss is said", async () => {
+    const overhead = neverDeciding();
+    const fine = new FineRegister();
+    const coarse = new CoarseRegister({ now: () => 1_000_000 });
+    const agent = createAgent(config(), { log: quiet, overhead, fine, coarse });
+    agent.start();
+    try {
+      const start = channel("http.server.request.start");
+      const finish = channel("http.server.response.finish");
+      // Not identifier-shaped, so the template keeps them apart: one distinct route per request.
+      for (let i = 0; i < 2000; i += 1) {
+        const req = { method: "GET", url: `/scan/a${i}` };
+        start.publish({ request: req });
+        finish.publish({ request: req, response: { statusCode: 404 } });
+      }
+      // The tables filled to their caps and stopped: the registers hold no more than they reserve, and a
+      // register within its reserve does not shed (gh-774).
+      expect(agent.stats.shed).toBe(Sheddable.Nothing);
+      expect(fine.bytes()).toBeLessThanOrEqual(fine.reservedBytes());
+      expect(coarse.bytes()).toBeLessThanOrEqual(coarse.reservedBytes());
+      // And what the caps cost is said, the way every other loss is said (COB-01): the fine register folded
+      // the routes it had no label for, and the coarse one says how many it cannot hold, at its lower bound.
+      expect(fine.snapshot().coverage.labelsFolded).toBeGreaterThan(0);
+      expect(coarse.snapshot().coverage.routesDropped).toBeGreaterThan(0);
     } finally {
       void agent.stop();
     }

@@ -2,8 +2,17 @@ import type { Endpoint } from "@downtrace/protocol";
 
 export type Method = Endpoint["method"];
 
-const METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
-const MAX_ROUTE_LENGTH = 256;
+export const METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
+
+/** Longer than this and the template is truncated, so a label built from one has a worst case the arithmetic can use. */
+export const MAX_ROUTE_LENGTH = 256;
+
+/**
+ * The longest label a register interns per route: its method, a space and the template — the longest method
+ * (`normalizeMethod` allows the set above plus `OTHER`) and the longest template. The reserve arithmetic of
+ * the tables that hold these labels is the arithmetic of this number (gh-765).
+ */
+export const MAX_ROUTE_LABEL_LENGTH = Math.max(...[...METHODS, "OTHER"].map((m) => m.length)) + 1 + MAX_ROUTE_LENGTH;
 
 /** Route used when the per-interval cardinality cap is hit. */
 export const OTHER_ROUTE = "(other)";

@@ -4,11 +4,14 @@ import { createAgent } from "../src/agent.ts";
 import { dependencyKey, enterRequest, recordOperationIn } from "../src/context.ts";
 import {
   DEFAULT_DEPENDENCIES_PER_REQUEST,
+  DEFAULT_FINGERPRINT_LABELS,
   DEFAULT_OPERATIONS,
   DEFAULT_REQUESTS,
+  DEFAULT_ROUTE_LABELS,
   FINE_MAX_BYTES,
   FineRegister,
 } from "../src/fine.ts";
+import { OTHER_ROUTE } from "../src/routes.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 /**
@@ -104,6 +107,11 @@ describe("the fine register", () => {
 
   it("does not grow with traffic", () => {
     const r = new FineRegister({ requests: 4, operations: 16 });
+    // The first request interns the labels it names; traffic — the same names over and over — must not.
+    requestWith(r, [
+      ["aaa", 0, 1],
+      ["bbb", 1, 2],
+    ]);
     const before = r.bytes();
     for (let i = 0; i < 1000; i += 1) {
       requestWith(r, [
@@ -279,6 +287,72 @@ describe("the fine register", () => {
     const r = new FineRegister();
     // No context: `recordOperationIn` is never reached, and the register stays empty.
     expect(r.snapshot().requests).toHaveLength(0);
+  });
+});
+
+describe("the label tables", () => {
+  // gh-765. A route that carries a value per request used to add an entry to these tables for the whole life
+  // of the process: interning only ever added, nothing emptied them, and `bytes()` did not count them, so
+  // neither the budget nor the tripwire saw the growth. The tables have a cap now, and what does not fit is
+  // folded into the sentinel the aggregate already folds into — said as a loss, not left silent (COB-01).
+  it("folds a route into (other) once the table is full, and says it did", () => {
+    const r = new FineRegister({ routeLabels: 4 });
+    for (let i = 0; i < 10; i += 1) requestWith(r, [["aaa", 0, 1]], `/route-${i}`);
+
+    const snapshot = r.snapshot();
+    // The first four routes keep their names; every route after the cap reads as the fold, the way the
+    // aggregate folds what it has no row for.
+    expect(snapshot.requests.map((x) => x.route).slice(4)).toEqual(Array(6).fill(OTHER_ROUTE));
+    // And the loss is counted, per request written with a folded label.
+    expect(snapshot.coverage.labelsFolded).toBe(6);
+  });
+
+  it("does not grow with a new route per request", () => {
+    const r = new FineRegister({ routeLabels: 8, requests: 16, operations: 16 });
+    for (let i = 0; i < 100; i += 1) requestWith(r, [["aaa", 0, 1]], `/route-${i}`);
+    const at = r.bytes();
+    for (let i = 0; i < 100; i += 1) requestWith(r, [["aaa", 0, 1]], `/far-${i}`);
+    // The table is at its cap after the first hundred, so the memory is at its worst already: the traffic
+    // past it costs nothing. A register that still grew here was the bug (invariant 3).
+    expect(r.bytes()).toBe(at);
+  });
+
+  it("folds fingerprints and dependency labels the same way", () => {
+    const r = new FineRegister({ fingerprintLabels: 2, dependencyLabels: 1, requests: 8, operations: 16 });
+    const from = r.openRequest();
+    r.operation("aaaaaaaaaaaaaaaa", 0, 1);
+    r.operation("bbbbbbbbbbbbbbbb", 1, 2);
+    r.operation("cccccccccccccccc", 2, 3); // the third distinct fingerprint does not fit
+    r.request("GET", "/orders", 200, 0, 10, from, 3, [
+      dependencyKey("postgres", "db:5432"),
+      dependencyKey("redis", "cache:6379"), // the second distinct label does not fit
+    ]);
+
+    const [request] = r.snapshot().requests;
+    expect(request?.operations.map((o) => o.hash)).toEqual(["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", OTHER_ROUTE]);
+    expect(request?.dependencies).toEqual([dependencyKey("postgres", "db:5432"), OTHER_ROUTE]);
+    expect(r.snapshot().coverage.labelsFolded).toBe(2);
+  });
+
+  // The memory half of invariant 3, at the worst case this ticket is about: a route, a fingerprint and a
+  // dependency nobody has seen before, on every request, at the longest label each table may hold.
+  it("holds its memory budget at the worst case of distinct routes, fingerprints and dependencies", () => {
+    const r = new FineRegister();
+    const many = Math.max(DEFAULT_ROUTE_LABELS, DEFAULT_FINGERPRINT_LABELS) + 16;
+    for (let i = 0; i < many; i += 1) {
+      const from = r.openRequest();
+      // A route, a fingerprint and a dependency nobody has seen before, each at its longest: the scanner case
+      // this ticket is about, at the worst case the arithmetic is for.
+      r.operation(String(i).padStart(16, "0"), 0, 1);
+      r.request("OPTIONS", `/${"a".repeat(252)}${String(i).padStart(3, "0")}`, 200, 0, 10, from, 1, [
+        dependencyKey("postgres", `${"t".repeat(252)}${String(i).padStart(4, "0")}`),
+      ]);
+    }
+
+    // Every table is at its cap with every label at its longest, so the register holds its reserve exactly —
+    // a number, not a promise — and the reserve fits the budget the arithmetic is for (ADR 0067).
+    expect(r.bytes()).toBe(r.reservedBytes());
+    expect(r.bytes()).toBeLessThanOrEqual(FINE_MAX_BYTES);
   });
 });
 

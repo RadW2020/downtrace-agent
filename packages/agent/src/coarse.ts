@@ -1,4 +1,5 @@
-import { OTHER_ROUTE } from "./routes.ts";
+import { labelBytes } from "./labels.ts";
+import { MAX_ROUTE_LABEL_LENGTH, OTHER_ROUTE } from "./routes.ts";
 
 /**
  * The coarse half of the black box: the last few minutes, second by second.
@@ -23,6 +24,13 @@ export const DEFAULT_SECONDS = 300;
  * The rest fold into one row, and the coverage says how many did.
  */
 export const DEFAULT_ROUTES = 128;
+
+/**
+ * How many distinct routes the register may remember it had no row for. The memory the count costs is not the
+ * count: a new route per request used to add one entry for the life of the process (gh-765). At the cap the
+ * count saturates and is a lower bound; the volume of what was folded is what the `(other)` row keeps.
+ */
+export const DEFAULT_DROPPED = 256;
 
 /**
  * What the register may hold, in bytes, at its worst: every row taken, every slot allocated.
@@ -80,7 +88,11 @@ export interface CoarseCoverage {
   windowSeconds: number;
   /** Routes with a row of their own. */
   routes: number;
-  /** Distinct routes folded into `(other)` because the register was full. */
+  /**
+   * Distinct routes folded into `(other)` because the register was full, counted once each. At the cap of what
+   * the register may remember it is a lower bound, not a count: no bounded memory counts distinct names past
+   * its bound, and the volume of what was folded is what the `(other)` row keeps (gh-765).
+   */
   routesDropped: number;
 }
 
@@ -101,6 +113,7 @@ export interface CoarseOptions {
   now: () => number;
   seconds?: number;
   maxRoutes?: number;
+  maxDropped?: number;
 }
 
 /**
@@ -112,18 +125,23 @@ export interface CoarseOptions {
 export class CoarseRegister {
   private readonly seconds: number;
   private readonly maxRoutes: number;
+  private readonly maxDropped: number;
   private readonly now: () => number;
   private readonly rows = new Map<string, Row>();
   private distinctRoutes = 0;
   private droppedRoutes = 0;
-  /** The dropped routes seen so far, so the same one is not counted twice. */
+  /** The dropped routes seen so far, so the same one is not counted twice. Bounded: the count is a lower bound
+   * once it is full (gh-765). */
   private readonly dropped = new Set<string>();
+  /** What the dropped set holds, by the same arithmetic `bytes` publishes. */
+  private droppedBytes = 0;
   private readonly loopDelay: Float64Array;
   private readonly loopStamps: Float64Array;
 
   constructor(options: CoarseOptions) {
     this.seconds = options.seconds ?? DEFAULT_SECONDS;
     this.maxRoutes = options.maxRoutes ?? DEFAULT_ROUTES;
+    this.maxDropped = options.maxDropped ?? DEFAULT_DROPPED;
     this.now = options.now;
     this.loopDelay = new Float64Array(this.seconds);
     this.loopStamps = new Float64Array(this.seconds).fill(Number.NaN);
@@ -167,27 +185,29 @@ export class CoarseRegister {
   }
 
   /**
-   * Exactly how many bytes of typed array this register has allocated. Not an estimate: the rows are the only
-   * thing here that scales, and their size is known.
+   * What this register holds, in bytes: the rows and the set that counts what did not fit. The set is counted
+   * by the same arithmetic the reserve uses, so a budget that leaves it out is not an option — that blindness
+   * is how gh-765 grew (ADR 0067).
    */
   bytes(): number {
     const perRow = this.seconds * FIELDS * 8 + this.seconds * 8;
     const process = this.seconds * 8 * 2;
-    return this.rows.size * perRow + process;
+    return this.rows.size * perRow + process + this.droppedBytes;
   }
 
   /**
-   * What the register holds at its worst: every row it may take, taken.
+   * What the register holds at its worst: every row it may take, taken, and the dropped set at its cap with
+   * every key at its longest.
    *
-   * The rows are never freed, so `bytes()` only grows: a fixed line below this would be crossed by normal
-   * traffic — the register is designed to fill to its cap — and never uncrossed (gh-774). The agent's
-   * tripwire compares the sum against this, so its line is the arithmetic of ADR 0067 and moves with the
-   * register.
+   * The rows are never freed and the set never shrinks, so `bytes()` only grows: a fixed line below this would
+   * be crossed by normal traffic — the register is designed to fill to its cap — and never uncrossed (gh-774).
+   * The agent's tripwire compares the sum against this, so its line is the arithmetic of ADR 0067 and moves
+   * with the register.
    */
   reservedBytes(): number {
     const perRow = this.seconds * FIELDS * 8 + this.seconds * 8;
     // The cap plus the row the overflow folds into: both exist once the register is full.
-    return (this.maxRoutes + 1) * perRow + this.seconds * 8 * 2;
+    return (this.maxRoutes + 1) * perRow + this.seconds * 8 * 2 + this.maxDropped * labelBytes(MAX_ROUTE_LABEL_LENGTH);
   }
 
   /** Everything the register holds, oldest second first. This is what a capture will freeze. */
@@ -245,9 +265,11 @@ export class CoarseRegister {
     if (existing) return existing;
     if (route !== OTHER_ROUTE && this.distinctRoutes >= this.maxRoutes) {
       // Counted once per distinct route, not once per request: the number means "how many routes are missing",
-      // not "how many requests were folded".
-      if (!this.dropped.has(key)) {
+      // not "how many requests were folded". The set is bounded (gh-765), so once it is full the count stops
+      // and is a lower bound; the route still folds, and its traffic is what the `(other)` row keeps.
+      if (!this.dropped.has(key) && this.dropped.size < this.maxDropped) {
         this.dropped.add(key);
+        this.droppedBytes += labelBytes(key.length);
         this.droppedRoutes += 1;
       }
       return this.rowFor(method, OTHER_ROUTE);

@@ -708,7 +708,14 @@ export class Agent {
       out.internalErrors = this.internalErrors - this.reportedInternalErrors;
       this.reportedInternalErrors = this.internalErrors;
     }
-    const bytes = this.fine.bytes() + this.coarse.bytes() + this.reference.bytes();
+    // The label tables the registers key by traffic are in their `bytes` (gh-765), and the decisions the
+    // exclusions remember are the last thing the agent holds that traffic names.
+    const bytes =
+      this.fine.bytes() +
+      this.coarse.bytes() +
+      this.reference.bytes() +
+      this.excludedEndpoints.bytes() +
+      this.excludedDependencies.bytes();
     if (bytes > 0) out.bufferBytes = bytes;
     // An estimate, sampled, and sent as one: it is what invariant 3 budgets, and calling it a
     // measurement would claim a precision the sampling does not have.
@@ -760,12 +767,12 @@ export class Agent {
    * designed to reach — seventy-seven distinct routes on a server with scanner traffic — and the detail was
    * shed for the rest of the process's life although nothing had grown beyond its budget (gh-774).
    *
-   * The fine ring is preallocated at construction, so what it holds is what it reserves.
+   * Each register is compared against its own reserve, and the reserve includes the label tables the traffic
+   * fills (gh-765): the fine ring and its tables are bounded by construction, so what it holds is what it
+   * reserves, and a register within its reserve does not shed.
    */
   private overMemoryReserve(): boolean {
-    const held = this.fine.bytes() + this.coarse.bytes();
-    const reserved = this.fine.bytes() + this.coarse.reservedBytes();
-    return held > reserved;
+    return this.fine.bytes() > this.fine.reservedBytes() || this.coarse.bytes() > this.coarse.reservedBytes();
   }
 
   private requestStarted(message: unknown): void {

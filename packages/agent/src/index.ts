@@ -7,14 +7,18 @@ export {
   type CoarseRoute,
   type CoarseSecond,
   type CoarseSnapshot,
+  DEFAULT_DROPPED,
   DEFAULT_ROUTES,
   DEFAULT_SECONDS,
 } from "./coarse.ts";
 export { type AgentConfig, type ConfigResult, configFromEnv, DEFAULT_INTERVAL_MS, detectVersion } from "./config.ts";
 export {
+  DEFAULT_DEPENDENCY_LABELS,
+  DEFAULT_FINGERPRINT_LABELS,
   DEFAULT_OPERATIONS,
   DEFAULT_OPERATIONS_PER_REQUEST,
   DEFAULT_REQUESTS,
+  DEFAULT_ROUTE_LABELS,
   type FineCoverage,
   type FineOperation,
   FineRegister,

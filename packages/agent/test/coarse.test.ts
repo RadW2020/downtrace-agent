@@ -123,6 +123,22 @@ describe("the coarse register", () => {
     expect(other?.seconds[0]?.requests).toBe(3);
   });
 
+  // gh-765. The set that makes the count per route rather than per request grew with every distinct route
+  // the register had no row for — unbounded under a new route per request. It has a cap now, and the count
+  // is a lower bound once it saturates: the volume is what the (other) row keeps.
+  it("saturates the dropped count at its cap, and stops growing there", () => {
+    const c = clock();
+    const r = new CoarseRegister({ now: c.now, seconds: 5, maxRoutes: 2, maxDropped: 4 });
+    for (let i = 0; i < 20; i += 1) r.record("GET", `/r/${i}`, 200, 1, 0);
+
+    // Sixteen distinct routes did not fit, and the count says four: at the cap it is a lower bound.
+    expect(r.snapshot().coverage.routesDropped).toBe(4);
+    const at = r.bytes();
+    for (let i = 20; i < 40; i += 1) r.record("GET", `/r/${i}`, 200, 1, 0);
+    // The set is at its cap, so the memory is at its worst already: the traffic past it costs nothing.
+    expect(r.bytes()).toBe(at);
+  });
+
   it("reports its coverage", () => {
     const c = clock();
     const r = new CoarseRegister({ now: c.now, seconds: 42, maxRoutes: 2 });
@@ -183,7 +199,10 @@ describe("the coarse register", () => {
   it("reserves its worst case, and the worst case is the register at its cap", () => {
     const c = clock();
     const r = new CoarseRegister({ now: c.now });
-    for (let i = 0; i < DEFAULT_ROUTES * 2; i += 1) r.record("GET", `/route-${i}`, 200, 1, 0);
+    // Past the row cap by a whole drop cap, with the longest key the table may hold: the rows are at their
+    // cap, the set that counts what did not fit is at its cap, and every label is at its longest.
+    for (let i = 0; i < DEFAULT_ROUTES * 3; i += 1)
+      r.record("OPTIONS", `/${"a".repeat(252)}${String(i).padStart(3, "0")}`, 200, 1, 0);
 
     // The cap is the rows it may take, taken: the full register holds its reserve exactly, so a line at the
     // reserve is a line the register can reach and not cross.
@@ -191,8 +210,8 @@ describe("the coarse register", () => {
     expect(r.reservedBytes()).toBeLessThanOrEqual(COARSE_MAX_BYTES);
 
     // The same arithmetic at a smaller cap: the reserve follows the configuration, it is not a constant.
-    const s = new CoarseRegister({ now: c.now, seconds: 10, maxRoutes: 3 });
-    for (let i = 0; i < 10; i += 1) s.record("GET", `/r/${i}`, 200, 1, 0);
+    const s = new CoarseRegister({ now: c.now, seconds: 10, maxRoutes: 3, maxDropped: 4 });
+    for (let i = 0; i < 10; i += 1) s.record("OPTIONS", `/${"a".repeat(253)}${String(i).padStart(2, "0")}`, 200, 1, 0);
     expect(s.bytes()).toBe(s.reservedBytes());
   });
 

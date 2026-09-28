@@ -127,6 +127,7 @@ describe("what one capture saw", () => {
       requests: requests.length,
       detailLost: requests.filter((r) => r.detailLost).length,
       truncated: requests.filter((r) => r.truncated).length,
+      labelsFolded: 0,
       ...over,
     },
   });

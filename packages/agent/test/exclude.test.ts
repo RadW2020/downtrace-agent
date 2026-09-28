@@ -55,4 +55,27 @@ describe("Excluded", () => {
     expect(e.has("/admin/users")).toBe(true);
     expect(e.count).toBe(1);
   });
+
+  // gh-765. The decision remembered every name ever evaluated, for the whole life of the process. The
+  // decisions have a cap now: what falls out of them is re-decided on the spot, and the count of distinct
+  // excluded names saturates at its cap, where it is a lower bound — no bounded memory counts further.
+  it("remembers a bounded number of names, and the count is a lower bound once it saturates", () => {
+    const e = new Excluded(["*"], { decisions: 8, excluded: 8 });
+    for (let i = 0; i < 50; i += 1) expect(e.has(`/r/${i}`)).toBe(true);
+
+    expect(e.count).toBe(8);
+    // The names that fell out of the decisions are still answered, from the pattern.
+    expect(e.has("/r/7")).toBe(true);
+    expect(e.has("/r/49")).toBe(true);
+    // And re-asking does not re-count: the count stays where it saturated.
+    expect(e.count).toBe(8);
+  });
+
+  it("bounds its memory at the names it may keep", () => {
+    const e = new Excluded(["*"], { decisions: 8, excluded: 8 });
+    for (let i = 0; i < 50; i += 1) e.has("n".repeat(256));
+    const at = e.bytes();
+    for (let i = 0; i < 50; i += 1) e.has("n".repeat(256));
+    expect(e.bytes()).toBe(at);
+  });
 });

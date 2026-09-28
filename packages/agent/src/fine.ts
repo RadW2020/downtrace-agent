@@ -12,6 +12,9 @@
  * Nothing leaves the process. A capture will freeze it (gh-277).
  */
 
+import { labelBytes } from "./labels.ts";
+import { MAX_ROUTE_LABEL_LENGTH, METHODS, OTHER_ROUTE } from "./routes.ts";
+
 /** How many requests the ring holds. */
 export const DEFAULT_REQUESTS = 4096;
 
@@ -32,8 +35,34 @@ export const DEFAULT_DEPENDENCIES_PER_REQUEST = 8;
 /**
  * What this register may allocate, in bytes. Asserted by a test rather than promised by a comment: it is the
  * half of invariant 3 that does not need a quiet machine, and since the ADR 0032 the other half is manual.
+ *
+ * The rings and the label tables together, at their caps: the tables hold what the rows point at, and a budget
+ * that leaves them out is the budget that did not see gh-765 grow.
  */
 export const FINE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How many distinct route labels the register keeps for the life of the process. At least as many as the
+ * interval aggregate holds at once (its 500 per interval), so the black box knows every route the aggregate
+ * can name, and nothing more than the budget admits.
+ */
+export const DEFAULT_ROUTE_LABELS = 512;
+
+/** How many distinct fingerprints the register keeps. The FingerprintCache keeps a thousand; this keeps half. */
+export const DEFAULT_FINGERPRINT_LABELS = 512;
+
+/** How many distinct dependency labels the register keeps: a request touches a handful, and a capture of one
+ * is what a lost label costs. */
+export const DEFAULT_DEPENDENCY_LABELS = 128;
+
+/**
+ * The longest label each table may hold, which is what the reserve is the arithmetic of. A route label is its
+ * method, a space and the template (`MAX_ROUTE_LABEL_LENGTH`); a fingerprint is 16 hex characters; a dependency
+ * label is its kind — `postgres`, the longest the protocol knows — a separator and the target the instruments
+ * clamp to 256.
+ */
+export const FINGERPRINT_LABEL_MAX_LENGTH = 16;
+export const DEPENDENCY_LABEL_MAX_LENGTH = "postgres".length + 1 + 256;
 
 /** Fields of one request row. */
 const R_START = 0;
@@ -121,6 +150,12 @@ export interface FineCoverage {
   detailLost: number;
   /** Requests that ran more operations than the per-request cap. */
   truncated: number;
+  /**
+   * How many times a row asked for a label the tables had no room for and kept the sentinel instead — a route
+   * reading as `(other)`, an operation or a dependency the same. Said rather than silent (COB-01); zero while
+   * the tables hold what the traffic names.
+   */
+  labelsFolded: number;
 }
 
 export interface FineSnapshot {
@@ -133,6 +168,9 @@ export interface FineOptions {
   operations?: number;
   operationsPerRequest?: number;
   dependenciesPerRequest?: number;
+  routeLabels?: number;
+  fingerprintLabels?: number;
+  dependencyLabels?: number;
 }
 
 /**
@@ -156,19 +194,21 @@ export class FineRegister {
    * like one that touched nothing.
    */
   private readonly dependencies: Float64Array;
-  /** Route labels, interned: a row holds an index, not a string. */
-  private readonly routes: string[] = [];
-  private readonly routeIndex = new Map<string, number>();
+  /**
+   * Route labels, interned: a row holds an index, not a string. Bounded, and what does not fit folds into the
+   * method's `(other)` sentinel — the same fold the interval aggregate makes of the routes it has no row for.
+   */
+  private readonly routeLabels: LabelTable;
   /** Fingerprints, interned the same way. */
-  private readonly fingerprints: string[] = [];
-  private readonly fingerprintIndex = new Map<string, number>();
+  private readonly fingerprintLabels: LabelTable;
   /** Dependency labels, interned the same way. */
-  private readonly dependencyLabels: string[] = [];
-  private readonly dependencyIndex = new Map<string, number>();
+  private readonly dependencyLabels: LabelTable;
   /** Monotonic write cursors. They only ever grow; the ring position is the cursor modulo the capacity. */
   private requestCursor = 0;
   private operationCursor = 0;
   private dependencyCursor = 0;
+  /** What the label tables had no room for, per row that asked (COB-01). */
+  private labelsFolded = 0;
 
   constructor(options: FineOptions = {}) {
     this.capacity = options.requests ?? DEFAULT_REQUESTS;
@@ -178,6 +218,22 @@ export class FineRegister {
     this.requests = new Float64Array(this.capacity * R_FIELDS);
     this.operations = new Float64Array(this.opCapacity * O_FIELDS);
     this.dependencies = new Float64Array(this.capacity * this.depsPerRequest);
+    // One sentinel per method a label may carry: a fold keeps the method and loses the route.
+    this.routeLabels = new LabelTable(
+      options.routeLabels ?? DEFAULT_ROUTE_LABELS,
+      [...METHODS, "OTHER"].map((m) => `${m} ${OTHER_ROUTE}`),
+      (v) => `${v.slice(0, v.indexOf(" "))} ${OTHER_ROUTE}`,
+    );
+    this.fingerprintLabels = new LabelTable(
+      options.fingerprintLabels ?? DEFAULT_FINGERPRINT_LABELS,
+      [OTHER_ROUTE],
+      () => OTHER_ROUTE,
+    );
+    this.dependencyLabels = new LabelTable(
+      options.dependencyLabels ?? DEFAULT_DEPENDENCY_LABELS,
+      [OTHER_ROUTE],
+      () => OTHER_ROUTE,
+    );
   }
 
   /** How many operations one request may contribute. The caller stops at this: a request that ran a hundred
@@ -197,7 +253,8 @@ export class FineRegister {
    */
   operation(hash: string, startMs: number, endMs: number): void {
     const at = (this.operationCursor % this.opCapacity) * O_FIELDS;
-    this.operations[at + O_FINGERPRINT] = this.intern(hash, this.fingerprints, this.fingerprintIndex);
+    this.operations[at + O_FINGERPRINT] = this.fingerprintLabels.intern(hash);
+    if (this.fingerprintLabels.folded) this.labelsFolded += 1;
     this.operations[at + O_START] = startMs;
     this.operations[at + O_END] = endMs;
     this.operationCursor += 1;
@@ -230,7 +287,8 @@ export class FineRegister {
     this.requests[at + R_DURATION] = durationMs;
     this.requests[at + R_POOL_WAIT] = poolWaitMs;
     this.requests[at + R_STATUS] = status;
-    this.requests[at + R_ROUTE] = this.intern(`${method} ${route}`, this.routes, this.routeIndex);
+    this.requests[at + R_ROUTE] = this.routeLabels.intern(`${method} ${route}`);
+    if (this.routeLabels.folded) this.labelsFolded += 1;
     this.requests[at + R_OP_FROM] = opFrom;
     this.requests[at + R_OP_COUNT] = kept;
     this.requests[at + R_TRUNCATED] = attempted > kept ? 1 : 0;
@@ -246,7 +304,8 @@ export class FineRegister {
           break;
         }
         const slot = (this.dependencyCursor + deps) % this.dependencies.length;
-        this.dependencies[slot] = this.intern(label, this.dependencyLabels, this.dependencyIndex);
+        this.dependencies[slot] = this.dependencyLabels.intern(label);
+        if (this.dependencyLabels.folded) this.labelsFolded += 1;
         deps += 1;
       }
     }
@@ -273,7 +332,7 @@ export class FineRegister {
     for (let i = 0; i < opCount; i += 1) {
       const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
       out.push({
-        hash: this.fingerprints[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
+        hash: this.fingerprintLabels.labels[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
         startMs: this.operations[opAt + O_START] ?? 0,
         endMs: this.operations[opAt + O_END] ?? 0,
       });
@@ -281,9 +340,36 @@ export class FineRegister {
     return out;
   }
 
-  /** Exactly how many bytes of typed array this register has allocated. */
+  /**
+   * What this register holds, in bytes: the rings and the label tables the rows point at. The tables are
+   * counted by the same arithmetic the reserve uses, so a budget that leaves them out is not an option — that
+   * blindness is how gh-765 grew (ADR 0067).
+   */
   bytes(): number {
-    return this.requests.byteLength + this.operations.byteLength + this.dependencies.byteLength;
+    return (
+      this.requests.byteLength +
+      this.operations.byteLength +
+      this.dependencies.byteLength +
+      this.routeLabels.bytes +
+      this.fingerprintLabels.bytes +
+      this.dependencyLabels.bytes
+    );
+  }
+
+  /**
+   * What this register may hold, in bytes, at its worst: the rings, and every label table at its cap with
+   * every label at its longest. The rows are never freed, the tables never shrink, so the worst case is what
+   * the register really holds once it is full — a number, not a promise (ADR 0067, gh-765).
+   */
+  reservedBytes(): number {
+    return (
+      this.requests.byteLength +
+      this.operations.byteLength +
+      this.dependencies.byteLength +
+      this.routeLabels.worstBytes(MAX_ROUTE_LABEL_LENGTH) +
+      this.fingerprintLabels.worstBytes(FINGERPRINT_LABEL_MAX_LENGTH) +
+      this.dependencyLabels.worstBytes(DEPENDENCY_LABEL_MAX_LENGTH)
+    );
   }
 
   /** Everything the register holds, oldest request first. This is what a capture will freeze. */
@@ -306,7 +392,7 @@ export class FineRegister {
     for (let i = 0; i < opCount; i += 1) {
       const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
       operations.push({
-        hash: this.fingerprints[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
+        hash: this.fingerprintLabels.labels[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
         startMs: this.operations[opAt + O_START] ?? 0,
         endMs: this.operations[opAt + O_END] ?? 0,
       });
@@ -335,9 +421,9 @@ export class FineRegister {
       const dependencies: string[] = [];
       for (let i = 0; i < depCount; i += 1) {
         const slot = (depFrom + i) % this.dependencies.length;
-        dependencies.push(this.dependencyLabels[this.dependencies[slot] ?? 0] ?? "");
+        dependencies.push(this.dependencyLabels.labels[this.dependencies[slot] ?? 0] ?? "");
       }
-      const label = this.routes[this.requests[at + R_ROUTE] ?? 0] ?? " ";
+      const label = this.routeLabels.labels[this.requests[at + R_ROUTE] ?? 0] ?? " ";
       const space = label.indexOf(" ");
       out.push({
         method: space < 0 ? label : label.slice(0, space),
@@ -363,17 +449,83 @@ export class FineRegister {
         requests: out.length,
         detailLost,
         truncated,
+        labelsFolded: this.labelsFolded,
       },
     };
   }
+}
 
-  /** Interning: a row holds an index into a table, so a repeated route or fingerprint costs nothing. */
-  private intern(value: string, table: string[], index: Map<string, number>): number {
-    const known = index.get(value);
-    if (known !== undefined) return known;
-    const at = table.length;
-    table.push(value);
-    index.set(value, at);
+/**
+ * A label table: what a row points at by index, so a repeated route or fingerprint costs nothing.
+ *
+ * The cap is what keeps the table from growing with the traffic that names things (gh-765): a value per
+ * request used to add an entry for the whole life of the process. When there is no room for a new value, the
+ * row points at the shared sentinel instead of the value — the row stays true and what is lost is the name,
+ * which the caller counts (COB-01). Evicting would not be honest: a row would read somebody else's name.
+ */
+class LabelTable {
+  /** The labels, in the order interned. A row holds an index into this, never the label itself. */
+  readonly labels: string[] = [];
+  private readonly index = new Map<string, number>();
+  private readonly room: number;
+  private readonly sentinelsCount: number;
+  private readonly sentinelOf: (value: string) => string;
+  /** What the sentinels cost: fixed, and in the worst case whether or not anything folded. */
+  private readonly sentinelBytes: number;
+  /** What the table holds, by the same arithmetic `bytes` publishes. */
+  private byteCount = 0;
+  /** Set by the last `intern`: whether the value did not fit and its sentinel was kept instead. */
+  folded = false;
+
+  constructor(room: number, sentinels: string[], sentinelOf: (value: string) => string) {
+    this.room = room;
+    this.sentinelOf = sentinelOf;
+    this.sentinelsCount = sentinels.length;
+    this.sentinelBytes = 0;
+    for (const sentinel of sentinels) {
+      this.labels.push(sentinel);
+      this.index.set(sentinel, this.labels.length - 1);
+      const cost = labelBytes(sentinel.length);
+      this.sentinelBytes += cost;
+      this.byteCount += cost;
+    }
+  }
+
+  /** How many labels the table may hold, sentinels included: what the reserve is the arithmetic of. */
+  get capacity(): number {
+    return this.room + this.sentinelsCount;
+  }
+
+  get bytes(): number {
+    return this.byteCount;
+  }
+
+  /** The worst case of this table, for a label no longer than `maxLength`: what the reserve is. */
+  worstBytes(maxLength: number): number {
+    return this.room * labelBytes(maxLength) + this.sentinelBytes;
+  }
+
+  /** The index of this value, added the first time it is seen; its sentinel when there is no room. */
+  intern(value: string): number {
+    const known = this.index.get(value);
+    if (known !== undefined) {
+      this.folded = false;
+      return known;
+    }
+    this.folded = false;
+    if (this.labels.length < this.capacity) {
+      const at = this.labels.length;
+      this.labels.push(value);
+      this.index.set(value, at);
+      this.byteCount += labelBytes(value.length);
+      return at;
+    }
+    const at = this.index.get(this.sentinelOf(value));
+    if (at === undefined) {
+      // The sentinels are interned in the constructor, so this is an internal invariant, not a caller error.
+      throw new Error(`the label table lost its sentinel for ${this.sentinelOf(value)}`);
+    }
+    this.folded = true;
     return at;
   }
 }
