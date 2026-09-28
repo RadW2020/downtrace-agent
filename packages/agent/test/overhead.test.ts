@@ -2,9 +2,10 @@ import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { COARSE_MAX_BYTES, CoarseRegister } from "../src/coarse.ts";
-import { currentContext, recordOperationIn } from "../src/context.ts";
+import { currentContext, recordCall, recordOperationIn } from "../src/context.ts";
 import { FINE_MAX_BYTES, FineRegister } from "../src/fine.ts";
 import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
+import { PREARM_MAX_BYTES, PrearmRegister } from "../src/prearm.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 /**
@@ -334,6 +335,64 @@ describe("the agent", () => {
   });
 
   /**
+   * The gh-756 case — a new name per request — arriving at the reserve through its only door, an armed route.
+   * The reserve writes only for armed routes, but an armed route whose traffic names a new fingerprint and a
+   * new dependency on every request used to grow its tables for the life of the process, and the growth was
+   * in none of the sums the agent reads (gh-805).
+   */
+  it("a new fingerprint and dependency per request on an armed route does not shed the detail", async () => {
+    const overhead = neverDeciding();
+    const fine = new FineRegister();
+    const coarse = new CoarseRegister({ now: () => 1_000_000 });
+    const prearm = new PrearmRegister();
+    const agent = createAgent(
+      { ...config(), instrument: new Set(["http"]) },
+      { log: quiet, overhead, fine, coarse, prearm },
+    );
+    agent.start();
+    try {
+      // Armed before the traffic, the only order in which the reserve holds anything.
+      prearm.arm("GET /cart", Date.now() - 1_000, 60_000);
+      const start = channel("http.server.request.start");
+      const finish = channel("http.server.response.finish");
+      for (let i = 0; i < 2_000; i += 1) {
+        const req = { method: "GET", url: "/cart" };
+        start.publish({ request: req });
+        // A new dependency and a new query on every request: the scanner traffic, aimed at the armed route.
+        recordCall("postgres", `db-${i}:5432`, 3, false);
+        const ctx = currentContext();
+        if (!ctx) throw new Error("the agent did not open a request context");
+        recordOperationIn(ctx, {
+          kind: "query",
+          fingerprint: { hash: String(i).padStart(16, "0"), text: "" },
+          startedAt: 1,
+          endedAt: 3,
+        });
+        finish.publish({ request: req, response: { statusCode: 200 } });
+      }
+      // The tables filled to their caps and stopped: the registers hold no more than they reserve, and a
+      // register within its reserve does not shed (gh-774).
+      expect(agent.stats.shed).toBe(Sheddable.Nothing);
+      expect(fine.bytes()).toBeLessThanOrEqual(fine.reservedBytes());
+      expect(coarse.bytes()).toBeLessThanOrEqual(coarse.reservedBytes());
+      expect(prearm.bytes()).toBeLessThanOrEqual(prearm.reservedBytes());
+      // And what the caps cost is said, the way every other loss is said (COB-01).
+      expect(fine.snapshot().coverage.labelsFolded).toBeGreaterThan(0);
+      expect(prearm.labelsFolded).toBeGreaterThan(0);
+      // The arithmetic the tripwire reads: the three reserves fit under the three budgets of invariant 3
+      // (ADR 0067), which is why the line is the reserve and not a fraction of a mebibyte.
+      expect(fine.reservedBytes() + coarse.reservedBytes() + prearm.reservedBytes()).toBeLessThanOrEqual(
+        FINE_MAX_BYTES + COARSE_MAX_BYTES + PREARM_MAX_BYTES,
+      );
+      // And the reserve is still doing its job: the armed route's requests are kept, folded or not.
+      const reserve = prearm.reserveFor("GET", "/cart", Date.now());
+      expect(reserve?.requests.length).toBeGreaterThan(0);
+    } finally {
+      void agent.stop();
+    }
+  });
+
+  /**
    * The one state the tripwire exists for: a register holding more than it reserves, so the arithmetic of
    * ADR 0067 no longer holds. The detail goes first, and the loss is said with its reason.
    */
@@ -362,6 +421,37 @@ describe("the agent", () => {
       expect(agent.stats.shedReason).toBe(ThrottleReasons.Memory);
       // The writing stopped, not just the reading: the first request landed before the shed, and the
       // second one, after.
+      expect(fine.snapshot().coverage.requests).toBe(1);
+    } finally {
+      void agent.stop();
+    }
+  });
+
+  // The same line, read from the reserve (gh-805): a tripwire that did not compare it would not read a
+  // growth of it either.
+  it("sheds the detail for memory when the reserve holds more than it reserves", async () => {
+    const overhead = neverDeciding();
+    const fine = new FineRegister();
+    // A reserve that grew beyond its cap: `bytes()` says more than the reserve, which the real register
+    // cannot do, so a subclass stands in for the bug the tripwire is the last line against.
+    class OverReserve extends PrearmRegister {
+      override bytes(): number {
+        return super.bytes() + 3 * 1024 * 1024;
+      }
+    }
+    const prearm = new OverReserve();
+    const agent = createAgent(config(), { log: quiet, overhead, fine, prearm });
+    agent.start();
+    try {
+      const start = channel("http.server.request.start");
+      const finish = channel("http.server.response.finish");
+      for (let i = 0; i < 2; i += 1) {
+        const req = { method: "GET", url: `/r/${i}` };
+        start.publish({ request: req });
+        finish.publish({ request: req, response: { statusCode: 200 } });
+      }
+      expect(agent.stats.shed).toBe(Sheddable.Fine);
+      expect(agent.stats.shedReason).toBe(ThrottleReasons.Memory);
       expect(fine.snapshot().coverage.requests).toBe(1);
     } finally {
       void agent.stop();

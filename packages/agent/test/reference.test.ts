@@ -6,6 +6,7 @@ import {
   REFERENCE_MAX_BYTES,
   ReferenceRegister,
 } from "../src/reference.ts";
+import { OTHER_ROUTE } from "../src/routes.ts";
 
 /**
  * The third register of the black box: a few requests per endpoint, kept so that a capture has something
@@ -156,8 +157,11 @@ describe("the reference samples", () => {
 
   it("does not grow with traffic", () => {
     const r = new ReferenceRegister();
+    // The first sample interns the route and its fingerprint; the traffic after it — the same names over and
+    // over — must not (the same shape as the fine register's test, gh-765).
+    r.consider("GET", "/orders", 200, 1_000, 5, () => [{ hash: "a", startMs: 0, endMs: 1 }]);
     const before = r.bytes();
-    for (let i = 0; i < 5_000; i += 1) {
+    for (let i = 1; i < 5_000; i += 1) {
       r.consider("GET", "/orders", 200, 1_000 + i, 5, () => [{ hash: "a", startMs: 0, endMs: 1 }]);
     }
     expect(r.bytes()).toBe(before);
@@ -170,5 +174,70 @@ describe("the reference samples", () => {
     // The selection is what it is even with nothing selected: it is how the register works, not a
     // description of this particular answer.
     expect(snapshot.selection).toBe("uniform-reservoir");
+  });
+});
+
+describe("the label tables of the reference", () => {
+  // gh-805, the younger brother of gh-765. The route table is bounded by `routeCapacity`, but the
+  // fingerprints its samples intern were not: a new query fingerprint on every admitted sample added one
+  // for the life of the process, and `bytes()` did not count the table, so neither the budget nor the
+  // tripwire could see the growth. `random: () => 0` admits every request, which is what keeps the test
+  // from being about the selection.
+
+  const ops = (i: number) => () => [{ hash: String(i).padStart(16, "0"), startMs: 0, endMs: 1 }];
+
+  it("counts the fingerprints it interns, and stops growing at the cap", () => {
+    const r = new ReferenceRegister({ samplesPerRoute: 2, random: () => 0 });
+    const empty = r.bytes();
+    r.consider("GET", "/orders", 200, 1_000, 5, ops(0));
+    // A new name costs memory: the table is part of what the register holds, the way gh-765 made the
+    // fine register's tables part of its arithmetic.
+    expect(r.bytes()).toBeGreaterThan(empty);
+    // Past the cap the traffic costs nothing: a register that still grew here was the bug (invariant 3).
+    for (let i = 1; i < 500; i += 1) r.consider("GET", "/orders", 200, 1_000 + i, 5, ops(i));
+    const at = r.bytes();
+    for (let i = 500; i < 1_000; i += 1) r.consider("GET", "/orders", 200, 1_000 + i, 5, ops(i));
+    expect(r.bytes()).toBe(at);
+  });
+
+  it("folds a fingerprint into (other) once the table is full, and says it did", () => {
+    const r = new ReferenceRegister({ samplesPerRoute: 1, fingerprintLabels: 2, random: () => 0 });
+    r.consider("GET", "/orders", 200, 1_000, 5, () => [
+      { hash: "aaaaaaaaaaaaaaaa", startMs: 0, endMs: 1 },
+      { hash: "bbbbbbbbbbbbbbbb", startMs: 1, endMs: 2 },
+    ]);
+    // The next admitted sample replaces it, and neither of its fingerprints fits.
+    r.consider("GET", "/orders", 200, 2_000, 5, () => [
+      { hash: "cccccccccccccccc", startMs: 0, endMs: 1 },
+      { hash: "dddddddddddddddd", startMs: 1, endMs: 2 },
+    ]);
+
+    const snapshot = r.snapshot();
+    expect(snapshot.samples).toHaveLength(1);
+    // The sample stays true and what is lost is the name, the same fold the fine register makes (COB-01).
+    expect(snapshot.samples[0]?.operations.map((o) => o.hash)).toEqual([OTHER_ROUTE, OTHER_ROUTE]);
+    expect(snapshot.labelsFolded).toBe(2);
+  });
+
+  // The memory half of invariant 3, at the worst case this ticket is about: every slot of every endpoint
+  // filled, and a fingerprint nobody has seen before, in every operation, at the longest one may be.
+  it("holds its memory budget at the worst case of distinct fingerprints", () => {
+    const r = new ReferenceRegister({ random: () => 0 });
+    for (let i = 0; i < DEFAULT_REFERENCE_ROUTES; i += 1) {
+      for (let n = 0; n < DEFAULT_SAMPLES_PER_ROUTE; n += 1) {
+        r.consider("GET", `/route-${i}`, 200, 1_000 + i * 10 + n, 5, () =>
+          Array.from({ length: DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE }, (_, j) => ({
+            hash: String(i * 100 + n * 10 + j).padStart(16, "0"),
+            startMs: j,
+            endMs: j + 1,
+          })),
+        );
+      }
+    }
+
+    // Every table is at its cap with every label at its longest, so the register holds its reserve
+    // exactly — a number, not a promise — and the reserve fits the budget the arithmetic is for (ADR 0067).
+    expect(r.bytes()).toBe(r.reservedBytes());
+    expect(r.bytes()).toBeLessThanOrEqual(REFERENCE_MAX_BYTES);
   });
 });

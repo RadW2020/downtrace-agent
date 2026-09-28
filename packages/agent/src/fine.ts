@@ -12,7 +12,7 @@
  * Nothing leaves the process. A capture will freeze it (gh-277).
  */
 
-import { labelBytes } from "./labels.ts";
+import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
 import { MAX_ROUTE_LABEL_LENGTH, METHODS, OTHER_ROUTE } from "./routes.ts";
 
 /** How many requests the ring holds. */
@@ -54,15 +54,6 @@ export const DEFAULT_FINGERPRINT_LABELS = 512;
 /** How many distinct dependency labels the register keeps: a request touches a handful, and a capture of one
  * is what a lost label costs. */
 export const DEFAULT_DEPENDENCY_LABELS = 128;
-
-/**
- * The longest label each table may hold, which is what the reserve is the arithmetic of. A route label is its
- * method, a space and the template (`MAX_ROUTE_LABEL_LENGTH`); a fingerprint is 16 hex characters; a dependency
- * label is its kind — `postgres`, the longest the protocol knows — a separator and the target the instruments
- * clamp to 256.
- */
-export const FINGERPRINT_LABEL_MAX_LENGTH = 16;
-export const DEPENDENCY_LABEL_MAX_LENGTH = "postgres".length + 1 + 256;
 
 /** Fields of one request row. */
 const R_START = 0;
@@ -452,80 +443,5 @@ export class FineRegister {
         labelsFolded: this.labelsFolded,
       },
     };
-  }
-}
-
-/**
- * A label table: what a row points at by index, so a repeated route or fingerprint costs nothing.
- *
- * The cap is what keeps the table from growing with the traffic that names things (gh-765): a value per
- * request used to add an entry for the whole life of the process. When there is no room for a new value, the
- * row points at the shared sentinel instead of the value — the row stays true and what is lost is the name,
- * which the caller counts (COB-01). Evicting would not be honest: a row would read somebody else's name.
- */
-class LabelTable {
-  /** The labels, in the order interned. A row holds an index into this, never the label itself. */
-  readonly labels: string[] = [];
-  private readonly index = new Map<string, number>();
-  private readonly room: number;
-  private readonly sentinelsCount: number;
-  private readonly sentinelOf: (value: string) => string;
-  /** What the sentinels cost: fixed, and in the worst case whether or not anything folded. */
-  private readonly sentinelBytes: number;
-  /** What the table holds, by the same arithmetic `bytes` publishes. */
-  private byteCount = 0;
-  /** Set by the last `intern`: whether the value did not fit and its sentinel was kept instead. */
-  folded = false;
-
-  constructor(room: number, sentinels: string[], sentinelOf: (value: string) => string) {
-    this.room = room;
-    this.sentinelOf = sentinelOf;
-    this.sentinelsCount = sentinels.length;
-    this.sentinelBytes = 0;
-    for (const sentinel of sentinels) {
-      this.labels.push(sentinel);
-      this.index.set(sentinel, this.labels.length - 1);
-      const cost = labelBytes(sentinel.length);
-      this.sentinelBytes += cost;
-      this.byteCount += cost;
-    }
-  }
-
-  /** How many labels the table may hold, sentinels included: what the reserve is the arithmetic of. */
-  get capacity(): number {
-    return this.room + this.sentinelsCount;
-  }
-
-  get bytes(): number {
-    return this.byteCount;
-  }
-
-  /** The worst case of this table, for a label no longer than `maxLength`: what the reserve is. */
-  worstBytes(maxLength: number): number {
-    return this.room * labelBytes(maxLength) + this.sentinelBytes;
-  }
-
-  /** The index of this value, added the first time it is seen; its sentinel when there is no room. */
-  intern(value: string): number {
-    const known = this.index.get(value);
-    if (known !== undefined) {
-      this.folded = false;
-      return known;
-    }
-    this.folded = false;
-    if (this.labels.length < this.capacity) {
-      const at = this.labels.length;
-      this.labels.push(value);
-      this.index.set(value, at);
-      this.byteCount += labelBytes(value.length);
-      return at;
-    }
-    const at = this.index.get(this.sentinelOf(value));
-    if (at === undefined) {
-      // The sentinels are interned in the constructor, so this is an internal invariant, not a caller error.
-      throw new Error(`the label table lost its sentinel for ${this.sentinelOf(value)}`);
-    }
-    this.folded = true;
-    return at;
   }
 }

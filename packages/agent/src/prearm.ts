@@ -14,9 +14,11 @@
  * nothing confirms expires having cost a few kilobytes and no network (`product.md:102`).
  */
 
-/** How many routes may be armed at once. Four, like the captures a process may be observing (`captures.ts`). */
 import type { FineRequest } from "./fine.ts";
+import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
+import { OTHER_ROUTE } from "./routes.ts";
 
+/** How many routes may be armed at once. Four, like the captures a process may be observing (`captures.ts`). */
 export const DEFAULT_ARMED_ROUTES = 4;
 
 /**
@@ -37,6 +39,20 @@ export const DEFAULT_PREARM_OPERATIONS = 4_096;
  * fine register: this is protection for a few routes for a few minutes, not a second black box.
  */
 export const PREARM_MAX_BYTES = 192 * 1024;
+
+/**
+ * How many distinct fingerprints the reserve may remember. The fine register keeps 512 for the whole process;
+ * the reserve sees the traffic of at most four armed routes, and a route runs a handful of distinct queries —
+ * so a quarter of the fine register's room, which is what the arithmetic of `PREARM_MAX_BYTES` admits.
+ */
+export const DEFAULT_PREARM_FINGERPRINT_LABELS = 128;
+
+/**
+ * How many distinct dependency labels the reserve may remember. An application has a handful of dependencies,
+ * the fine register caps the whole process at 128, and the reserve only sees the armed routes' share of the
+ * traffic: half of the fine register's room.
+ */
+export const DEFAULT_PREARM_DEPENDENCY_LABELS = 64;
 
 /** Fields of one request row, the same shape the fine register keeps plus where its operations begin. */
 const R_START = 0;
@@ -93,6 +109,8 @@ export interface PrearmOptions {
   routes?: number;
   requestsPerRoute?: number;
   operations?: number;
+  fingerprintLabels?: number;
+  dependencyLabels?: number;
 }
 
 /** One armed route: which slots are its own, and until when. */
@@ -110,16 +128,29 @@ export class PrearmRegister {
   private readonly requests: Float64Array;
   private readonly operations: Float64Array;
   private readonly dependencies: Int32Array;
-  private readonly dependencyLabels: string[] = [];
-  private readonly dependencyIndex = new Map<string, number>();
+  /**
+   * Dependency labels, interned: a row holds an index, not a string. Bounded, and what does not fit folds
+   * into the `(other)` sentinel the fine register folds its dependencies into (gh-805, the brother of
+   * gh-765). What the fold costs, said rather than silent (COB-01): a capture of that dependency stops
+   * matching the reserve's rows for it — the row stays true and its timing is kept, and the fine register is
+   * still the capture's primary source. What it cannot cost: a capture of the armed route itself, whose label
+   * is the arm's and lives in the request rows, which the fold never touches.
+   */
+  private readonly dependencyLabels: LabelTable;
   private readonly methods: string[] = [];
-  private readonly fingerprints: string[] = [];
-  private readonly fingerprintIndex = new Map<string, number>();
+  /**
+   * Fingerprints, interned the same way. What the fold costs here is identity, not matching: a capture is
+   * never about an operation, so a row whose operation reads `(other)` still answers the captures of its
+   * route and of the dependencies it touched — it just cannot say which query that operation was.
+   */
+  private readonly fingerprintLabels: LabelTable;
   private readonly arms: (Arm | undefined)[];
   private opCursor = 0;
   private shedding = false;
   /** Routes a signal asked to arm and that did not fit. Counted, never silent (invariant 14). */
   routesDropped = 0;
+  /** What the label tables had no room for, per row that asked (COB-01). */
+  labelsFolded = 0;
 
   constructor(options: PrearmOptions = {}) {
     this.routeCapacity = options.routes ?? DEFAULT_ARMED_ROUTES;
@@ -128,6 +159,17 @@ export class PrearmRegister {
     this.requests = new Float64Array(this.routeCapacity * this.perRoute * R_FIELDS);
     this.operations = new Float64Array(this.opCapacity * O_FIELDS);
     this.dependencies = new Int32Array(this.routeCapacity * this.perRoute * DEPS_PER_REQUEST);
+    // One sentinel, the one the fine register folds into: a fold keeps the row and loses the name.
+    this.dependencyLabels = new LabelTable(
+      options.dependencyLabels ?? DEFAULT_PREARM_DEPENDENCY_LABELS,
+      [OTHER_ROUTE],
+      () => OTHER_ROUTE,
+    );
+    this.fingerprintLabels = new LabelTable(
+      options.fingerprintLabels ?? DEFAULT_PREARM_FINGERPRINT_LABELS,
+      [OTHER_ROUTE],
+      () => OTHER_ROUTE,
+    );
     this.arms = new Array(this.routeCapacity).fill(undefined);
     this.methods = new Array(this.routeCapacity * this.perRoute).fill("");
   }
@@ -190,7 +232,8 @@ export class PrearmRegister {
     for (const op of r.operations) {
       if (kept >= this.opCapacity) break;
       const o = (this.opCursor % this.opCapacity) * O_FIELDS;
-      this.operations[o + O_FINGERPRINT] = this.fingerprint(op.hash);
+      this.operations[o + O_FINGERPRINT] = this.fingerprintLabels.intern(op.hash);
+      if (this.fingerprintLabels.folded) this.labelsFolded += 1;
       this.operations[o + O_START] = op.startMs;
       this.operations[o + O_END] = op.endMs;
       this.opCursor++;
@@ -206,7 +249,8 @@ export class PrearmRegister {
     let deps = 0;
     for (const dependency of r.dependencies) {
       if (deps >= DEPS_PER_REQUEST) break;
-      this.dependencies[depAt + deps] = this.dependencyLabel(dependency);
+      this.dependencies[depAt + deps] = this.dependencyLabels.intern(dependency);
+      if (this.dependencyLabels.folded) this.labelsFolded += 1;
       deps++;
     }
     this.requests[at + R_DEP_FROM] = depAt;
@@ -268,7 +312,7 @@ export class PrearmRegister {
       for (let i = 0; i < count; i++) {
         const o = ((from + i) % this.opCapacity) * O_FIELDS;
         operations.push({
-          hash: this.fingerprints[this.operations[o + O_FINGERPRINT] ?? 0] ?? "",
+          hash: this.fingerprintLabels.labels[this.operations[o + O_FINGERPRINT] ?? 0] ?? "",
           startMs: this.operations[o + O_START] ?? 0,
           endMs: this.operations[o + O_END] ?? 0,
         });
@@ -278,7 +322,7 @@ export class PrearmRegister {
       const depCount = this.requests[at + R_DEP_COUNT] ?? 0;
       const dependencies: string[] = [];
       for (let i = 0; i < depCount; i += 1) {
-        dependencies.push(this.dependencyLabels[this.dependencies[depFrom + i] ?? 0] ?? "");
+        dependencies.push(this.dependencyLabels.labels[this.dependencies[depFrom + i] ?? 0] ?? "");
       }
       out.push({
         method: space < 0 ? label : label.slice(0, space),
@@ -294,11 +338,34 @@ export class PrearmRegister {
     return out;
   }
 
-  /** Preallocated, so this is what it occupies armed or empty. */
+  /**
+   * What the reserve holds, in bytes: the rings and the label tables the rows point at. The tables are
+   * counted by the same arithmetic the reserve uses, so a budget that leaves them out is not an option — that
+   * blindness is how gh-765 grew, and gh-805 is the same growth that was still left (ADR 0067).
+   */
   bytes(): number {
-    // Every array, including the dependency ring: a budget that leaves one out is a budget that is wrong by
-    // exactly the amount nobody is looking at (ADR 0067).
-    return this.requests.byteLength + this.operations.byteLength + this.dependencies.byteLength;
+    return (
+      this.requests.byteLength +
+      this.operations.byteLength +
+      this.dependencies.byteLength +
+      this.dependencyLabels.bytes +
+      this.fingerprintLabels.bytes
+    );
+  }
+
+  /**
+   * What the reserve may hold, in bytes, at its worst: the rings, and every label table at its cap with every
+   * label at its longest. The rings are never freed and the tables never shrink, so the worst case is what the
+   * reserve really holds once it is full — a number, not a promise (ADR 0067, gh-765, gh-805).
+   */
+  reservedBytes(): number {
+    return (
+      this.requests.byteLength +
+      this.operations.byteLength +
+      this.dependencies.byteLength +
+      this.dependencyLabels.worstBytes(DEPENDENCY_LABEL_MAX_LENGTH) +
+      this.fingerprintLabels.worstBytes(FINGERPRINT_LABEL_MAX_LENGTH)
+    );
   }
 
   private slotOf(label: string, now: number): number {
@@ -307,26 +374,5 @@ export class PrearmRegister {
       if (arm && arm.label === label && arm.until > now) return i;
     }
     return -1;
-  }
-
-  /** The same interning as the fingerprints: a label is stored once and rows keep its index. */
-  private dependencyLabel(label: string): number {
-    let index = this.dependencyIndex.get(label);
-    if (index === undefined) {
-      index = this.dependencyLabels.length;
-      this.dependencyLabels.push(label);
-      this.dependencyIndex.set(label, index);
-    }
-    return index;
-  }
-
-  private fingerprint(hash: string): number {
-    let index = this.fingerprintIndex.get(hash);
-    if (index === undefined) {
-      index = this.fingerprints.length;
-      this.fingerprints.push(hash);
-      this.fingerprintIndex.set(hash, index);
-    }
-    return index;
   }
 }

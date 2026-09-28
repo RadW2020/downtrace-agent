@@ -3,7 +3,11 @@ import type { Interval } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { CoarseRegister } from "../src/coarse.ts";
+import { recordCall } from "../src/context.ts";
+import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
+import { PrearmRegister } from "../src/prearm.ts";
+import { ReferenceRegister } from "../src/reference.ts";
 import { Sender } from "../src/transport.ts";
 import { testConfig } from "./support/agent-config.ts";
 
@@ -155,6 +159,46 @@ describe("what the agent adds about itself", () => {
     // to say (ADR 0093).
     expect(r?.shed).toBeUndefined();
     expect(r?.shedReason).toBeUndefined();
+  });
+
+  // gh-805. The reserve was the register the sum left out: `bufferBytes` added fine, coarse, reference and
+  // the exclusions, and the prearmed reserve — preallocated for a route nobody has served yet — was not in
+  // the number the agent says it holds. A sum that leaves a register out is the blindness gh-765 grew.
+  it("counts the reserve in the memory it reports", async () => {
+    const fine = new FineRegister();
+    const coarse = new CoarseRegister({ now: () => 1_000_000 });
+    const reference = new ReferenceRegister();
+    const prearm = new PrearmRegister();
+    const bodies: string[] = [];
+    const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+    const agent = createAgent(
+      testConfig("http://cloud.invalid", {
+        environment: "production",
+        version: "v1",
+        intervalMs: 60_000,
+        instrument: new Set(["http"]),
+      }),
+      { log: quiet, fetchImpl, fine, coarse, reference, prearm },
+    );
+    agent.start();
+    try {
+      // Armed before the request, so the reserve holds the row and not only its preallocation.
+      prearm.arm("GET /products", Date.now() - 1_000, 60_000);
+      const request = { method: "GET", url: "/products" };
+      channel("http.server.request.start").publish({ request });
+      recordCall("postgres", "db:5432", 3, false);
+      channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+      // The sum the agent reports is the sum of the registers, each by its own arithmetic.
+      const expected = fine.bytes() + coarse.bytes() + reference.bytes() + prearm.bytes();
+      expect(await agent.flushNow()).toBe(true);
+      const r = resourcesOf(bodies[0] ?? "");
+      expect(r?.bufferBytes).toBe(expected);
+    } finally {
+      await agent.stop();
+    }
   });
 
   it("says in the batch what it is giving up for memory, while it lasts", async () => {

@@ -767,12 +767,14 @@ export class Agent {
       out.internalErrors = this.internalErrors - this.reportedInternalErrors;
       this.reportedInternalErrors = this.internalErrors;
     }
-    // The label tables the registers key by traffic are in their `bytes` (gh-765), and the decisions the
+    // The label tables the registers key by traffic are in their `bytes` (gh-765), the reserve is the
+    // register that is preallocated for a route nobody has served yet (gh-805), and the decisions the
     // exclusions remember are the last thing the agent holds that traffic names.
     const bytes =
       this.fine.bytes() +
       this.coarse.bytes() +
       this.reference.bytes() +
+      this.prearm.bytes() +
       this.excludedEndpoints.bytes() +
       this.excludedDependencies.bytes();
     if (bytes > 0) out.bufferBytes = bytes;
@@ -827,11 +829,17 @@ export class Agent {
    * shed for the rest of the process's life although nothing had grown beyond its budget (gh-774).
    *
    * Each register is compared against its own reserve, and the reserve includes the label tables the traffic
-   * fills (gh-765): the fine ring and its tables are bounded by construction, so what it holds is what it
-   * reserves, and a register within its reserve does not shed.
+   * fills (gh-765, and the reserve's and the reference's since gh-805): they are bounded by construction, so
+   * what a register holds is what it reserves, and a register within its reserve does not shed. The reserve
+   * is in the comparison and not only in the sum it reports, because a line that does not read it would not
+   * read a growth of it either (gh-805).
    */
   private overMemoryReserve(): boolean {
-    return this.fine.bytes() > this.fine.reservedBytes() || this.coarse.bytes() > this.coarse.reservedBytes();
+    return (
+      this.fine.bytes() > this.fine.reservedBytes() ||
+      this.coarse.bytes() > this.coarse.reservedBytes() ||
+      this.prearm.bytes() > this.prearm.reservedBytes()
+    );
   }
 
   private requestStarted(message: unknown): void {
