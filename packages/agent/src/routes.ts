@@ -1,4 +1,5 @@
 import type { Endpoint } from "@downtrace/protocol";
+import { segmentLooksLikeValue } from "./sanitize.ts";
 
 export type Method = Endpoint["method"];
 
@@ -31,8 +32,8 @@ export interface RouteSource {
 
 /**
  * Route template for a request. Prefers the framework's own template
- * (`/products/:id` from Express); otherwise collapses identifier-looking path
- * segments (numbers, UUIDs, long hex) into `:id`.
+ * (`/products/:id` from Express); otherwise collapses a segment that carries a
+ * value into `:id`, so that a parameter of the request does not leave (invariant 5, gh-756).
  */
 export function routeOf(req: RouteSource): string {
   const template = expressTemplate(req);
@@ -48,15 +49,21 @@ function expressTemplate(req: RouteSource): string | undefined {
   return joined === "" ? "/" : trimSlash(joined);
 }
 
-const NUMERIC = /^\d+$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HEX_ID = /^(?:[0-9a-f]{24}|[0-9a-f]{32,})$/i;
-
+/**
+ * The template a request's path becomes when no framework named it.
+ *
+ * A segment that is a value of any kind — an email, a token, a phone, a file name with a number — is `:id`
+ * whole, decided by `segmentLooksLikeValue`, whose list and its discipline live in `src/sanitize.ts` (gh-756,
+ * ADR 0167). What a value is not stays as written — a plain word, a slug, a version — and that is what the
+ * README says: no rule of shape can tell a parameter from a route's own words, and the template the
+ * developer writes is the lasting answer for one (`product.md:106`).
+ *
+ * The query and the fragment are cut before the path is read, because they are parameters and do not belong
+ * in a template at all.
+ */
 export function heuristicTemplate(url: string): string {
   const path = url.split(/[?#]/, 1)[0] ?? "/";
-  const segments = path
-    .split("/")
-    .map((s) => (s !== "" && (NUMERIC.test(s) || UUID.test(s) || HEX_ID.test(s)) ? ":id" : s));
+  const segments = path.split("/").map((s) => (s !== "" && segmentLooksLikeValue(s) ? ":id" : s));
   return trimSlash(segments.join("/") || "/");
 }
 

@@ -85,6 +85,13 @@ Either import the instrumentation from an entry point you own, as above, or make
 and your deployed version travel as stable digests of themselves — same name, same digest, every time, so
 the analysis still groups — and query text, error messages and exception signatures do not travel at all.
 
+The digest is of what the route is called: for a route the framework did not template, that is the collapsed
+route, so a value the heuristic folds — an email, a token, a file name with a number — never enters the
+digest. The limit is a plain word in a path without a template, a name or a slug: the heuristic cannot tell
+it from the route's own words, so it enters the digest, and the digest is keyless, which means whoever
+guesses the word can confirm it. An endpoint exclusion keeps it out entirely, because excluding is not
+observing.
+
 What stays is what is not yours: the protocol version, the agent's own name, the HTTP method, the kind of
 each dependency, the counts and the timings. Downtrace keeps detecting and comparing; what it loses is the
 ability to **name** anything, and it says so in every report rather than showing you a bare hash.
@@ -493,7 +500,17 @@ you would give an application log.
 
 ## Requirements
 
-Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI. Express route templates are used when present; without a framework, identifier-looking path segments (numbers, UUIDs, long hex) are collapsed into `:id`.
+Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI. Express
+route templates are used when present. Without a framework — and for whatever Express answers before a route
+matched, a middleware's 401 or a 404 — a segment that carries a value is collapsed into `:id`: anything with
+an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
+version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
+A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a
+parameter from a route's own words, and the ways to keep it out are an endpoint exclusion, matched against
+the template, and minimal mode. **The first version that collapses these segments changes route identities,
+once:** an endpoint whose route carried a value is seen as the template it became, a finding on the old route
+receives no data and is not declared recovered, and an exclusion written against a collapsed segment has to
+be rewritten against the template.
 
 ## Changelog
 

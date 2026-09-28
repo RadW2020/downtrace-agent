@@ -1,11 +1,13 @@
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
+import { IntervalAggregator } from "../src/aggregator.ts";
 import { enterRequest, recordOperationIn } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import type { Logger } from "../src/log.ts";
 import { PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
+import { routeOf } from "../src/routes.ts";
 import { sanitizeMessage } from "../src/sanitize.ts";
 import { Sender } from "../src/transport.ts";
 import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
@@ -169,5 +171,73 @@ describe("what actually leaves, in the bytes", () => {
     // And the paths in those messages did not travel: the route came through beside a rule that works, and not for
     // want of one.
     expect(body).not.toContain("alice");
+  });
+
+  /**
+   * gh-756. A request without a template — outside Express, and inside it whenever the response is given
+   * before any route matched, as a middleware's 401 is — is named by the heuristic, which used to copy every
+   * segment a value was not: the email, the token and the file name with a number left whole in every batch.
+   * All four doors a route leaves by read the one string `routeOf` gives, so this asks the two of them that
+   * ride a batch; the capture's doors are asked in the minimal test, over the same string.
+   */
+  it("carries none of the values of a route without a template, and the route they became", async () => {
+    const urls = [
+      "/users/ana@cliente.com",
+      "/users/ana%40cliente.com/orders",
+      "/reset-password/Zx8kQ2vN4pL9mR7tY3wB",
+      "/files/report-2024-q3.pdf",
+    ];
+    const values = ["ana@cliente.com", "ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB", "report-2024-q3.pdf"];
+    const routes = urls.map((url) => routeOf({ url }));
+
+    // The aggregates door: the real interval the sender enqueues.
+    const recorder = new IntervalAggregator({ now: () => 1_000_000 });
+    for (let i = 0; i < routes.length; i++) recorder.record("GET", routes[i] ?? "/", 200, 1 + i);
+    const interval = recorder.rotate();
+    expect(interval, "the interval should have rotated").not.toBeNull();
+
+    // The profile door: the real profile, and the operations of one request.
+    const fingerprints = new FingerprintCache();
+    const ctx = enterRequest();
+    recordOperationIn(ctx, {
+      kind: "query",
+      fingerprint: fingerprints.get("SELECT id FROM orders WHERE id = ?"),
+      startedAt: 0,
+      endedAt: 1,
+    });
+    let t = 1_000_000;
+    const profile = new ProfileAggregator({ now: () => (t += PROFILE_WINDOW_MS) });
+    profile.record("GET", routes[0] ?? "/", [...(ctx.operations?.values() ?? [])]);
+    const rotated = profile.rotate();
+    expect(rotated, "the window should have rotated").not.toBeNull();
+
+    let body = "";
+    const sender = new Sender({
+      url: "http://sink.invalid",
+      token: "t",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v0" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        body = String(init.body);
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch,
+      now: () => 1_000_000,
+    });
+    if (interval) sender.enqueue(interval);
+    if (rotated) sender.enqueueProfile(rotated);
+    expect(await sender.flush()).toBe(true);
+    expect(body, "nothing was sent").not.toBe("");
+
+    for (const value of values) {
+      expect(body, `«${value}» reached the wire`).not.toContain(value);
+    }
+    // And what those values became did arrive, as the template they were folded into: omission has to be the
+    // exception, or this test would prove nothing.
+    for (const route of routes) {
+      expect(body, `«${route}» never reached the wire`).toContain(`"route":"${route}"`);
+    }
+    expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });
 });

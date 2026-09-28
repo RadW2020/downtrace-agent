@@ -1,10 +1,11 @@
 /**
  * What a value looks like, decided once.
  *
- * Two places in this package have to look at text written by somebody else and decide how much of it may
- * leave the user's server: the message of a thrown error, and the name inside a double-quoted SQL identifier.
- * They are not the same kind of text, but the question is the same one — «is this a value?» — and a rule with
- * two copies is a rule that will disagree with itself (gh-350).
+ * Three places in this package have to look at text written by somebody else and decide how much of it may
+ * leave the user's server: the message of a thrown error, the name inside a double-quoted SQL identifier,
+ * and a segment of a route the framework did not template. They are not the same kind of text, but the
+ * question is the same one — «is this a value?» — and a rule with two copies is a rule that will disagree
+ * with itself (gh-350).
  *
  * It lives here and not in `errors.ts` because `fingerprint.ts` needs it too, and `errors.ts` already imports
  * `hash64` from there.
@@ -229,4 +230,85 @@ export function meaningful(sanitised: string): boolean {
   if (words.length === 0) return false;
   const kept = words.filter((w) => w.replace(/[^A-Za-z]/g, "").length > 0).length;
   return kept / words.length >= MIN_MEANING;
+}
+
+/**
+ * What a value looks like in the third kind of text: a segment of a route the framework did not template.
+ *
+ * `src/routes.ts` names every request, with the framework's own template when the framework gives one and a
+ * heuristic over the path when it does not. The heuristic asks this file the question it answers — «is this
+ * a value?» — and the answer is not the message's, because a route is not prose:
+ *
+ * - In a message, a word with a digit is a value or a version, and neither belongs in an identity. In a
+ *   route, a version **separates two endpoints the product has to keep apart**: `v1` and `v2` are two
+ *   endpoints, and merging them would dilute one's findings with the other's traffic.
+ * - In a message, a long run of letters and hyphens is rare and probably a value. In a route, a kebab-case
+ *   name of that length is the naming convention, and taking it would merge routes the product reads apart.
+ *
+ * So the heuristic runs this list and not `VALUE_PATTERNS`: the rules that decide nothing on a segment — the
+ * URL's and the query's, a segment holds no `?` and no `://`, the query is cut before the path is split on
+ * `/` — would have no case of their own, which is what ADR 0167's test exists to catch; and the ones that
+ * decide too much — a digit with no version's exception, a long run with no uppercase — would merge
+ * endpoints the product keeps apart. The rules below and `VALUE_PATTERNS` deliberately disagree where a
+ * message is not a route, and ADR 0175's decision stands on its own side of it: no rule of the message
+ * reads the route, which travels as the route.
+ *
+ * A segment is a value when any rule says it is, and then it becomes `:id` whole: the unit is the segment,
+ * because collapsing only the part a rule matched would leave a half-value beside the mark.
+ *
+ * A plain word is not a value to any rule of shape — a name, a slug, a file name with no number — and it
+ * stays as written, which is what the README says and what `product.md:106` does not guarantee. The lasting
+ * answer for one is the template the developer writes.
+ *
+ * Each rule decides a case that no other rule does, and `sanitize.test.ts` checks it by taking each one out
+ * of this very list, as it does of the others (ADR 0167). A rule added here needs its case.
+ */
+export type SegmentRule = (segment: string) => boolean;
+
+/** A version: a `v` and digits with optional dotted parts, either case. */
+const SEGMENT_VERSION = /^[vV][0-9]+(?:\.[0-9]+)*$/;
+/** A digit of any script, read the way `ALNUM` reads one. */
+const SEGMENT_DIGIT = /\p{N}/u;
+/** A run of a word's characters, as the long run reads one, with the `_` and `-` a route's names carry. */
+const SEGMENT_RUN = new RegExp(`[${ALNUM}_-]{16,}`, "gu");
+/** An uppercase letter of any script. */
+const SEGMENT_UPPER = /\p{Lu}/u;
+/** A UUID, whole segment. Hex by definition, so its class stays ASCII. */
+const SEGMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** 24 hex characters, or 32 or more, whole segment. */
+const SEGMENT_HEX_ID = /^(?:[0-9a-f]{24}|[0-9a-f]{32,})$/i;
+
+/** The `@` of an email or a handle. The email rule of a message would not take a handle, and a segment is
+ * not a message: the `@` alone is what says it is somebody's. */
+const anAt: SegmentRule = (segment) => segment.includes("@");
+/** A percent, valid escape or not: how a client writes in a path what it cannot write raw — the `@` of an
+ * email, a space, a letter outside ASCII. A segment carrying one is carrying something encoded. */
+const aPercent: SegmentRule = (segment) => segment.includes("%");
+/** A digit of any script, a value, a date or a number in a file name, and neither belongs in an identity —
+ * unless the whole segment is a version, which is the one thing a route must keep apart. The shape is narrow
+ * enough that a value shaped exactly like it is not one a token generator writes. */
+const aDigit: SegmentRule = (segment) => !SEGMENT_VERSION.test(segment) && SEGMENT_DIGIT.test(segment);
+/** A run of 16 or more with an uppercase in it: a generated identifier, a token with no digit. A long run
+ * of all lowercase is a slug or a kebab-case name, the naming convention of a route, and no rule takes it.
+ * The cost, pinned in a test: a long camelCase name reads as a value, as a token would. */
+const aMixedCaseRun: SegmentRule = (segment) =>
+  [...segment.matchAll(SEGMENT_RUN)].some((run) => SEGMENT_UPPER.test(run[0]));
+/** A UUID, whole segment. The other rules read it too when it carries a digit, and the case it alone reads
+ * is one made only of the letters of its own class. */
+const aUuid: SegmentRule = (segment) => SEGMENT_UUID.test(segment);
+/** 24 or 32+ hex, whole segment, the heuristic's own rule kept as it was: the case it alone reads is a run
+ * of the class with no digit and no uppercase. */
+const aHexId: SegmentRule = (segment) => SEGMENT_HEX_ID.test(segment);
+
+/** The list the heuristic of `src/routes.ts` runs over each segment of a route without a template. */
+export const SEGMENT_RULES: readonly SegmentRule[] = [anAt, aPercent, aDigit, aMixedCaseRun, aUuid, aHexId];
+
+/**
+ * What the heuristic asks of each segment of a route without a template: is it a value?
+ *
+ * Exported with its list, as `sanitizeWith` is, so that a test can run it with one rule taken out and see
+ * what that rule decides, rather than run a copy of it that could drift from this one (ADR 0167).
+ */
+export function segmentLooksLikeValue(segment: string, rules: readonly SegmentRule[] = SEGMENT_RULES): boolean {
+  return rules.some((rule) => rule(segment));
 }

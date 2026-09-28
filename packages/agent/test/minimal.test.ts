@@ -42,7 +42,7 @@ function config(over: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 /** Drives one request that does everything a request can do, and returns the body that would be sent. */
-async function bodyOf(over: Partial<AgentConfig>): Promise<string> {
+async function bodyOf(over: Partial<AgentConfig> = {}, path: string = THEIRS.path): Promise<string> {
   let body = "";
   const fetchImpl = (async (_url: string, init: RequestInit) => {
     body = String(init.body);
@@ -51,7 +51,7 @@ async function bodyOf(over: Partial<AgentConfig>): Promise<string> {
   const agent = createAgent(config(over), { log: quiet, fetchImpl });
   agent.start();
   try {
-    const request = { method: "GET", url: THEIRS.path };
+    const request = { method: "GET", url: path };
     channel(REQUEST_START).publish({ request });
     const ctx = currentContext();
     if (ctx) {
@@ -122,6 +122,22 @@ describe("the minimal mode", () => {
     expect(route).toBe(withheldName(THEIRS.route));
     // And it is marked as withheld, which is what the cloud recognises (ADR 0104).
     expect(route?.startsWith("#")).toBe(true);
+  });
+
+  it("digests the collapsed route, so a value of the path no longer enters the digest", async () => {
+    // A request without a template carries its value in the url, and the heuristic is what reads it. The
+    // digest is of what the heuristic leaves (ADR 0104, ADR 0105), so what it now folds stops entering it,
+    // and the same request is the same digest in every batch, which is what the analysis groups by.
+    const first = JSON.parse(await bodyOf({ minimal: true }, "/users/ana@cliente.com")) as AggregatesBatch;
+    const second = JSON.parse(await bodyOf({ minimal: true }, "/users/ana@cliente.com")) as AggregatesBatch;
+    const route = first.intervals[0]?.endpoints[0]?.route;
+    expect(route).toBe(second.intervals[0]?.endpoints[0]?.route);
+    // The digest of the route it became, not of the value it carried: a digest of the value could be
+    // confirmed by whoever guesses it, because the code that computes it is public and has no key.
+    expect(route).toBe(withheldName("/users/:id"));
+    expect(route).not.toBe(withheldName("/users/ana@cliente.com"));
+    expect(route?.startsWith("#")).toBe(true);
+    expect(JSON.stringify(first)).not.toContain("ana@cliente.com");
   });
 
   it("changes nothing when it is off", async () => {

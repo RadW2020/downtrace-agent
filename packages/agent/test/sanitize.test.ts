@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { heuristicTemplate } from "../src/routes.ts";
 import {
   MESSAGE_RULES,
   meaningful,
+  SEGMENT_RULES,
+  type SegmentRule,
   sanitizeMessage,
   sanitizeValues,
   sanitizeWith,
   VALUE_PATTERNS,
 } from "../src/sanitize.ts";
 import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
+import { SEGMENT_CASES } from "./support/segment-cases.ts";
 
 /**
  * Invariant 5, asked of each rule of the sanitiser on its own (gh-651).
@@ -81,6 +85,129 @@ describe("each rule, as the source lists them", () => {
     const decided = decidedBy(rule);
     expect(decided).not.toHaveLength(0);
     for (const { message, sanitised } of decided) expect(sanitizeValues(message)).toBe(sanitised);
+  });
+});
+
+/**
+ * A segment of a route without a template, asked of the rules of `src/routes.ts`'s heuristic (gh-756).
+ *
+ * The question is the one this file answers — «is this a value?» — and the answer is not the messages':
+ * in a route, a version separates two endpoints the product has to keep apart, and a long kebab-case word
+ * is the naming convention. So the heuristic runs its own list, and this asks that list the same question
+ * gh-651 asked of the others: what comes out without each rule, and which rule decides which case.
+ */
+
+/** The source's own list, one rule short. */
+const segmentRulesWithout = (rule: SegmentRule): SegmentRule[] => SEGMENT_RULES.filter((r) => r !== rule);
+
+/** The rules that decide what a segment becomes: the ones without which it would be something else. */
+const segmentDecidersOf = (segment: string): SegmentRule[] =>
+  SEGMENT_RULES.filter((rule) => {
+    const withAll = SEGMENT_RULES.some((r) => r(segment));
+    const withoutOne = segmentRulesWithout(rule).some((r) => r(segment));
+    return withAll !== withoutOne;
+  });
+
+describe("a case of each rule that reads a segment of a route", () => {
+  const segments = SEGMENT_CASES.map((c) => [c.segment, c] as const);
+
+  it.each(segments)("keeps nothing of the value in «%s»", (segment, { value }) => {
+    // The unit is the segment: it becomes `:id` whole, and nothing of the value is left beside the mark.
+    const route = heuristicTemplate(`/pre/${segment}/post`);
+    expect(route).toBe("/pre/:id/post");
+    expect(route).not.toContain(value);
+  });
+
+  it.each(segments)("is decided by one rule and no other: «%s»", (segment) => {
+    // Two would mean either could be deleted and the suite would not notice, which is what gh-651 found.
+    expect(segmentDecidersOf(segment).map((rule) => rule.name)).toHaveLength(1);
+  });
+});
+
+describe("each segment rule, as the source lists them", () => {
+  const segmentRules = SEGMENT_RULES.map((rule) => [rule.name, rule] as const);
+
+  it.each(segmentRules)("«%s» decides a case that no other rule decides", (_name, rule) => {
+    const decided = SEGMENT_CASES.filter(({ segment }) => {
+      const deciders = segmentDecidersOf(segment);
+      return deciders.length === 1 && deciders[0] === rule;
+    }).map(({ segment }) => segment);
+    expect(decided, `add a case that only ${_name} decides to test/support/segment-cases.ts`).not.toHaveLength(0);
+  });
+});
+
+describe("what the heuristic upgrade leaves where it was", () => {
+  // The heuristic as it was before gh-756, frozen here on purpose: it is what every route a cloud already
+  // holds was named with, so a segment none of the new shapes touches must come out as it did.
+  const OLD_NUMERIC = /^\d+$/;
+  const OLD_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const OLD_HEX_ID = /^(?:[0-9a-f]{24}|[0-9a-f]{32,})$/i;
+  const frozenTemplate = (url: string): string => {
+    const path = url.split(/[?#]/, 1)[0] ?? "/";
+    const segments = path
+      .split("/")
+      .map((s) => (s !== "" && (OLD_NUMERIC.test(s) || OLD_UUID.test(s) || OLD_HEX_ID.test(s)) ? ":id" : s));
+    const joined = segments.join("/") || "/";
+    return joined.length > 1 && joined.endsWith("/") ? joined.slice(0, -1) : joined;
+  };
+
+  // What a segment none of the new rules reads: no `@`, no `%`, no digit outside a version, and no run of 16
+  // or more letters, digits, `_` or `-` with an uppercase in it. Written from the shapes and not from the
+  // rules, so it bounds what the corpus may carry instead of copying the rules.
+  const RUN = /[\p{L}\p{M}\p{N}_-]{16,}/gu;
+  const noNewShape = (piece: string): boolean =>
+    !piece.includes("@") &&
+    !piece.includes("%") &&
+    (!/\p{N}/u.test(piece) || /^[vV][0-9]+(?:\.[0-9]+)*$/.test(piece)) &&
+    ![...piece.matchAll(RUN)].some((run) => /\p{Lu}/u.test(run[0]));
+
+  it("is every path made of segments none of the new shapes touches: it comes out as it did before gh-756", () => {
+    // Built from pieces each old rule or no rule catches, glued with `/` so the segments meet. Seeded, so a
+    // red names a path that comes back on the next run.
+    const pieces = [
+      "alice",
+      "john.smith",
+      "healthz",
+      "api",
+      "v1",
+      "v2",
+      "v10",
+      "v1.2",
+      "V2",
+      "orders",
+      "checkout",
+      "openid-configuration",
+      "password-reset-requests",
+      "my-first-post-about-kubernetes",
+      "invoice.pdf",
+      "JohnSmith",
+      "post.byId",
+      "well-known",
+    ];
+    for (const piece of pieces) expect(noNewShape(piece), `«${piece}»`).toBe(true);
+    let seed = 756;
+    const next = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (seed >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    for (let i = 0; i < 500; i++) {
+      const length = 1 + Math.floor(next() * 5);
+      const segments: string[] = [];
+      for (let j = 0; j < length; j++) segments.push(pieces[Math.floor(next() * pieces.length)] ?? "orders");
+      const url = `/${segments.join("/")}`;
+      expect(heuristicTemplate(url), `«${url}» as the heuristic reads it now`).toBe(frozenTemplate(url));
+    }
+  });
+
+  it.each([
+    "42",
+    "7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+    "507f1f77bcf86cd799439011",
+    "3f786850e387550fdab836ed7e6dc881de23001b",
+  ])("still folds what the old rules folded: «%s»", (segment) => {
+    expect(heuristicTemplate(`/${segment}`)).toBe("/:id");
   });
 });
 

@@ -283,10 +283,15 @@ describe("the agent", () => {
   });
 
   /**
-   * The case gh-756 is about: a route that carries a value per request — a scanner through the heuristic, or
-   * an Express 404 — where every request is a route nobody has seen. The tables the registers key by it had
-   * no bound and no accounting, so the growth was invisible to both (gh-765). Now each register is compared
-   * against its own reserve, the reserves include the tables, and bounded growth is within the reserve.
+   * A route nobody has seen on every request — a scanner through the heuristic, or an Express 404. The
+   * tables the registers key by it had no bound and no accounting, so the growth was invisible to both
+   * (gh-765). Now each register is compared against its own reserve, the reserves include the tables, and
+   * bounded growth is within the reserve.
+   *
+   * Since gh-756 a scanner whose paths carry values folds into the one template the heuristic gives them,
+   * so the growth that remains is the one no rule of shape can stop: a value-less segment per request, a
+   * plain word the heuristic keeps apart and that `product.md:106` does not guarantee. That is what this
+   * drives.
    */
   it("a new route per request does not shed the detail, and the loss is said", async () => {
     const overhead = neverDeciding();
@@ -297,9 +302,20 @@ describe("the agent", () => {
     try {
       const start = channel("http.server.request.start");
       const finish = channel("http.server.response.finish");
-      // Not identifier-shaped, so the template keeps them apart: one distinct route per request.
+      // Letters only, so the template keeps them apart: one distinct route per request. A segment with a
+      // digit is a value the heuristic folds (gh-756), which is why the counter is written in letters and
+      // not in its own number.
+      const letters = (n: number): string => {
+        let out = "";
+        let rest = n;
+        do {
+          out = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"[rest % 36] + out;
+          rest = Math.floor(rest / 36);
+        } while (rest > 0);
+        return out;
+      };
       for (let i = 0; i < 2000; i += 1) {
-        const req = { method: "GET", url: `/scan/a${i}` };
+        const req = { method: "GET", url: `/scan/${letters(i)}` };
         start.publish({ request: req });
         finish.publish({ request: req, response: { statusCode: 404 } });
       }
