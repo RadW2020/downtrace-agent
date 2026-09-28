@@ -47,6 +47,35 @@ const coexistence: KeptReport = {
   hook: { baseline: 0.05, agent: 0.051, p: 0.5, resolved: false },
 };
 
+const profile: KeptReport = {
+  kind: "profile",
+  generatedAt: "2026-09-28T12:00:00.000Z",
+  subject: { version: "0.8.1", commit: "123456789abcdef", sourceCommit: "abc12345678999" },
+  config: { rounds: 1, measureSec: 20, rps: 200 },
+  baseline: {
+    ok: true,
+    totalMs: 4200,
+    samples: 4180,
+    groups: [
+      { group: "agent", selfMs: 0 },
+      { group: "application", selfMs: 2000 },
+      { group: "runtime", selfMs: 2200 },
+    ],
+    top: [{ function: "handler", group: "application", selfMs: 900 }],
+  },
+  agent: {
+    ok: true,
+    totalMs: 4800,
+    samples: 4790,
+    groups: [
+      { group: "agent", selfMs: 300 },
+      { group: "application", selfMs: 2100 },
+      { group: "runtime", selfMs: 2400 },
+    ],
+    top: [{ function: "handler", group: "application", selfMs: 950 }],
+  },
+};
+
 describe("naming a kept report", () => {
   it("a campaign: stamp, agent, version and the monorepo commit when the sync left one", () => {
     expect(reportFileName(campaign)).toBe("2026-09-15T13-00-05Z-agent-0.8.1-bcc11dc.json");
@@ -87,6 +116,32 @@ describe("naming a kept report", () => {
         "\n" +
         "hook estimate 0.05 → 0.051 ms/request (p 0.5, not resolved)\n\n",
     );
+  });
+
+  it("a profile run: named apart from the campaigns, the reading said without a verdict", () => {
+    expect(reportFileName(profile)).toBe("2026-09-28T12-00-00Z-profile-0.8.1-abc1234.json");
+    expect(reportMessage(profile)).toBe(
+      "bench-profile: agent 0.8.1 — what runs outside the hooks, read by function on 1×20s at 200 rps\n\n" +
+        "baseline: 4200 ms in 4180 samples\n" +
+        "agent: 4800 ms in 4790 samples\n" +
+        "\n" +
+        "agent 0 → 300 ms\n" +
+        "application 2000 → 2100 ms\n" +
+        "runtime 2200 → 2400 ms\n" +
+        "\n" +
+        "top of the agent side:\n" +
+        "handler (application) 950 ms\n" +
+        "\n",
+    );
+  });
+
+  it("a profile run whose side was not read says so in the message", () => {
+    const r: KeptReport = {
+      ...profile,
+      agent: { ok: false, reason: "the agent process was killed before its exit could write one" },
+    };
+    expect(reportMessage(r)).toContain("agent: the agent process was killed before its exit could write one");
+    expect(reportMessage(r)).not.toContain("top of the");
   });
 
   it("says unknown when the report does not know its version or commit, instead of inventing one", () => {

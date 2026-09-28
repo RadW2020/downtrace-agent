@@ -52,7 +52,27 @@ interface CoexistenceReport {
   reason?: string | undefined;
 }
 
-export type KeptReport = CampaignReport | InstrumentsReport | CoexistenceReport;
+interface ProfileSideJson {
+  ok: boolean;
+  reason?: string | undefined;
+  totalMs?: number | undefined;
+  samples?: number | undefined;
+  groups?: { group: string; selfMs: number }[] | undefined;
+  top?: { function: string; group: string; selfMs: number }[] | undefined;
+}
+
+interface ProfileReport {
+  kind: "profile";
+  generatedAt: string;
+  subject?: Subject | undefined;
+  config: { rounds: number; measureSec: number; rps: number };
+  /** A reading of a pair, not a verdict (gh-592): the round's CPU by function, in the two configurations. */
+  baseline: ProfileSideJson;
+  agent: ProfileSideJson;
+  reason?: string | undefined;
+}
+
+export type KeptReport = CampaignReport | InstrumentsReport | CoexistenceReport | ProfileReport;
 
 const signed = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
@@ -68,6 +88,7 @@ export function reportFileName(r: KeptReport): string {
   const { stamp, version, commit } = identity(r);
   if (r.kind === "instruments") return `${stamp}-instruments-${version}-${commit}.json`;
   if (r.kind === "coexistence") return `${stamp}-coexistence-${version}-${commit}.json`;
+  if (r.kind === "profile") return `${stamp}-profile-${version}-${commit}.json`;
   return `${stamp}-agent-${version}-${commit}.json`;
 }
 
@@ -89,6 +110,36 @@ export function reportMessage(r: KeptReport): string {
     return (
       `bench-coexistence: agent ${version} — what the tracker costs beside it ${where}\n\n` +
       `${r.metrics.map(metric).join("\n")}\n${hook}${r.reason ? `\n${r.reason}\n` : ""}\n`
+    );
+  }
+  if (r.kind === "profile") {
+    // The reading of a pair, named like the others so the series stays a series: how much CPU each side's
+    // profile held, the sources they split it over, and the top of the side that carries the agent.
+    const side = (s: ProfileSideJson): string =>
+      s.ok ? `${s.totalMs} ms in ${s.samples} samples` : (s.reason ?? "not read");
+    const groups =
+      r.agent.ok && r.baseline.ok && r.agent.groups !== undefined && r.baseline.groups !== undefined
+        ? r.agent.groups
+            .map((g) => {
+              const b = r.baseline.groups?.find((x) => x.group === g.group);
+              return `${g.group} ${b?.selfMs ?? "—"} → ${g.selfMs} ms`;
+            })
+            .join("\n")
+        : "";
+    // The top of the side that carries the agent: the baseline's top, without it, is not the reading.
+    const top =
+      r.agent.ok && r.agent.top !== undefined
+        ? r.agent.top
+            .slice(0, 5)
+            .map((f) => `${f.function} (${f.group}) ${f.selfMs} ms`)
+            .join("\n")
+        : "";
+    return (
+      `bench-profile: agent ${version} — what runs outside the hooks, read by function ${where}\n\n` +
+      `baseline: ${side(r.baseline)}\nagent: ${side(r.agent)}\n` +
+      (groups !== "" ? `\n${groups}\n` : "") +
+      (top !== "" ? `\ntop of the ${r.agent.ok ? "agent" : "baseline"} side:\n${top}\n` : "") +
+      `${r.reason ? `\n${r.reason}\n` : ""}\n`
     );
   }
   const metric = (m: CampaignReport["metrics"][number]) =>

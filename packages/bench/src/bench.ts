@@ -66,6 +66,10 @@ export interface BenchOptions {
    * leaves this machine and a start-up can never have one without the other.
    */
   agentTracker?: string | undefined;
+  /** Extra node flags for the baseline variant's process (`--cpu-prof` for the profile campaign, gh-592). */
+  baselineNodeArgs?: string[] | undefined;
+  /** Extra node flags for the agent variant's process. */
+  agentNodeArgs?: string[] | undefined;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -110,6 +114,7 @@ export async function runBench(opts: BenchOptions = {}): Promise<BenchReport> {
         app = await startReferenceApp({
           importPath: agentHere ? config.agentPath : undefined,
           extraImportPath: trackerDsn !== undefined ? opts.agentTracker : undefined,
+          nodeArgs: variant === "agent" ? opts.agentNodeArgs : opts.baselineNodeArgs,
           env: {
             APP_VERSION: `bench-${variant}`,
             ...opts.appEnv,

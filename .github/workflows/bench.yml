@@ -17,12 +17,15 @@ on:
       mode:
         description: >-
           bench: the overhead campaign (default). instruments: what each observer and each half of the black box
-          costs, seven head-to-head benchmarks in one run (ADR 0027, gh-570) — 20 seconds per round is plenty
-          there, and 60 takes over two hours. coexistence: what the tracker costs beside the agent, one
-          head-to-head benchmark (ESC-16, gh-615) — a reported cost, not a verdict of the budget.
+          costs, nine head-to-head benchmarks in one run (ADR 0027, gh-570) — the Postgres observer in its three
+          parts (gh-592) — 20 seconds per round is plenty there, and 60 takes over two hours. coexistence: what
+          the tracker costs beside the agent, one head-to-head benchmark (ESC-16, gh-615) — a reported cost, not
+          a verdict of the budget. profile: what runs outside the hooks, read by function, one profiled pair
+          (gh-592) — dispatch it with rounds 1 and measure 20: a profile of a pair is a reading, and more rounds
+          are the same reading spent more than once.
         default: bench
         type: choice
-        options: [bench, instruments, coexistence]
+        options: [bench, instruments, coexistence, profile]
       rounds:
         description: B/A rounds
         default: "9"
@@ -114,13 +117,15 @@ jobs:
           set -euo pipefail
           args=(--rounds "$ROUNDS" --measure "$MEASURE" --rps "$RPS")
           if [ -n "$SOURCE_COMMIT" ]; then args+=(--source-commit "$SOURCE_COMMIT"); fi
-          # The three scripts take the same flags and each writes the JSON report the next step keeps; only the
-          # question differs — how much the whole agent costs, which part of it costs what (gh-570), or what the
-          # tracker costs beside it (gh-615).
+          # The four scripts take the same flags and each writes the JSON report the next step keeps; only the
+          # question differs — how much the whole agent costs, which part of it costs what (gh-570, gh-592),
+          # what the tracker costs beside it (gh-615), or what runs outside the hooks (gh-592).
           if [ "$MODE" = instruments ]; then
             pnpm --filter @downtrace/bench run instruments "${args[@]}"
           elif [ "$MODE" = coexistence ]; then
             pnpm --filter @downtrace/bench run coexistence "${args[@]}"
+          elif [ "$MODE" = profile ]; then
+            pnpm --filter @downtrace/bench run profile "${args[@]}"
           else
             pnpm --filter @downtrace/bench run bench "${args[@]}"
           fi
@@ -141,6 +146,7 @@ jobs:
           case "$MODE" in
             instruments) report=packages/bench/instruments-report.json ;;
             coexistence) report=packages/bench/coexistence-report.json ;;
+            profile) report=packages/bench/profile-report.json ;;
             *) report=packages/bench/bench-report.json ;;
           esac
           if [ ! -f "$report" ]; then echo "no report was written, so there is nothing to keep"; exit 0; fi
@@ -160,6 +166,17 @@ jobs:
           cp "$report" "series/$name"
           cd series
           git add -- "$name"
+          # The profile's raw files are kept beside its report, one per profiled round: a doubt about a row
+          # of the summary is read out of them, not measured again (gh-592).
+          if [ "$MODE" = profile ]; then
+            base=${name%.json}
+            for raw in "$GITHUB_WORKSPACE"/packages/bench/profile-report.*.cpuprofile; do
+              [ -e "$raw" ] || continue
+              side=$(basename "$raw" .cpuprofile | sed 's/^profile-report\.//')
+              cp "$raw" "$base.$side.cpuprofile"
+              git add -- "$base.$side.cpuprofile"
+            done
+          fi
           if git diff --cached --quiet; then echo "that report is already kept"; exit 0; fi
           {
             echo "Run: ${RUN_URL}"

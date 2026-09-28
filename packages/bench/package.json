@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "instruments": "node src/instruments-cli.ts",
     "coexistence": "node src/coexistence-cli.ts",
+    "profile": "node src/profile-cli.ts",
     "test:measure": "DOWNTRACE_REQUIRE_DB=1 vitest run measure"
   },
   "devDependencies": {

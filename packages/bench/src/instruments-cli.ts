@@ -130,8 +130,10 @@ const sampled = results.some((r) => !r.exact);
 const lines = [
   `### What each observer costs · ${rounds} rounds/side · ${rps} rps · ${measureSec}s measured`,
   "",
-  "Each row is one head-to-head comparison: the agent with that observer against the same agent without it. The",
-  "first row is the agent with nothing switched on, against no agent at all.",
+  "Each row is one head-to-head comparison: the agent with that one thing more against the same agent without it.",
+  "The first row is the agent with nothing switched on, against no agent at all. The three rows of the Postgres",
+  "observer weigh it part by part — the wrapper, the attribution of the calls and waits, the fingerprint of the",
+  "query text — and add up to what it costs whole (gh-592).",
   "",
   "CPU is compared **round by round**: rounds alternate in time, so each pair saw the same machine, and",
   "differencing them first removes most of what the machine was doing. Whether a row is a measurement is decided",

@@ -1,6 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
+import type { PgDepth } from "../config.ts";
 import {
   currentContext,
   type RequestContext,
@@ -60,6 +61,14 @@ export interface InstrumentPgDeps {
   from?: string | undefined;
   /** Injected in tests instead of resolving the real module. */
   moduleImpl?: unknown;
+  /**
+   * How much of the attribution this observer performs; `full` (the default) is the observer as it is.
+   * `context` records the calls and the waits against the request and never looks at the query text, and
+   * `wrapper` only leaves the patch in place: the wrapper runs and records nothing. The benchmark's switch
+   * for weighing the observer part by part (gh-592); it changes what the observer does, never what the
+   * application's query does, and an operator leaves it alone.
+   */
+  depth?: PgDepth | undefined;
 }
 
 /**
@@ -224,6 +233,19 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
   if (proto[MARK] === true) return;
 
   const { fingerprints, internalError } = deps;
+  if (deps.depth === "wrapper") {
+    // The floor of the observer: the patch is in place and the wrapper runs, and records nothing — no timing,
+    // no attribution, no pool wrap, because those exist to charge the work to a request. The benchmark
+    // weighs this against nothing to say what wrapping costs on its own (gh-592). A pass-through cannot fail
+    // in code of its own: it calls the original once and returns what it returns.
+    const original = proto.query as (...args: unknown[]) => unknown;
+    proto.query = function (this: unknown, ...args: unknown[]): unknown {
+      return original.apply(this, args);
+    };
+    proto[MARK] = true;
+    deps.log.debug(`instrumented pg ${version} (wrapper only: it records nothing)`);
+    return;
+  }
   const original = proto.query as (...args: unknown[]) => unknown;
   const wrapped = function (this: unknown, ...args: unknown[]): unknown {
     // Only the instrumentation's own work sits inside this `try`, and all of it is best effort: a bug here must never

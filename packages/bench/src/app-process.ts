@@ -58,6 +58,11 @@ export interface StartOptions {
    * The order is the one the coexistence campaign names — the agent first, then the tracker (ADR 0147).
    */
   extraImportPath?: string | undefined;
+  /**
+   * Extra flags for the process, before the script: `--cpu-prof` and friends for the profile campaign
+   * (gh-592). The flags the campaign chooses are a property of this start-up, the way the tracker is one.
+   */
+  nodeArgs?: string[] | undefined;
   env?: Record<string, string> | undefined;
   readyTimeoutMs?: number | undefined;
 }
@@ -88,6 +93,7 @@ export function startReferenceApp(opts: StartOptions = {}): Promise<AppHandle> {
   const args: string[] = [];
   if (opts.importPath) args.push("--import", pathToFileURL(opts.importPath).href);
   if (opts.extraImportPath) args.push("--import", pathToFileURL(opts.extraImportPath).href);
+  args.push(...(opts.nodeArgs ?? []));
   args.push(REF_APP_MAIN);
 
   // The tracker is a property of the start-up this benchmark chooses, not of the ambient environment. An

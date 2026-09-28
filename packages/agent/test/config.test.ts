@@ -5,6 +5,7 @@ import {
   detectVersion,
   INSTRUMENTS,
   parseInstruments,
+  parsePgDepth,
   parseShed,
   profileCeilingMs,
 } from "../src/config.ts";
@@ -29,6 +30,8 @@ describe("configFromEnv", () => {
       debug: false,
       intervalMs: DEFAULT_INTERVAL_MS,
       profileMs: PROFILE_WINDOW_MS,
+      // Production does not move: a switch nobody set is the observer as it is (gh-592).
+      pgDepth: "full",
     });
   });
 
@@ -100,6 +103,34 @@ describe("DOWNTRACE_SHED", () => {
     const result = configFromEnv({ DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "http://c", DOWNTRACE_SHED: "fine" });
     if (!result.ok) throw new Error(result.reason);
     expect(result.config.shed).toBe(Sheddable.Fine);
+  });
+});
+
+/**
+ * How much of the Postgres observer runs (gh-592): the benchmark's switch for weighing the observer part by
+ * part, beside `DOWNTRACE_SHED`. It reads like its neighbours: forgiving about case and spaces, and an
+ * unknown value means the observer as it is rather than a refusal to start.
+ */
+describe("DOWNTRACE_PG_DEPTH", () => {
+  it("is the full observer by default", () => {
+    expect(parsePgDepth(undefined)).toBe("full");
+    expect(parsePgDepth("")).toBe("full");
+    expect(parsePgDepth("full")).toBe("full");
+  });
+
+  it("weighs the observer below its text, or at its floor", () => {
+    expect(parsePgDepth("context")).toBe("context");
+    expect(parsePgDepth(" Wrapper ")).toBe("wrapper");
+  });
+
+  it("ignores a value it does not know rather than failing to start", () => {
+    expect(parsePgDepth("everything")).toBe("full");
+  });
+
+  it("reaches the configuration", () => {
+    const result = configFromEnv({ DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "http://c", DOWNTRACE_PG_DEPTH: "wrapper" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.config.pgDepth).toBe("wrapper");
   });
 });
 

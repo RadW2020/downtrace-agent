@@ -300,6 +300,81 @@ describe("what the agent says it did", () => {
 const clientOf = (module: { Client: { prototype: Record<string, unknown> } }) =>
   new (module.Client as unknown as new () => { query: (...a: unknown[]) => unknown })();
 
+/**
+ * The depth the observer runs at (gh-592): the benchmark's `DOWNTRACE_PG_DEPTH`, so the bench can weigh the
+ * observer part by part. The application's query does exactly what it did, at every depth — what changes is
+ * what the observer records, and the tests say so at each level.
+ */
+describe("the depth the observer runs at", () => {
+  it("at the floor, the patch is in place and the wrapper records nothing", async () => {
+    const pg = fakePg();
+    const queryBefore = pg.module.Client.prototype.query;
+    const connectBefore = pg.module.Pool.prototype.connect;
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "wrapper" });
+    expect(pg.module.Client.prototype.query, "the wrapper is the patch").not.toBe(queryBefore);
+    expect(pg.module.Pool.prototype.connect, "no attribution, no pool wrap").toBe(connectBefore);
+
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    const result = await client.query("SELECT id FROM products WHERE id = $1", [7]);
+    expect(result).toEqual({ rows: [{ ok: 1 }] });
+    expect(ctx.work, "the call is not recorded").toBeUndefined();
+    expect(ctx.operations, "nothing is built from the text").toBeUndefined();
+  });
+
+  it("at the floor, the callback form is left exactly as the application wrote it", async () => {
+    const pg = fakePg();
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "wrapper" });
+    const client = clientOf(pg.module);
+    const seen: unknown[] = [];
+    const callback = (e: unknown, r: unknown): void => {
+      seen.push([e, r]);
+    };
+    client.query("select 1", callback);
+    await new Promise((resolve) => setTimeout(resolve, 5)); // pg fires its callback on its own timer
+    // The application's callback ran, with what pg gave it — and the one pg was called with is the one the
+    // application wrote: at this depth the wrapper has no business inside the application's callback.
+    expect(seen).toEqual([[null, { rows: [] }]]);
+    expect(pg.calls[0]?.at(-1)).toBe(callback);
+  });
+
+  it("at the floor, the mark is set and a second instrumentation is a no-op", () => {
+    const pg = fakePg();
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "wrapper" });
+    const wrapped = pg.module.Client.prototype.query;
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "wrapper" });
+    expect(pg.module.Client.prototype.query).toBe(wrapped);
+  });
+
+  it("at the context depth, the calls and the waits are attributed, and the text is never looked at", async () => {
+    const pg = fakePg();
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "context" });
+    const Pool = pg.module.Pool as unknown as new () => { connect: () => Promise<unknown> };
+    const pool = new Pool();
+
+    const ctx = enterRequest();
+    const c = (await pool.connect()) as { query: (...a: unknown[]) => unknown };
+    await c.query("SELECT id FROM products WHERE id = $1", [7]);
+
+    // The attribution the context is for: the call and the wait, against the request.
+    expect(pgWork(ctx).calls).toBe(1);
+    expect(ctx.work?.get("postgres")?.waitMs).toBeGreaterThanOrEqual(20);
+    // And nothing of the text: no operations, no fingerprints, because nobody was handed one to build.
+    expect(ctx.operations).toBeUndefined();
+  });
+
+  it("at the context depth, a failing query still counts as a failed call, without a signature", async () => {
+    const pg = fakePg();
+    instrumentPg({ ...deps, moduleImpl: pg.module, depth: "context" });
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    await expect(client.query("boom")).rejects.toThrow("query failed");
+    expect(pgWork(ctx).calls).toBe(1);
+    expect(pgWork(ctx).errors).toBe(1);
+    expect(ctx.operations, "the error is counted, not identified").toBeUndefined();
+  });
+});
+
 describe("instrumentPg, building the profile", () => {
   it("records what a query was, not just that there was one", async () => {
     const pg = fakePg();
@@ -780,6 +855,56 @@ describe("a failure while recording never reaches the application", () => {
       await pool.end();
     }
   });
+
+  /**
+   * The depth through the real `Agent` (gh-592): the configuration the benchmark gives (`DOWNTRACE_PG_DEPTH`)
+   * reaches the observer, and what each depth records is what its row weighs — nothing more. The application's
+   * query is answered the same at every depth: the depth is the observer's, not the application's.
+   */
+  it.each([
+    ["wrapper", false, false],
+    ["context", true, false],
+    ["full", true, true],
+  ] as const)(
+    "through the agent, at %s the work is recorded %s and the operations %s",
+    async (depth, withWork, withOps) => {
+      const { Connection } = connection();
+      const { Pool, pool } = realPool(Connection);
+      const accepted = (async () =>
+        new Response(JSON.stringify({ accepted: 1 }), { status: 202 })) as unknown as typeof fetch;
+      const agent = new Agent(
+        testConfig("http://cloud.invalid", { intervalMs: 60_000, instrument: new Set(["pg"]), pgDepth: depth }),
+        { log: quiet, fetchImpl: accepted, pgModule: { Client: Connection, Pool } },
+      );
+      let seen: { work: boolean; ops: boolean } | undefined;
+      const app = http.createServer((_req, res) => {
+        pool.query(SQL, [1]).then(
+          (rows) => {
+            // After the query settled, in the request's own context: what the observer recorded is what it kept.
+            const ctx = currentContext();
+            seen = { work: ctx?.work !== undefined, ops: ctx?.operations !== undefined };
+            res.end(JSON.stringify(rows));
+          },
+          (err: unknown) => res.writeHead(500).end(String(err)),
+        );
+      });
+      await new Promise<void>((ready) => app.listen(0, "127.0.0.1", ready));
+      const url = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
+      agent.start();
+      try {
+        const res = await fetch(url);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual(ROWS);
+        expect(agent.observers?.pg, "the observer is on at every depth").toBe("on");
+        expect(seen?.work, "the dependency counters").toBe(withWork);
+        expect(seen?.ops, "the operations the text is for").toBe(withOps);
+      } finally {
+        await agent.stop();
+        await new Promise<void>((closed) => app.close(() => closed()));
+        await pool.end();
+      }
+    },
+  );
 });
 
 /**

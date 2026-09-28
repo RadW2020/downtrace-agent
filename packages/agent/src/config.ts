@@ -58,6 +58,14 @@ export interface AgentConfig {
    * leaves it alone.
    */
   shed: SheddableLevel;
+  /**
+   * How much of the Postgres observer's attribution runs: `full` (the default) is the observer as it is;
+   * `context` records the calls and the waits against the request and never looks at the query text; `wrapper`
+   * only leaves the patch in place, and the wrapper runs and records nothing. The benchmark's switch for
+   * weighing the observer part by part (gh-592); an operator leaves it alone, and it moves no budget — the
+   * arithmetic of ADR 0067 is about the registers, and no level touches one.
+   */
+  pgDepth: PgDepth;
 }
 
 /**
@@ -69,6 +77,9 @@ export type ConfigResult = { ok: true; config: AgentConfig; warnings: string[] }
 /** Everything the agent can observe, each switchable on its own so its cost can be measured on its own. */
 export const INSTRUMENTS = ["pg", "http", "redis", "runtime"] as const;
 export type Instrument = (typeof INSTRUMENTS)[number];
+
+/** How much of the Postgres observer's attribution runs; see `AgentConfig.pgDepth`. */
+export type PgDepth = "wrapper" | "context" | "full";
 
 export const DEFAULT_INTERVAL_MS = 10_000;
 const MIN_INTERVAL_MS = 1_000;
@@ -163,6 +174,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
       minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
       shed: parseShed(env.DOWNTRACE_SHED),
+      pgDepth: parsePgDepth(env.DOWNTRACE_PG_DEPTH),
       excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
@@ -202,6 +214,22 @@ export function parseShed(value: string | undefined): SheddableLevel {
       return Sheddable.Profile;
     default:
       return Sheddable.Nothing;
+  }
+}
+
+/**
+ * Reads how much of the Postgres observer runs (gh-592): `full` (the default), `context` or `wrapper`.
+ * Anything else is `full`, the way an unknown observer name is ignored: a typo must not take the agent down,
+ * and this is the benchmark's switch, not an operator's.
+ */
+export function parsePgDepth(value: string | undefined): PgDepth {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "wrapper":
+      return "wrapper";
+    case "context":
+      return "context";
+    default:
+      return "full";
   }
 }
 

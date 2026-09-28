@@ -293,12 +293,13 @@ export class Agent {
     this.prearm = deps.prearm ?? new PrearmRegister();
     this.runtime = deps.runtime ?? new RuntimeSampler();
     this.overhead = deps.overhead ?? new OverheadMeter({ floor: config.shed });
-    // The fingerprint cache of queries exists only with Postgres instrumented: without it no query text is
-    // ever looked at. The **errors** and the profile exist always, since ERR-02: an application can report an
+    // The fingerprint cache of queries exists only with Postgres instrumented **at full depth**: without it no
+    // query text is ever looked at, and a bench that weighs the observer below the text (gh-592) pays none of
+    // its cost. The **errors** and the profile exist always, since ERR-02: an application can report an
     // error it handled whatever else is being observed, and a profile that nothing writes into is an empty
     // map that rotates to null. Before this, a process with `DOWNTRACE_INSTRUMENT=http` had nowhere to put a
     // reported error, and the cost of always having them is two empty maps and no work on the hot path.
-    if (config.instrument.has("pg")) this.fingerprints = new FingerprintCache();
+    if (config.instrument.has("pg") && config.pgDepth === "full") this.fingerprints = new FingerprintCache();
     this.errors = new ErrorFingerprintCache();
     // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
     // «send my routes but not my queries» is a real thing to want — and this turns it off as well. The
@@ -441,6 +442,7 @@ export class Agent {
           fingerprints: this.fingerprints,
           errors: this.errors,
           moduleImpl: this.pgModule,
+          depth: this.config.pgDepth,
         });
         observers.pg = version === undefined ? "unavailable" : "on";
       } else {
@@ -453,6 +455,7 @@ export class Agent {
           internalError,
           fingerprints: this.fingerprints,
           errors: this.errors,
+          depth: this.config.pgDepth,
         });
         // The only observer that resolves a module, so the only one that can be asked for and not attach.
         observers.pg = armed.state;

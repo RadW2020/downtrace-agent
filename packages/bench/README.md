@@ -8,6 +8,7 @@ Deterministic load generator and benchmark of the agent's overhead over the refe
 make bench                                  # 3 rounds, 200 rps, 3 clean seconds of warm-up + 20 s of measurement
 make bench BENCH_ARGS="--warmup 3 --warmup-max 30 --measure 12"
 make bench-coexistence                      # what @sentry/node costs beside the agent (ESC-16): one head-to-head campaign
+make bench-profile                          # what runs outside the hooks: a profiled pair, read by function (gh-592)
 pnpm --filter @downtrace/bench run load --url http://127.0.0.1:4000 --rps 100 --duration 10 --seed 1
 ```
 
@@ -91,11 +92,19 @@ reported as verified. CPU, with 3 points of budget, is measurable.
 
 ### What each observer costs
 
-`make bench-instruments` measures the cost of each observer **separately**, running the benchmark once per configuration: with nothing, and then adding runtime, Postgres, outgoing HTTP and Redis one at a time; then, with every observer on, the two halves of the black box that the instrumentation can shed on its own (ADR 0080) — the **fine detail** and the **profile** — each held shut with `DOWNTRACE_SHED` on one side of the pair and kept on the other (gh-570). Seven comparisons; each row is what that one thing costs. It writes `instruments-report.json` beside the Markdown, and the mirror's `bench` workflow runs it when dispatched with `mode: instruments`, keeping the report on `bench-reports` under an `instruments-` name; 20 seconds per round is plenty there, and 60 takes over two hours.
+`make bench-instruments` measures the cost of each observer **separately**, running the benchmark once per configuration: with nothing, and then adding runtime; then the Postgres observer **part by part** — the wrapper, the context of the query, the text of the query — then outgoing HTTP and Redis one at a time; and, with every observer on, the two halves of the black box that the instrumentation can shed on its own (ADR 0080) — the **fine detail** and the **profile** — each held shut with `DOWNTRACE_SHED` on one side of the pair and kept on the other (gh-570). Nine comparisons; each row is what that one thing costs, and the three rows of the Postgres observer add up to what it costs whole (gh-592). It writes `instruments-report.json` beside the Markdown, and the mirror's `bench` workflow runs it when dispatched with `mode: instruments`, keeping the report on `bench-reports` under an `instruments-` name; 20 seconds per round is plenty there, and 60 takes over two hours.
+
+The Postgres observer is weighed part by part because it is the row the machine resolved in the reading that led here (ADR 0139): 1.5–1.6 of the ~2.7 points, and the question the total leaves open is which part. The switch is `DOWNTRACE_PG_DEPTH`, read by the agent like `DOWNTRACE_SHED` — a benchmark's switch, not an operator's, and an unknown value means the observer as it is rather than a refusal to start. Its levels, shallow to deep:
+
+- `wrapper`: the patch is in place and the wrapper runs, and records nothing — no timing, no attribution, no pool wrap, because those exist to charge the work to a request.
+- `context`: the calls and the waits are attributed to the request — the timing, the callback and promise plumbing, the wait for a connection bound with `AsyncResource.bind` — and the query text is never looked at.
+- `full` (the default, and the absence of the variable): the observer as it is, which also builds the fingerprint of the query text — the normalisation and the hash, and the operation it keys.
+
+Each level is what it says and nothing else: the application's query does exactly what it did at every depth, and an agent that does not set the variable runs the full observer, so the switch is additive — it moves no budget and touches none of the arithmetic ADR 0067 checks, which is about the registers.
 
 The budget of invariant 3 is one number for the whole agent, so when it starts to bite the only useful question will be which one to pay for and which not, and that is not answered with a total.
 
-Each step compares **two configurations of the agent head to head**, not each one against nothing: measuring separately and subtracting differences two independent measurements and doubles the uncertainty. The comparison is **paired round by round**, because the rounds alternate in time and each pair saw the same machine. Whether a row is a measurement or the machine having a bad moment is decided by a **permutation test** over the signs of those differences —under the hypothesis that the observer costs nothing, which of the two sides came out higher is a coin toss—: exact up to 20 rounds by enumerating the 2ⁿ reassignments, sampled with the seed above that. It assumes no normality, which the differences of a benchmark do not have. The level is 0.05 **split across the comparisons of the run** (Bonferroni, ADR 0027), because with five comparisons at once, one of them coming out resolved by chance stops being improbable. With five steps the gate is 0.01, and since the smallest p that n differences can reach is 2/2ⁿ, **at least eight rounds** are needed for anything to be resolvable: that is why that is the default, and why the tool aborts before spending the machine if you ask for fewer. Where the table says something does not resolve, the machine has not measured that observer and the number means nothing. The report also prints **the differences per round**, so that the next doubt is resolved by re-reading and not by measuring.
+Each step compares **two configurations of the agent head to head**, not each one against nothing: measuring separately and subtracting differences two independent measurements and doubles the uncertainty. The comparison is **paired round by round**, because the rounds alternate in time and each pair saw the same machine. Whether a row is a measurement or the machine having a bad moment is decided by a **permutation test** over the signs of those differences —under the hypothesis that the observer costs nothing, which of the two sides came out higher is a coin toss—: exact up to 20 rounds by enumerating the 2ⁿ reassignments, sampled with the seed above that. It assumes no normality, which the differences of a benchmark do not have. The level is 0.05 **split across the comparisons of the run** (Bonferroni, ADR 0027), because with several comparisons at once, one of them coming out resolved by chance stops being improbable. The gate is 0.05 divided by the number of comparisons the run makes, and since the smallest p that n differences can reach is 2/2ⁿ, the fewest rounds at which any row could clear it are what the tool takes as its default — nine comparisons need **nine rounds** — and it aborts before spending the machine if you ask for fewer. Where the table says something does not resolve, the machine has not measured that observer and the number means nothing. The report also prints **the differences per round**, so that the next doubt is resolved by re-reading and not by measuring.
 
 **No published figure of this breakdown is citable.** The runs before ADR 0027 used a gate that did not hold up its own comparisons, and redoing the arithmetic over them resolves no row at all (gh-187). What is measured, on a controlled bench and not here, is that the agent with no observers at all costs about 2.4 µs of CPU per request —1.6 % of the budget at 200 rps— (gh-171). The per-observer breakdown gets figures again when it is run under the new gate on a quiet machine.
 
@@ -142,3 +151,48 @@ mirror's `bench` workflow runs it when dispatched with `mode: coexistence`, keep
 `bench-reports` under a `coexistence` name.
 
 It does not run in CI: it is a full run of the benchmark, and it is a tool for reading, not a gate.
+
+### What runs outside the hooks
+
+The campaign's report has said since gh-570 what share of the measured cost is **inside** the hooks — the
+agent's own estimate of them, sampled inside `guard` (ADR 0080) — and what runs **outside** them: «transport,
+serialisation, timers, the pressure the agent puts on the collector». This campaign is the reading of that
+other half, by function (gh-592): a CPU profile of the rounds, read where the CPU sat.
+
+`make bench-profile` runs the benchmark's pair under its load with `--cpu-prof`, and **both halves are
+profiled**, each in its own directory: the reading is the difference between the two sides, and a profiled
+side against an unprofiled one is two measurements that cannot be subtracted. `--rounds` is how many pairs
+that reading is summed over — one pair is a reading, and the profile of a pair is not a point on the series;
+more pairs are the same reading with more samples, which is why the mirror's dispatch for it is one round at
+twenty seconds, and why the tool says the window a profile covers — warm-up and measured window, not only the
+measured seconds — instead of letting a number without its window pass for one with it.
+
+What it says, in `profile-report.json` and the Markdown beside it:
+
+1. **The round's CPU by source, in the two configurations, and the difference** — the agent's files, the
+   application's, the driver's (`pg` and `pg-pool`), Node's internals, and the runtime, where V8 is and the
+   collector shows up. The agent's row is the agent; the difference of the runtime's row is the pressure its
+   allocations put on the collector; the difference of the application's and the driver's is what its work
+   moved in them. The thread's idle is wall time, not CPU, and a machine at a tenth of a core is idle nine
+   tenths of the time: it is reported as its own number and left out of the totals, so the window and the
+   CPU are told apart. Where the halves profiled different numbers of rounds, the windows are not the same
+   length and the table says so instead of subtracting.
+2. **The top functions of the side that carries the agent, by self time** — where the CPU sat, with the
+   source each came from. Self time, not cumulative: a frame that spends its time in its callees is not a
+   function that is expensive.
+3. **The inside/outside line, in the same unit**: the hook estimate in points of a core at the run's rate,
+   beside the pairs' measured CPU, so the tables are read against the number they exist to explain. One pair
+   is said as one pair.
+
+It is **not a verdict** of the budget, and nothing in it is a `pass` or a `fail`: the budget is what the
+`bench` campaign measures, the agent against no agent, over rounds. The profiled processes pay the
+profiler's own cost, and both halves pay it, which keeps the difference honest and the numbers out of the
+campaign's arithmetic. It does not run in CI: it is a full run of the benchmark, and it is a tool for
+reading, not a gate.
+
+The mirror's `bench` workflow runs it when dispatched with `mode: profile`, keeping the report on
+`bench-reports` under a `profile` name **with its raw profiles beside it** — one file per profiled round —
+because a doubt about a row of the summary is read out of the profile, not measured again. What the reading
+decides — whether there is margin to recover, and from which part, or that it does not pay — is written from
+the kept report, when the mirror runs it: that writing is a step the campaign exists to make possible, and it
+is the successor ticket's, not this package's.

@@ -1,10 +1,11 @@
 /**
  * The head-to-head comparisons `bench-instruments` makes, in order. Each step adds one thing to the step before
- * it, so the difference is that thing's own cost: first the observers, one at a time (ADR 0027), then the two
- * halves of the black box that `DOWNTRACE_SHED` can hold shut — the fine detail and the profile (ADR 0080,
- * gh-570). Beside the steps lives the coexistence comparison (ESC-16, gh-615): the whole agent against the
- * whole agent with the tracker loaded beside it. A module of its own so a test can enumerate every comparison
- * and check that each one differs from its own baseline in exactly one thing.
+ * it, so the difference is that thing's own cost: first the observers, one at a time (ADR 0027) — the Postgres
+ * observer itself is weighed part by part, deepest last, so its three rows add up to what it costs whole
+ * (gh-592) — then the two halves of the black box that `DOWNTRACE_SHED` can hold shut: the fine detail and the
+ * profile (ADR 0080, gh-570). Beside the steps lives the coexistence comparison (ESC-16, gh-615): the whole
+ * agent against the whole agent with the tracker loaded beside it. A module of its own so a test can enumerate
+ * every comparison and check that each one differs from its own baseline in exactly one thing.
  */
 export interface InstrumentStep {
   name: string;
@@ -26,7 +27,26 @@ const ALL = "runtime,pg,http,redis";
 export const STEPS: readonly InstrumentStep[] = [
   { name: "the agent itself", from: undefined, to: { DOWNTRACE_INSTRUMENT: "none" } },
   { name: "runtime health", from: { DOWNTRACE_INSTRUMENT: "none" }, to: { DOWNTRACE_INSTRUMENT: "runtime" } },
-  { name: "postgres", from: { DOWNTRACE_INSTRUMENT: "runtime" }, to: { DOWNTRACE_INSTRUMENT: "runtime,pg" } },
+  // The Postgres observer, part by part (gh-592). `DOWNTRACE_PG_DEPTH` is the benchmark's switch for it
+  // (gh-592, beside `DOWNTRACE_SHED`): `wrapper` is the patch with a wrapper that records nothing, `context`
+  // adds the attribution of the calls and the waits to the request, and the absence of the variable is the
+  // full observer, which also builds the fingerprint of the query text. Each row is one part, and the three
+  // add up to what the observer costs whole.
+  {
+    name: "postgres: the wrapper",
+    from: { DOWNTRACE_INSTRUMENT: "runtime" },
+    to: { DOWNTRACE_INSTRUMENT: "runtime,pg", DOWNTRACE_PG_DEPTH: "wrapper" },
+  },
+  {
+    name: "postgres: the context of the query",
+    from: { DOWNTRACE_INSTRUMENT: "runtime,pg", DOWNTRACE_PG_DEPTH: "wrapper" },
+    to: { DOWNTRACE_INSTRUMENT: "runtime,pg", DOWNTRACE_PG_DEPTH: "context" },
+  },
+  {
+    name: "postgres: the text of the query",
+    from: { DOWNTRACE_INSTRUMENT: "runtime,pg", DOWNTRACE_PG_DEPTH: "context" },
+    to: { DOWNTRACE_INSTRUMENT: "runtime,pg" },
+  },
   {
     name: "outgoing HTTP",
     from: { DOWNTRACE_INSTRUMENT: "runtime,pg" },
@@ -73,4 +93,20 @@ export function instrumentsOf(env: Readonly<Record<string, string>>): ReadonlySe
   if (raw === "none") return new Set();
   if (raw === "all") return new Set(ALL.split(","));
   return new Set(raw.split(",").map((s) => s.trim()));
+}
+
+/**
+ * How much of the Postgres observer an environment runs; the absence of the variable is the full observer.
+ * The same word the agent's `DOWNTRACE_PG_DEPTH` takes, read the same way (forgiving, unknown is the default),
+ * so the steps and the agent cannot disagree about what a row weighs.
+ */
+export function pgDepthOf(env: Readonly<Record<string, string>>): "wrapper" | "context" | "full" {
+  switch ((env.DOWNTRACE_PG_DEPTH ?? "").trim().toLowerCase()) {
+    case "wrapper":
+      return "wrapper";
+    case "context":
+      return "context";
+    default:
+      return "full";
+  }
 }
