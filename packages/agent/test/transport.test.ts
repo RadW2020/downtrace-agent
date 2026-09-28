@@ -546,7 +546,8 @@ describe("Sender, bounded on every array a batch carries", () => {
     intervals: (s, n) => {
       for (let i = 0; i < n; i++) s.enqueue(interval(i));
     },
-    exceptions: (s, n) => s.enqueueExceptions(Array.from({ length: n }, (_, i) => exception(i))),
+    exceptions: (s, n) =>
+      s.enqueueExceptions({ exceptions: Array.from({ length: n }, (_, i) => exception(i)), dropped: 0 }),
     captures: (s, n) => s.enqueueCaptures(Array.from({ length: n }, (_, i) => report(i))),
     triggers: (s, n) => s.enqueueTriggers(Array.from({ length: n }, (_, i) => ask(i))),
   };
@@ -563,6 +564,30 @@ describe("Sender, bounded on every array a batch carries", () => {
       expect(carried(calls[0], field)).toHaveLength(max);
     });
   }
+
+  // The cap above is the half that keeps the batch one the cloud will take. This is the other half, the one
+  // gh-650 found missing: what did not fit is said, because a batch that carries 32 and was handed 35 leaves
+  // the other 3 to be read as errors that did not happen (COB-01, invariant 14, gh-659). The other caps do not
+  // need it: an interval or a profile that does not fit is a batch, and `droppedBatches` already says it.
+  it("says how many of the exceptions it was handed did not fit, and stops saying it when a batch lands", async () => {
+    const { s, calls } = sender([500, 202, 202]);
+    const resources = (c: { body: unknown } | undefined): { droppedExceptions?: number } | undefined =>
+      ((c?.body ?? {}) as { agent?: { resources?: { droppedExceptions?: number } } }).agent?.resources;
+    // The first 32 fill the sender's list, and the batch that should have carried them does not land.
+    s.enqueueExceptions({ exceptions: Array.from({ length: 32 }, (_, i) => exception(i)), dropped: 0 });
+    expect(await s.flush()).toBe(false);
+    expect(resources(calls[0])).toBeUndefined();
+    // Three more, that do not fit while the first 32 are still waiting.
+    s.enqueueExceptions({ exceptions: Array.from({ length: 3 }, (_, i) => exception(100 + i)), dropped: 0 });
+    expect(await s.flush()).toBe(true);
+    expect(carried(calls[1], "exceptions")).toHaveLength(32);
+    expect(resources(calls[1])?.droppedExceptions).toBe(3);
+    // The batch landed, so the next says nothing: a counter that repeated itself would read as loss that keeps
+    // happening (gh-243).
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(resources(calls[2])).toBeUndefined();
+  });
 
   it("sends a batch the schema accepts with every one of those queues past its cap", async () => {
     const { s, calls } = sender([202]);
@@ -632,9 +657,9 @@ describe("Sender, delivering what the process threw", () => {
 
   it("says with every delivery how many times a signature has happened since the instance started", async () => {
     const { s, calls } = sender([202, 202]);
-    s.enqueueExceptions([thrown("a", 3)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 3)], dropped: 0 });
     expect(await s.flush()).toBe(true);
-    s.enqueueExceptions([thrown("a", 2), thrown("b", 1)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 2), thrown("b", 1)], dropped: 0 });
     expect(await s.flush()).toBe(true);
     expect(carried(calls[0]?.body as Sent)).toEqual([["a", 3, 3]]);
     expect(carried(calls[1]?.body as Sent)).toEqual([
@@ -643,26 +668,41 @@ describe("Sender, delivering what the process threw", () => {
     ]);
   });
 
+  it("rides the batch with what the register's own cap did not admit, and only while the batch does not land", async () => {
+    const { s, calls } = sender([500, 202]);
+    // Three of the register's window did not fit; what did fit rides the batch, and the three ride with it.
+    s.enqueueExceptions({ exceptions: [thrown("a", 1)], dropped: 3 });
+    expect(await s.flush()).toBe(false);
+    const resources = (c: { body: unknown } | undefined): { droppedExceptions?: number } | undefined =>
+      ((c?.body ?? {}) as { agent?: { resources?: { droppedExceptions?: number } } }).agent?.resources;
+    expect(resources(calls[0])?.droppedExceptions).toBe(3);
+    // The batch never landed, so the next one says the same three: they have not been heard, and a counter
+    // that died with its batch would lie downwards (gh-243).
+    s.enqueueExceptions({ exceptions: [thrown("b", 1)], dropped: 0 });
+    expect(await s.flush()).toBe(true);
+    expect(resources(calls[1])?.droppedExceptions).toBe(3);
+  });
+
   it("sends again what it never heard land with a total the cloud can recognise, and after it only what is new", async () => {
     // The answer was lost: the cloud may have stored the three. The retry says five in all, and five it has not
     // heard land, so a cloud that applied the three counts two and one that never saw them counts five.
     const { s, calls } = sender([new Error("The operation was aborted due to timeout"), 202, 202]);
-    s.enqueueExceptions([thrown("a", 3)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 3)], dropped: 0 });
     expect(await s.flush()).toBe(false);
-    s.enqueueExceptions([thrown("a", 2)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 2)], dropped: 0 });
     expect(await s.flush()).toBe(true);
-    s.enqueueExceptions([thrown("a", 1)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 1)], dropped: 0 });
     expect(await s.flush()).toBe(true);
     expect(calls.map((c) => carried(c.body as Sent))).toEqual([[["a", 3, 3]], [["a", 5, 5]], [["a", 1, 6]]]);
   });
 
   it("keeps what reached it while a batch was in flight, and sends it with the next one (gh-626)", async () => {
     const { s, bodies, requested, answer } = held();
-    s.enqueueExceptions([thrown("a", 1)]);
+    s.enqueueExceptions({ exceptions: [thrown("a", 1)], dropped: 0 });
     const first = s.flush();
     await requested(1);
     // In flight: what arrives now is for the next batch, and the sender says it cannot send one yet.
-    s.enqueueExceptions([thrown("b", 4), thrown("a", 2)]);
+    s.enqueueExceptions({ exceptions: [thrown("b", 4), thrown("a", 2)], dropped: 0 });
     const ask: LocalTrigger = { signal: "event-loop-delay", observedAt: 1 };
     s.enqueueTriggers([ask]);
     expect(await s.flush()).toBe(false);
@@ -689,10 +729,10 @@ describe("Sender, delivering what the process threw", () => {
     const bound = 256;
     const { s, calls } = sender([]);
     for (let i = 0; i < bound; i += 32) {
-      s.enqueueExceptions(Array.from({ length: 32 }, (_, j) => thrown(`h${i + j}`, 1)));
+      s.enqueueExceptions({ exceptions: Array.from({ length: 32 }, (_, j) => thrown(`h${i + j}`, 1)), dropped: 0 });
       expect(await s.flush()).toBe(true);
     }
-    s.enqueueExceptions([thrown("past-the-bound", 2), thrown("h0", 1)]);
+    s.enqueueExceptions({ exceptions: [thrown("past-the-bound", 2), thrown("h0", 1)], dropped: 0 });
     expect(await s.flush()).toBe(true);
     const last = calls.at(-1)?.body as Sent;
     expect(carried(last)).toEqual([

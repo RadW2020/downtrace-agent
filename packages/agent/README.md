@@ -234,6 +234,12 @@ was lost is not counted twice, and an exception reported while another batch is 
 instrumentation keeps totals for up to 256 signatures over the life of the process; past that, a signature is sent
 with its count alone and the cloud says its number may include a resend.
 
+A process that throws more distinct signatures than the instrumentation can hold is the case it has to survive:
+its window holds 32 distinct signatures, and so does the sender's accumulation while batches do not land. Past
+either cap a new signature is not admitted, and what does not fit is **counted, not swallowed**: the batch says
+in `droppedExceptions` how many exception events did not fit, and the cloud adds it up beside the other losses.
+A process that threw 40 distinct exceptions is never read as one that threw 32.
+
 **If the process dies, the exception is lost.** Sending is asynchronous, an uncaught exception does not go
 through `beforeExit`, and there is no synchronous channel to send it on. It arrives when your application
 survives what it threw — because it has its own `uncaughtException` handler, or because the rejection did

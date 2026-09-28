@@ -566,8 +566,9 @@ export class Agent {
       // What the cloud asked for and this process really started, said once (ADR 0098).
       this.sender.enqueueCaptures(this.captures.toReport());
       // What died outside a request. Taken rather than copied: a batch that lands has said them, and one
-      // that does not gets them back (ADR 0103).
-      this.sender.enqueueExceptions(this.exceptions.take());
+      // that does not gets them back (ADR 0103). The occurrences the register's own cap did not admit ride
+      // with the ones it did admit, so the loss is said by the same batch that says the rest (gh-659).
+      this.sender.enqueueExceptions({ exceptions: this.exceptions.take(), dropped: this.exceptions.takeDropped() });
       this.declareWithholding();
       const interval = this.recorder.rotate();
       if (interval) {

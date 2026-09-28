@@ -410,3 +410,49 @@ describe("a flush that is not leaving, while another is under way", () => {
     expect(c.batches[1]?.exceptions?.map((e) => [e.kind, e.count, e.total])).toEqual([["explicit", 1, 1]]);
   });
 });
+
+/**
+ * The two caps of distinct signatures, from the application to the batch that lands (gh-659).
+ *
+ * The register's window and the sender's accumulation each stop admitting at 32, and a signature that did not
+ * fit used to be read as an error that did not happen (COB-01, invariant 14). What this pins is that both
+ * losses are said by the batch that lands, and only by it: a cloud that does not land batches does not land
+ * the count either, and a counter that died with its batch would lie downwards (gh-243).
+ */
+describe("the caps, with a cloud that does not land batches", () => {
+  // Words rather than numbers: the sanitiser turns numbers into `?`, and two errors that differ only in a
+  // number are one signature.
+  const word = (i: number): string => {
+    let out = "";
+    for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(97 + ((n - 1) % 26)) + out;
+    return out;
+  };
+
+  it("says what each cap did not admit, by the batch that lands", async () => {
+    let answered = 0;
+    const c = await cloud(() => (answered++ < 2 ? { status: 500 } : { status: 202 }));
+    const agent = createAgent(testConfig(c.url, { intervalMs: 60_000, instrument: new Set() }), { log: quiet });
+    cleanups.push(c.close, () => agent.stop());
+    agent.start();
+    const report = (from: number, n: number): void => {
+      for (let k = 0; k < n; k++) agent.report({ error: new Error(`${word(from + k)} broke`), kind: "explicit" });
+    };
+    const resources = (i: number): { droppedExceptions?: number } | undefined => c.batches[i]?.agent?.resources;
+    // Thirty-two distinct fill the sender's list, and the batch that should have carried them does not land.
+    report(0, 32);
+    expect(await agent.flushNow()).toBe(false);
+    // Nothing did not fit yet, so nothing says so — the resources that are there are the memory the
+    // register holds, and only that.
+    expect(resources(0)?.droppedExceptions).toBeUndefined();
+    // Forty more while the first thirty-two are still waiting: the register admits 32 and does not admit 8,
+    // and the sender, still full, admits none of the 32 it is handed. All 40 are the loss, and all 40 are said.
+    report(100, 40);
+    expect(await agent.flushNow()).toBe(false);
+    // The next batch lands: it carries the 32 that fit, and it says everything that did not.
+    report(200, 1);
+    expect(await agent.flushNow()).toBe(true);
+    await agent.stop();
+    expect(c.batches[2]?.exceptions).toHaveLength(32);
+    expect(resources(2)?.droppedExceptions).toBe(41);
+  });
+});

@@ -190,13 +190,17 @@ export class Sender {
   /** Batches the cloud refused as invalid. Not `failed`: nothing broke, we sent something wrong. */
   rejected = 0;
   /**
-   * The same three since the **last batch that landed**, which is what travels (gh-243).
+   * The same four since the **last batch that landed**, which is what travels (gh-243).
    *
    * Separate counters rather than a snapshot of the totals: they have to survive a batch that never
    * arrives —what it was going to say rides the next one— and a counter that dies with its batch lies
    * downwards, which is the direction that makes a losing instrumentation look healthy.
+   *
+   * `droppedExceptions` is the same kind of number as the three batch counters, for a different loss:
+   * exception events that did not fit in the caps of distinct signatures, the register's window and this
+   * sender's accumulation while batches do not land (gh-659).
    */
-  private since = { dropped: 0, failed: 0, rejected: 0 };
+  private since = { dropped: 0, failed: 0, rejected: 0, droppedExceptions: 0 };
   private warnedRejected = false;
   /** While set, the cloud has asked for time and no request goes out until then. */
   private silentUntil = 0;
@@ -228,6 +232,7 @@ export class Sender {
     if (this.since.dropped > 0) out.droppedBatches = this.since.dropped;
     if (this.since.failed > 0) out.failedBatches = this.since.failed;
     if (this.since.rejected > 0) out.rejectedBatches = this.since.rejected;
+    if (this.since.droppedExceptions > 0) out.droppedExceptions = this.since.droppedExceptions;
     const extra = this.opts.resources?.();
     if (extra) Object.assign(out, extra);
     return Object.keys(out).length > 0 ? out : undefined;
@@ -243,9 +248,14 @@ export class Sender {
    * And each signature carries its running total, which is what lets the cloud apply a delivery once. The count
    * alone could not: a batch whose answer was lost went out again with its count added to what came after, and
    * nothing in it told the cloud which part it already had (gh-625).
+   *
+   * `dropped` is what the register did not admit on its own cap, taken with what it handed over (gh-659). It
+   * joins the same `since` as the three batch counters, because it has the same fate: it rides the batch and
+   * is reset when the batch lands, never when it is sent.
    */
-  enqueueExceptions(all: CountedException[]): void {
-    for (const e of all) {
+  enqueueExceptions(args: { exceptions: CountedException[]; dropped: number }): void {
+    this.since.droppedExceptions += args.dropped;
+    for (const e of args.exceptions) {
       const total = this.runningTotal(signatureOf(e), e.count);
       const seen = this.exceptions.find((x) => signatureOf(x) === signatureOf(e));
       if (seen) {
@@ -253,6 +263,11 @@ export class Sender {
         if (total !== undefined) seen.total = total;
       } else if (this.exceptions.length < MAX_EXCEPTIONS) {
         this.exceptions.push(total === undefined ? { ...e } : { ...e, total });
+      } else {
+        // The list is full because batches are not landing, and this signature is not one of the ones waiting,
+        // so its occurrences are the loss. Counted as the occurrences they are, the same as the register's cap
+        // (COB-01, invariant 14, gh-659).
+        this.since.droppedExceptions += e.count;
       }
     }
   }
@@ -459,7 +474,7 @@ export class Sender {
         this.triggers = this.triggers.filter((t) => !triggers.includes(t));
         // Said, so it is not said twice. A counter that repeated itself would read as loss that keeps
         // happening (gh-243).
-        this.since = { dropped: 0, failed: 0, rejected: 0 };
+        this.since = { dropped: 0, failed: 0, rejected: 0, droppedExceptions: 0 };
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants

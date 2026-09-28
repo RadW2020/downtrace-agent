@@ -64,6 +64,15 @@ export interface RecordOptions {
 export class ProcessExceptions {
   private readonly counted = new Map<string, CountedException>();
   private readonly max: number;
+  /**
+   * Occurrences that did not fit, since the last read of this counter.
+   *
+   * Occurrences and not signatures: a signature that did not fit cannot be counted as distinct without
+   * remembering every signature that did not fit, which is a buffer that grows with the very flood the cap
+   * exists to survive, and the budget does not allow it (invariant 3). An occurrence is exact and costs one
+   * increment, and it bounds what was lost: at least one more signature, at most as many (gh-659).
+   */
+  private dropped = 0;
 
   constructor(max = MAX_SIGNATURES) {
     this.max = max;
@@ -87,11 +96,27 @@ export class ProcessExceptions {
     }
     // Beyond the cap it stops admitting rather than evicting, the same as the fingerprint caches: a process
     // throwing unbounded distinct signatures is the one an LRU would thrash, and the count that is already
-    // there stays true.
-    if (this.counted.size >= this.max) return;
+    // there stays true. What does not fit is counted, not swallowed: a window that hands over 32 signatures
+    // and was handed 40 must not leave the other 10 to be read as errors that did not happen (COB-01,
+    // invariant 14, gh-659).
+    if (this.counted.size >= this.max) {
+      this.dropped += 1;
+      return;
+    }
     const counted: CountedException = { kind, hash, text, count: 1 };
     if (opts.context !== undefined) counted.context = opts.context;
     this.counted.set(key, counted);
+  }
+
+  /**
+   * How many occurrences did not fit since the last read, and clears them: the same taking as `take`, for the
+   * half `take` does not hand over. The reader sends it with the batch that carries the taken ones, and a
+   * counter that is read twice would say the same loss twice (gh-659).
+   */
+  takeDropped(): number {
+    const out = this.dropped;
+    this.dropped = 0;
+    return out;
   }
 
   /** What the next batch carries. Taking them clears them: a batch that lands has said them. */

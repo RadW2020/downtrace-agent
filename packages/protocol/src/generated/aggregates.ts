@@ -257,6 +257,10 @@ export interface AgentResources {
    */
   internalErrors?: number;
   /**
+   * Exception events the instrumentation discarded because they did not fit in its caps of distinct signatures — the register's window, and the sender's accumulation while batches do not land — since the previous batch. An occurrence, never a signature: the sender cannot name what it did not admit without remembering it, and remembering is the growth the cap exists to stop. This is what happened and is gone, the same kind of number as droppedBatches, for the errors a process throws outside any request: a batch that says 32 and was handed 35 must not leave the other 3 to be read as errors that did not happen (COB-01, invariant 14).
+   */
+  droppedExceptions?: number;
+  /**
    * What the black box's registers have allocated, right now. An instant, and arithmetic rather than a measurement: the rings are preallocated.
    */
   bufferBytes?: number;
