@@ -49,14 +49,6 @@ const REQUEST_START = "http.server.request.start";
 const RESPONSE_FINISH = "http.server.response.finish";
 const MAX_INTERNAL_ERRORS = 10;
 const SHUTDOWN_FLUSH_MS = 1_000;
-/**
- * When the two registers together get this close to their budgets, the detail goes first.
- *
- * `product.md:241`: «if it approaches its memory budget, it reduces the detail window and records it as a loss of
- * coverage». Three of the sixty-four mebibytes invariant 3 allows, which is what the two
- * registers reserve between them (ADR 0067, 0068); this trips at four fifths of it.
- */
-const MEMORY_HIGH_WATER_BYTES = Math.floor(3 * 1024 * 1024 * 0.8);
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 /**
  * When this process started, in the clock the rest of the world reads. `performance.now()` measures
@@ -758,6 +750,24 @@ export class Agent {
     };
   }
 
+  /**
+   * Whether the black box is holding more than it reserves, the one state in which the arithmetic of ADR 0067
+   * no longer holds.
+   *
+   * `product.md:241`: «if it approaches its memory budget, it reduces the detail window and records it as a
+   * loss of coverage». The registers' budget is their reserve, so the line moves with them: it used to be a
+   * fixed line below the worst case of the two, which the coarse register crossed on its way to a cap it is
+   * designed to reach — seventy-seven distinct routes on a server with scanner traffic — and the detail was
+   * shed for the rest of the process's life although nothing had grown beyond its budget (gh-774).
+   *
+   * The fine ring is preallocated at construction, so what it holds is what it reserves.
+   */
+  private overMemoryReserve(): boolean {
+    const held = this.fine.bytes() + this.coarse.bytes();
+    const reserved = this.fine.bytes() + this.coarse.reservedBytes();
+    return held > reserved;
+  }
+
   private requestStarted(message: unknown): void {
     const request = (message as { request?: object }).request;
     if (!request) return;
@@ -861,9 +871,10 @@ export class Agent {
     // Closed here and not in the hook wrapper: what invariant 3 bounds is the cost **per request**, and this
     // is where a request ends.
     this.overhead.requestFinished();
-    // The registers are preallocated, so this is arithmetic rather than a measurement (ADR 0067): near the
-    // budget, the detail goes before anything else does.
-    if (this.fine.bytes() + this.coarse.bytes() > MEMORY_HIGH_WATER_BYTES) this.overhead.shedForMemory();
+    // The registers are preallocated, so this is arithmetic rather than a measurement (ADR 0067): the detail
+    // goes first only when the arithmetic no longer holds, and the loss is said as a loss of coverage, not
+    // hidden.
+    if (this.overMemoryReserve()) this.overhead.shedForMemory();
   }
 
   /** Every hook runs through here: an agent bug must never reach the application. */

@@ -178,6 +178,24 @@ describe("the coarse register", () => {
     expect(r.bytes()).toBeGreaterThan(1024 * 1024);
   });
 
+  // The arithmetic the agent's memory tripwire reads (ADR 0067, gh-774): the reserve is the worst case, and
+  // the worst case is what the register really holds once it is full — a number, not a promise.
+  it("reserves its worst case, and the worst case is the register at its cap", () => {
+    const c = clock();
+    const r = new CoarseRegister({ now: c.now });
+    for (let i = 0; i < DEFAULT_ROUTES * 2; i += 1) r.record("GET", `/route-${i}`, 200, 1, 0);
+
+    // The cap is the rows it may take, taken: the full register holds its reserve exactly, so a line at the
+    // reserve is a line the register can reach and not cross.
+    expect(r.bytes()).toBe(r.reservedBytes());
+    expect(r.reservedBytes()).toBeLessThanOrEqual(COARSE_MAX_BYTES);
+
+    // The same arithmetic at a smaller cap: the reserve follows the configuration, it is not a constant.
+    const s = new CoarseRegister({ now: c.now, seconds: 10, maxRoutes: 3 });
+    for (let i = 0; i < 10; i += 1) s.record("GET", `/r/${i}`, 200, 1, 0);
+    expect(s.bytes()).toBe(s.reservedBytes());
+  });
+
   it("allocates one row per route and no more", () => {
     const c = clock();
     const r = new CoarseRegister({ now: c.now, seconds: 5 });

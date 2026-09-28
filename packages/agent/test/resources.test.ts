@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import type { Interval } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
+import { CoarseRegister } from "../src/coarse.ts";
 import type { Logger } from "../src/log.ts";
 import { Sender } from "../src/transport.ts";
 import { testConfig } from "./support/agent-config.ts";
@@ -154,5 +155,45 @@ describe("what the agent adds about itself", () => {
     // to say (ADR 0093).
     expect(r?.shed).toBeUndefined();
     expect(r?.shedReason).toBeUndefined();
+  });
+
+  it("says in the batch what it is giving up for memory, while it lasts", async () => {
+    // The loss of coverage is said the way every other loss is said (ADR 0113): the fields travel with the
+    // batch, so a cloud that sees them can tell «nothing happened» from «the detail is gone and why» (COB-01).
+    // A register that grew beyond its cap stands in for the one state the tripwire exists for (gh-774).
+    class OverReserve extends CoarseRegister {
+      override bytes(): number {
+        return super.bytes() + 3 * 1024 * 1024;
+      }
+    }
+    const bodies: string[] = [];
+    const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+    const agent = createAgent(
+      testConfig("http://cloud.invalid", {
+        environment: "production",
+        version: "v1",
+        intervalMs: 60_000,
+        instrument: new Set(),
+      }),
+      { log: quiet, fetchImpl, coarse: new OverReserve({ now: () => 1_000_000 }) },
+    );
+    agent.start();
+    try {
+      const request = { method: "GET", url: "/products" };
+      channel("http.server.request.start").publish({ request });
+      channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+      expect(await agent.flushNow()).toBe(true);
+    } finally {
+      await agent.stop();
+    }
+
+    const r = resourcesOf(bodies[0] ?? "");
+    expect(r?.shed).toBe("fine");
+    expect(r?.shedReason).toBe("memory");
+    // And the memory it says it holds is what it holds: the bloated number, not a budget.
+    expect(r?.bufferBytes).toBeGreaterThan(3 * 1024 * 1024);
   });
 });

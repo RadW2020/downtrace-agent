@@ -1,8 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
+import { COARSE_MAX_BYTES, CoarseRegister } from "../src/coarse.ts";
 import { currentContext, recordOperationIn } from "../src/context.ts";
-import { FineRegister } from "../src/fine.ts";
+import { FINE_MAX_BYTES, FineRegister } from "../src/fine.ts";
 import { OVERHEAD_BUDGET_MS, OverheadMeter, Sheddable, ThrottleReasons, WINDOW_REQUESTS } from "../src/overhead.ts";
 import { testConfig } from "./support/agent-config.ts";
 
@@ -230,6 +231,90 @@ describe("giving ground", () => {
 });
 
 describe("the agent", () => {
+  /**
+   * A meter whose window never closes while the test runs: the latency path is tested above, and the
+   * decision under test here is the memory arithmetic alone.
+   */
+  const neverDeciding = () => new OverheadMeter({ sampleEvery: 1, windowRequests: 100_000 });
+
+  /**
+   * The memory tripwire of `product.md:241`, which used to cross on normal traffic: a fixed line below the
+   * worst case of the two registers, so the coarse register — designed to fill to its cap, and a public
+   * server sees a hundred distinct routes a minute, scanners and all — shed the fine detail at seventy-seven
+   * routes and kept it shed, because its rows are never freed (gh-774).
+   */
+  it("keeps the fine detail when the coarse register fills to its designed cap", async () => {
+    const overhead = neverDeciding();
+    const fine = new FineRegister();
+    const coarse = new CoarseRegister({ now: () => 1_000_000 });
+    const agent = createAgent(config(), { log: quiet, overhead, fine, coarse });
+    agent.start();
+    try {
+      const start = channel("http.server.request.start");
+      const finish = channel("http.server.response.finish");
+      const request = (route: string): void => {
+        const req = { method: "GET", url: route };
+        start.publish({ request: req });
+        finish.publish({ request: req, response: { statusCode: 200 } });
+      };
+      // Seventy-seven distinct routes used to be the line: the register is past half its budget there, and
+      // nothing is close to anything. The paths are what a scanner leaves behind: distinct, and not
+      // identifier-shaped, so the template keeps them apart.
+      for (let i = 0; i < 77; i += 1) request(`/r/a${i}`);
+      expect(agent.stats.shed).toBe(Sheddable.Nothing);
+      expect(fine.snapshot().coverage.requests).toBe(77);
+      // Past the cap, where the scanner traffic leaves it: the register full is a designed state, not an
+      // emergency.
+      for (let i = 77; i < 200; i += 1) request(`/r/a${i}`);
+      expect(agent.stats.shed).toBe(Sheddable.Nothing);
+      expect(fine.snapshot().coverage.requests).toBe(200);
+      // And the traffic coming back to one route does not stay without detail: the shed never happened.
+      for (let i = 0; i < 200; i += 1) request("/one");
+      expect(agent.stats.shed).toBe(Sheddable.Nothing);
+      expect(fine.snapshot().coverage.requests).toBe(400);
+      // The arithmetic the tripwire reads: the two registers at their reserve fit under the two budgets of
+      // invariant 3, which is why the line is the reserve and not a fraction of a mebibyte (ADR 0067).
+      expect(fine.bytes() + coarse.reservedBytes()).toBeLessThanOrEqual(FINE_MAX_BYTES + COARSE_MAX_BYTES);
+    } finally {
+      void agent.stop();
+    }
+  });
+
+  /**
+   * The one state the tripwire exists for: a register holding more than it reserves, so the arithmetic of
+   * ADR 0067 no longer holds. The detail goes first, and the loss is said with its reason.
+   */
+  it("sheds the detail for memory when a register holds more than it reserves", async () => {
+    const overhead = neverDeciding();
+    const fine = new FineRegister();
+    // A register that grew beyond its cap: `bytes()` says more than the reserve, which the real register
+    // cannot do, so a subclass stands in for the bug the tripwire is the last line against.
+    class OverReserve extends CoarseRegister {
+      override bytes(): number {
+        return super.bytes() + 3 * 1024 * 1024;
+      }
+    }
+    const coarse = new OverReserve({ now: () => 1_000_000 });
+    const agent = createAgent(config(), { log: quiet, overhead, fine, coarse });
+    agent.start();
+    try {
+      const start = channel("http.server.request.start");
+      const finish = channel("http.server.response.finish");
+      for (let i = 0; i < 2; i += 1) {
+        const req = { method: "GET", url: `/r/${i}` };
+        start.publish({ request: req });
+        finish.publish({ request: req, response: { statusCode: 200 } });
+      }
+      expect(agent.stats.shed).toBe(Sheddable.Fine);
+      expect(agent.stats.shedReason).toBe(ThrottleReasons.Memory);
+      // The writing stopped, not just the reading: the first request landed before the shed, and the
+      // second one, after.
+      expect(fine.snapshot().coverage.requests).toBe(1);
+    } finally {
+      void agent.stop();
+    }
+  });
+
   it("reports what it has given up and what it estimates it costs", () => {
     const agent = createAgent(config(), { log: quiet });
     const stats = agent.stats;

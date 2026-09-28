@@ -176,6 +176,20 @@ export class CoarseRegister {
     return this.rows.size * perRow + process;
   }
 
+  /**
+   * What the register holds at its worst: every row it may take, taken.
+   *
+   * The rows are never freed, so `bytes()` only grows: a fixed line below this would be crossed by normal
+   * traffic — the register is designed to fill to its cap — and never uncrossed (gh-774). The agent's
+   * tripwire compares the sum against this, so its line is the arithmetic of ADR 0067 and moves with the
+   * register.
+   */
+  reservedBytes(): number {
+    const perRow = this.seconds * FIELDS * 8 + this.seconds * 8;
+    // The cap plus the row the overflow folds into: both exist once the register is full.
+    return (this.maxRoutes + 1) * perRow + this.seconds * 8 * 2;
+  }
+
   /** Everything the register holds, oldest second first. This is what a capture will freeze. */
   snapshot(): CoarseSnapshot {
     const now = Math.floor(this.now() / 1000);

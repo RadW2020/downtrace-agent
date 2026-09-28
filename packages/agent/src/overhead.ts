@@ -59,7 +59,7 @@ export type SheddableLevel = (typeof Sheddable)[keyof typeof Sheddable];
 /** Why something is being given up, in words that go into the agent's own stats. */
 export const ThrottleReasons = {
   Latency: "the instrumentation's own hooks were taking too long per request",
-  Memory: "the registers were close to their memory budget",
+  Memory: "the registers were holding more than they reserve",
 } as const;
 
 export interface OverheadOptions {
@@ -177,7 +177,7 @@ export class OverheadMeter {
     }
   }
 
-  /** Gives ground for a reason that is not latency: the registers are near their memory budget. */
+  /** Gives ground for a reason that is not latency: the registers hold more than they reserve. */
   shedForMemory(): void {
     if (this.level < Sheddable.Fine) {
       this.level = Sheddable.Fine;
