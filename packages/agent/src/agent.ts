@@ -102,6 +102,12 @@ export interface AgentDeps {
    * counted as one from before it (gh-538).
    */
   now?: () => number;
+  /**
+   * The cadence of the tick that feeds the coarse register's event loop series, in milliseconds. A second in
+   * production, which is the granularity the series has: one slot per second (ADR 0067). A test shortens it so
+   * the wiring is exercised without waiting for the production cadence.
+   */
+  loopTickMs?: number;
 }
 
 export interface AgentStats {
@@ -173,6 +179,8 @@ export class Agent {
   private reportedInternalErrors = 0;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
+  /** The cadence of the event loop feed, from the deps; a second by default (see `AgentDeps.loopTickMs`). */
+  private readonly loopTickMs: number | undefined;
   private readonly starts = new WeakMap<object, number>();
   private readonly contexts = new WeakMap<object, RequestContext>();
   private readonly runtime: RuntimeSampler;
@@ -207,6 +215,8 @@ export class Agent {
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
+  /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
+  private loopTimer: NodeJS.Timeout | undefined;
   private started = false;
   private recorded = 0;
   private internalErrors = 0;
@@ -268,8 +278,9 @@ export class Agent {
     // coarse register and the sender read the wall clock while ADR 0131 said nothing did (gh-610).
     this.recorder = deps.recorder ?? new IntervalAggregator({ now: this.now });
     // The coarse half of the black box. Always on: `product.md` says the instrumentation **maintains** it, and
-    // it is cheap enough to — five additions per request into a preallocated row. Nothing sends it yet: a
-    // capture carries the fine register, not this one.
+    // it is cheap enough to — five additions per request into a preallocated row. It leaves with a capture,
+    // which is the reading it was built for: `product.md:122` freezes it with the fine detail, and
+    // `product.md:94` says why it exists (gh-629).
     this.coarse = deps.coarse ?? new CoarseRegister({ now: this.now });
     this.fine = deps.fine ?? new FineRegister();
     this.reference = deps.reference ?? new ReferenceRegister();
@@ -309,6 +320,7 @@ export class Agent {
         inspector: createInspector(config.inspect, this.log),
       });
     this.handleSignals = deps.handleSignals ?? false;
+    this.loopTickMs = deps.loopTickMs;
     this.onSignal = {
       SIGTERM: () => this.signalled("SIGTERM"),
       SIGINT: () => this.signalled("SIGINT"),
@@ -441,6 +453,12 @@ export class Agent {
     if (on.has("runtime")) {
       this.runtime.start();
       observers.runtime = "on";
+      // The coarse register's event loop series is fed from this one, once a second and not on the flush's
+      // cadence: the series has one slot per second (ADR 0067), and a ten-second reading stamped on one of
+      // them would say a second stalled that did not. Off when the runtime observer is off, because then
+      // nobody samples the loop, and an unsampled second must stay absent rather than read as idle (gh-629).
+      this.loopTimer = setInterval(() => this.guard(() => this.loopTick()), this.loopTickMs ?? 1_000);
+      this.loopTimer.unref();
     }
     this.agentInfo.observers = observers;
     // The other half of the control channel: the orders come back in the answer to a batch (ADR 0071), and
@@ -476,6 +494,8 @@ export class Agent {
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
     if (this.timer) clearInterval(this.timer);
+    if (this.loopTimer) clearInterval(this.loopTimer);
+    this.loopTimer = undefined;
     this.stopHttp?.();
     this.stopHttp = undefined;
     this.stopRedis?.();
@@ -625,6 +645,7 @@ export class Agent {
           truncated: slice.truncated,
         },
         reference: this.referenceFor(),
+        coarse: this.coarseFor(),
         requests: slice.requests.map((r) => ({
           method: r.method,
           // The register keeps the real template —the black box never leaves the process— and this is the
@@ -677,6 +698,44 @@ export class Agent {
         ...(s.truncated ? { truncated: true } : {}),
       })),
     };
+  }
+
+  /**
+   * The coarse summary a capture carries: the last few minutes, second by second.
+   *
+   * `product.md:122`: a capture freezes «the coarse summary of the previous minutes» and sends it, and
+   * `product.md:94` is why the register exists — «makes it possible to see how something detected late began».
+   * The snapshot is the freeze: a watched quiet second is a zero, an unwatched one is absent, and the event
+   * loop stays in its own series (ADR 0067). Sent whole and not filtered by the capture's footprint, because
+   * the summary is the process's — what the other routes were doing is exactly the context the captured one
+   * needs — and it is bounded by the register's own caps, which the contract pins (gh-629).
+   */
+  private coarseFor(): NonNullable<CaptureEvidence["coarse"]> {
+    const snapshot = this.coarse.snapshot();
+    return {
+      windowSeconds: snapshot.coverage.windowSeconds,
+      routesDropped: snapshot.coverage.routesDropped,
+      routes: snapshot.routes.map((r) => ({
+        method: r.method,
+        // The register keeps the real template, like the fine register does; this is the moment it is named
+        // for the outside (ADR 0105).
+        route: this.nameOf(r.route),
+        seconds: r.seconds,
+      })),
+      eventLoop: snapshot.eventLoop,
+    };
+  }
+
+  /**
+   * One tick of the event loop feed: a reading into the coarse register's series, or nothing.
+   *
+   * The tick runs where a bug must not reach the application (invariant 2), so it goes through the guard, and
+   * a reading the sampler has none of is left absent: a second with no sample says nothing about the loop,
+   * and a zero would say it was idle (ADR 0067, gh-629).
+   */
+  private loopTick(): void {
+    const ms = this.runtime.secondDelayMs();
+    if (ms !== undefined) this.coarse.recordEventLoop(ms);
   }
 
   /**

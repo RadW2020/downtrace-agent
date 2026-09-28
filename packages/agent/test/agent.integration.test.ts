@@ -448,6 +448,104 @@ describe("agent v0 (integration)", () => {
     expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
   });
 
+  // `product.md:122`: «A capture is the moment when the instrumentation freezes the contents of the black box
+  // (fine detail before and after the instant of detection, reference samples and the coarse summary of the
+  // previous minutes) and sends it to the cloud». `product.md:94` gives the summary its reason: «makes it
+  // possible to see how something detected late began». The register was always being written and nothing
+  // ever read it (gh-629); the capture is where its reading lives.
+  it("sends the coarse summary of the previous minutes with a capture", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { path: string; body: unknown }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-5",
+                windowSeconds: 0.05,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                method: "GET",
+                route: "/products/:id",
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const clock = testClock();
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
+      log: quiet,
+      fetchImpl,
+      now: clock.now,
+    });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    // One request per second of the register's clock: the shape the summary exists to show.
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    clock.advance(1000);
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    clock.advance(1000);
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 500 } });
+
+    // The first flush brings the order back.
+    expect(await agent.flushNow()).toBe(true);
+    // And one more while the capture is open, in the third second.
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    clock.advance(60); // the 50 ms window, closed
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0]?.body as {
+      requests: unknown[];
+      coarse?: {
+        windowSeconds: number;
+        routesDropped: number;
+        routes: {
+          method: string;
+          route: string;
+          seconds: {
+            second: number;
+            requests: number;
+            errors: number;
+            latencySumMs: number;
+            latencyMaxMs: number;
+            calls: number;
+          }[];
+        }[];
+        eventLoop: { second: number; maxDelayMs: number }[];
+      };
+    };
+    // The whole body is still one the cloud takes, coarse and all.
+    expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    expect(body.requests).toHaveLength(4);
+    // And the summary of the previous minutes travels with it: second by second, and not only the requests
+    // the capture attached.
+    expect(body.coarse, "the evidence carried no coarse summary").toBeDefined();
+    expect(body.coarse?.windowSeconds).toBe(300);
+    expect(body.coarse?.routesDropped).toBe(0);
+    const [route] = body.coarse?.routes ?? [];
+    expect(route?.method).toBe("GET");
+    expect(route?.route).toBe("/products/:id");
+    // Four requests, in three seconds: the silence and the spike are both in there (invariant 14).
+    expect(route?.seconds.map((s) => s.requests)).toEqual([1, 1, 2]);
+    expect(route?.seconds.map((s) => s.errors)).toEqual([0, 0, 1]);
+    // The process's event loop delay is in its own series, and not attributed to the route: the runtime
+    // observer is not on here, so the series is what it has — nothing, said as nothing.
+    expect(body.coarse?.eventLoop).toEqual([]);
+  });
+
   // gh-409. The other direction of the control channel. `product.md:124` gives the instrumentation
   // «trigger on local signals»: a process whose event loop is running late knows it long before any
   // aggregate crosses the network, and by then the detail that would explain it has been overwritten.

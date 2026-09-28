@@ -1,0 +1,40 @@
+{
+  "protocol": "0.9.0",
+  "instance": { "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55" },
+  "startedAt": "2026-09-10T10:04:00.000Z",
+  "endedAt": "2026-09-10T10:05:00.000Z",
+  "coverage": { "observedRequests": 3, "attachedRequests": 1, "detailLost": 0, "truncated": 0 },
+  "requests": [
+    {
+      "method": "GET",
+      "route": "/checkout",
+      "status": 500,
+      "startedAt": "2026-09-10T10:04:31.000Z",
+      "durationMs": 912.4,
+      "operations": []
+    }
+  ],
+  "coarse": {
+    "windowSeconds": 300,
+    "routesDropped": 0,
+    "routes": [
+      {
+        "method": "GET",
+        "route": "/checkout",
+        "seconds": [
+          { "second": 1757517900, "requests": 4, "errors": 0, "latencySumMs": 48.2, "latencyMaxMs": 12.1, "calls": 8 },
+          { "second": 1757517901, "requests": 0, "errors": 0, "latencySumMs": 0, "latencyMaxMs": 0, "calls": 0 },
+          {
+            "second": 1757517902,
+            "requests": 7,
+            "errors": 2,
+            "latencySumMs": 910.5,
+            "latencyMaxMs": 431.9,
+            "calls": 21
+          }
+        ]
+      }
+    ],
+    "eventLoop": [{ "second": 1757517901, "maxDelayMs": 0.8 }, { "second": 1757517902, "maxDelayMs": 250.4 }]
+  }
+}

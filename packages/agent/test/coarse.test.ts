@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { COARSE_MAX_BYTES, CoarseRegister, DEFAULT_ROUTES, DEFAULT_SECONDS } from "../src/coarse.ts";
 import { OTHER_ROUTE } from "../src/routes.ts";
+import { RuntimeSampler } from "../src/runtime.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 /** A logger that says nothing: this test is about the register, not about what the agent prints. */
@@ -255,5 +256,84 @@ describe("the agent's coarse register", () => {
     expect(route?.method).toBe("GET");
     expect(route?.seconds.at(-1)?.requests).toBe(1);
     expect(route?.seconds.at(-1)?.errors).toBe(1);
+  });
+
+  /**
+   * An agent for the feed tests: the register's clock is driven by hand, the runtime sampler is handed its
+   * readings one by one, and the tick is a few milliseconds instead of a second, so the test does not wait
+   * for the production cadence.
+   */
+  function feedingAgent(readings: (number | undefined)[], coarse: CoarseRegister, throwOnce = false) {
+    const runtime = new RuntimeSampler();
+    let first = true;
+    runtime.secondDelayMs = () => {
+      if (throwOnce && first) {
+        first = false;
+        throw new Error("no reading");
+      }
+      return readings.shift();
+    };
+    return {
+      runtime,
+      agent: createAgent(
+        testConfig("http://127.0.0.1:1/x", {
+          environment: "test",
+          version: "t1",
+          intervalMs: 60_000,
+          instrument: new Set(["runtime"]),
+        }),
+        { coarse, runtime, loopTickMs: 2, log: silent },
+      ),
+    };
+  }
+
+  // gh-629. The series ADR 0067 gave the process had nothing feeding it: `recordEventLoop` had no caller but
+  // its tests. The agent feeds it once a tick from the process's own delay readings.
+  it("feeds the process's event loop delay into the series, and the worst reading of a second wins", async () => {
+    const c = clock();
+    const coarse = new CoarseRegister({ now: c.now, seconds: 10 });
+    const { agent, runtime } = feedingAgent([12, 47, 8], coarse);
+    agent.start();
+    try {
+      await new Promise((r) => setTimeout(r, 100)); // the ticks drain the readings
+    } finally {
+      await agent.stop();
+    }
+    // All three readings fall in the same second of the register's clock, which nobody moved.
+    expect(runtime.started).toBe(false); // stopped with the agent
+    const series = coarse.snapshot().eventLoop;
+    expect(series).toHaveLength(1);
+    expect(series[0]?.maxDelayMs).toBe(47);
+  });
+
+  // A second with no sample says nothing about the loop, and a zero would say it was idle (ADR 0067). The
+  // feed must leave the second absent rather than publish a zero.
+  it("leaves a second absent when the process has no reading of it", async () => {
+    const c = clock();
+    const coarse = new CoarseRegister({ now: c.now, seconds: 10 });
+    const { agent } = feedingAgent([undefined, undefined, undefined], coarse);
+    agent.start();
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      await agent.stop();
+    }
+    expect(coarse.snapshot().eventLoop).toHaveLength(0);
+  });
+
+  // Invariant 2: the tick runs where an agent bug must not reach the application. A failed reading is an
+  // internal error, counted, and the series goes on with the next reading.
+  it("counts a failed tick as an internal error and keeps feeding the rest", async () => {
+    const c = clock();
+    const coarse = new CoarseRegister({ now: c.now, seconds: 10 });
+    const { agent } = feedingAgent([3], coarse, true);
+    agent.start();
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      await agent.stop();
+    }
+    expect(agent.stats.internalErrors).toBeGreaterThan(0);
+    expect(coarse.snapshot().eventLoop.map((s) => s.maxDelayMs)).toEqual([3]);
   });
 });

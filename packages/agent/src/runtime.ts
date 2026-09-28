@@ -19,6 +19,10 @@ function round3(n: number): number {
  */
 export class RuntimeSampler {
   private loop: IntervalHistogram | undefined;
+  /** The histogram the coarse register's event loop series reads: one per-second reading out of it, and the
+   * interval's percentiles stay on their own, because a per-second reading cannot be derived from a window
+   * that a `rotate()` resets. */
+  private loopSecond: IntervalHistogram | undefined;
   private observer: PerformanceObserver | undefined;
   private gcCount = 0;
   private gcPauseMs = 0;
@@ -33,6 +37,8 @@ export class RuntimeSampler {
     if (this.loop) return;
     this.loop = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
     this.loop.enable();
+    this.loopSecond = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
+    this.loopSecond.enable();
     this.observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
         this.gcCount += 1;
@@ -45,8 +51,26 @@ export class RuntimeSampler {
   stop(): void {
     this.loop?.disable();
     this.loop = undefined;
+    this.loopSecond?.disable();
+    this.loopSecond = undefined;
     this.observer?.disconnect();
     this.observer = undefined;
+  }
+
+  /**
+   * The process's event loop delay for the last second, and nothing else — or nothing at all when there was
+   * no reading of it.
+   *
+   * This is what feeds the coarse register's event loop series (ADR 0067), second by second. The count is
+   * the half that decides: a window with no sample says nothing about the loop, and a zero would say it was
+   * idle, which is the one answer the series must not invent.
+   */
+  secondDelayMs(): number | undefined {
+    if (!this.loopSecond) return undefined;
+    const samples = this.loopSecond.count;
+    const ms = this.loopSecond.max / NS_PER_MS;
+    this.loopSecond.reset();
+    return samples > 0 ? round3(ms) : undefined;
   }
 
   requestStarted(): void {

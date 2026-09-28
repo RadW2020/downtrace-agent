@@ -11,8 +11,9 @@ import {
 } from "../src/index.ts";
 
 /**
- * What an instrumentation sends back for a capture: the black box's fine detail, frozen. The contract exists
- * before anything produces it, which is the order ADR 0008 asks for — the cloud accepts first (gh-322).
+ * What an instrumentation sends back for a capture: the black box's fine detail and its coarse summary of the
+ * previous minutes, frozen. The contract exists before anything produces it, which is the order ADR 0008 asks
+ * for — the cloud accepts first (gh-322).
  */
 
 const fixtures = fileURLToPath(new URL("../schema/v0/fixtures/evidence/", import.meta.url));
@@ -88,6 +89,59 @@ describe("the capture evidence schema", () => {
     expect(reference.properties.selection.enum).toContain("uniform-reservoir");
     // And it never says a sample is healthy, because being earlier does not make it so (`product.md:100`).
     expect(JSON.stringify(CAPTURE_EVIDENCE_SCHEMA_V0)).not.toContain('"healthy"');
+  });
+
+  /**
+   * `product.md:122`: the capture freezes «the coarse summary of the previous minutes» and sends it. The
+   * register that holds it is bounded (ADR 0067), and the contract pins the same bounds: a capture's worst
+   * case is a number the reader of the contract can compute, not a surprise in the body.
+   */
+  it("carries the coarse summary, bounded by what the register holds", () => {
+    const coarse = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as {
+        $defs: {
+          CoarseSummary: {
+            required: string[];
+            properties: {
+              windowSeconds: { minimum: number };
+              routes: { maxItems: number };
+              eventLoop: { maxItems: number };
+            };
+          };
+          CoarseRoute: { properties: { seconds: { maxItems: number } } };
+        };
+      }
+    ).$defs;
+    // Optional at the top level: an instrumentation older than the summary sends none, and absent is
+    // «did not send it», which the cloud stores as such (ADR 0008).
+    expect((CAPTURE_EVIDENCE_SCHEMA_V0 as { required: string[] }).required).not.toContain("coarse");
+    expect([...coarse.CoarseSummary.required].sort()).toEqual([
+      "eventLoop",
+      "routes",
+      "routesDropped",
+      "windowSeconds",
+    ]);
+    // 128 rows and the one the overflow folds into; 300 seconds of window; one reading a second, in the
+    // window. The numbers are the register's own (gh-629).
+    expect(coarse.CoarseSummary.properties.routes.maxItems).toBe(129);
+    expect(coarse.CoarseSummary.properties.eventLoop.maxItems).toBe(300);
+    expect(coarse.CoarseRoute.properties.seconds.maxItems).toBe(300);
+  });
+
+  /**
+   * The seconds of the summary are instants, and the protocol's instants are integers at the wire (ADR
+   * 0145): a fractional second is a clock somebody forgot to floor, and it would read as two seconds to
+   * every reader that aligns the series with the dates the evidence writes.
+   */
+  it("keeps a coarse second an integer instant", async () => {
+    const valid = (await load("valid")).find(([n]) => n === "with-coarse.json");
+    expect(valid).toBeDefined();
+    const doc = structuredClone(valid?.[1]) as { coarse: { routes: { seconds: { second: number }[] }[] } };
+    expect(validate(doc)).toBe(true);
+    const second = doc.coarse.routes[0]?.seconds[0];
+    if (second === undefined) throw new Error("the fixture lost its first second");
+    second.second = 1757517900.5;
+    expect(validate(doc)).toBe(false);
   });
 
   it("speaks exactly the versions the batch does", () => {

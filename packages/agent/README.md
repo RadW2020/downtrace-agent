@@ -453,6 +453,13 @@ method, status, when it started and how long it took, and the operations it ran 
 Never the query text, never a value, never a path. Order and overlap are the whole point — they are what separates «this
 request spent 400 ms waiting on the database» from «it ran three queries at once».
 
+Beside it goes the **coarse summary of the last few minutes**: per endpoint, second by second, how many requests, how many
+failed, how long they took in total and at the worst, how many database calls they made — and the process's own event loop
+delay as a series of its own, since a slow loop belongs to no endpoint. The fine detail says what the captured requests
+did; the summary says what the rest of the process was doing around them, which is what makes a degradation that was
+detected late readable as a beginning. A quiet second travels as zeros; a second nobody watched travels as absent — the
+cloud can tell the two apart, and so can you.
+
 It also says what it could **not** give you: how many requests it observed from the moment it started watching, how many
 it attached from detail it still had, and how many lost their detail before it could be read. A capture that saw nothing
 sends an empty answer rather than silence.
