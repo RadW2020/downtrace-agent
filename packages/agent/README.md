@@ -38,7 +38,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_VERSION` | no | Deployed version or commit; detected from `APP_VERSION`, `GIT_SHA`, `VERCEL_GIT_COMMIT_SHA`, `HEROKU_SLUG_COMMIT`, `SOURCE_VERSION`, `RENDER_GIT_COMMIT`, `RAILWAY_GIT_COMMIT_SHA`; else `unknown` |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
-| `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
+| `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — the floor and the ceiling are derived, see below). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
 | `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
 | `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch for weighing the fine detail and the profile on their own (ADR 0080, gh-570); leave it alone in production |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
@@ -415,7 +415,25 @@ identity the cloud groups and compares by; the text is only the label you read. 
 *«this route went from 2 executions of this query to 53»* instead of *«this route makes more queries now»*.
 
 The profile goes out **once a minute**, separately from the 10-second aggregates, because what a route runs
-changes when your code changes, not every ten seconds.
+changes when your code changes, not every ten seconds. The minute is the default; `DOWNTRACE_PROFILE_MS`
+moves it, between a floor and a ceiling, and both are derived rather than chosen:
+
+- **The floor is the interval.** A profile window closes on the first flush after it is full, and the flushes
+  come every interval. A window shorter than the interval that feeds it closes on the very same flush as one
+  equal to it, so below `DOWNTRACE_INTERVAL_MS` the number stops meaning anything.
+- **The ceiling is two and a half minutes minus the interval.** It is derived from the window that reads the
+  profile: the report's diff reads the recent window as the last five minutes, ending one minute ago — the
+  minute being the arrival budget, what is flushed by then has arrived by the check — and it counts a profile
+  window on the side where it *starts*. A window is only in the store once it has closed and been flushed,
+  which is the first flush after it is full, at most one interval later. For the five minutes to hold a
+  profile that has arrived **at every phase**, two whole windows, each with its flush, must fit in them:
+  twice (profile + interval) ≤ five minutes. Above the ceiling there are phases in which the report's window
+  holds no profile that has arrived, whatever the instrumentation is sent, and the report then says
+  `no-profile-after` of a route that was profiled as asked.
+
+A value below the floor is taken as the floor without saying anything, because that is a no-op; a value above
+the ceiling is clamped to it and said once at start-up, because that is not a no-op: the cadence in effect is
+not the one you wrote, and the profile rows you pay are not the ones you asked for.
 
 **No value from your database ever leaves your server.** Literals, parameters, quoted bodies and comments are
 replaced before anything is stored or sent, and that happens in your process, not ours. If you would still rather

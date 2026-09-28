@@ -12,7 +12,9 @@ import { remember } from "./registered.ts";
 
 const result = configFromEnv();
 if (result.ok) {
-  const agent = createAgent(result.config, { log: createLogger(result.config.debug), handleSignals: true });
+  const log = createLogger(result.config.debug);
+  for (const warning of result.warnings) log.warn(warning);
+  const agent = createAgent(result.config, { log, handleSignals: true });
   agent.start();
   // So an application that calls `process.exit()` can wait for it: that call fires nothing and waits for
   // nothing, and without this the last flush is simply cut (gh-383).

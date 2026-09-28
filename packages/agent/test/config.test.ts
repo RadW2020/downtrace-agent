@@ -6,6 +6,7 @@ import {
   INSTRUMENTS,
   parseInstruments,
   parseShed,
+  profileCeilingMs,
 } from "../src/config.ts";
 import { Sheddable } from "../src/overhead.ts";
 import { PROFILE_WINDOW_MS } from "../src/profile.ts";
@@ -129,11 +130,12 @@ describe("DOWNTRACE_QUERY_TEXT", () => {
 
 describe("the profile's cadence", () => {
   const base = { DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "https://cloud.example" };
-  const read = (env: Record<string, string>) => {
+  const readResult = (env: Record<string, string>) => {
     const out = configFromEnv({ ...base, ...env });
     if (!out.ok) throw new Error(out.reason);
-    return out.config;
+    return out;
   };
+  const read = (env: Record<string, string>) => readResult(env).config;
 
   // Production does not move. ADR 0017 fixed the minute because the profile's rows count against the project's
   // daily budget, and gh-565 made it overridable without touching the number.
@@ -153,9 +155,86 @@ describe("the profile's cadence", () => {
     expect(c.profileMs).toBe(c.intervalMs);
   });
 
+  // The ceiling is derived the same way the floor is, from the window that reads the profile (gh-716): the
+  // report's diff reads the recent window as the last five minutes, ending one minute ago — the minute being
+  // the arrival budget, what is flushed by then has arrived by the check — and it counts a profile on the
+  // side where it starts. A window that starts at s has arrived by the check only once it has closed and was
+  // flushed at least a minute earlier: the first flush after s + profileMs, at most one interval later. The
+  // starts a check can still read lie in a span of five minutes minus profileMs minus intervalMs, and starts
+  // come one per closed window, spaced at most profileMs + intervalMs apart. For at least one to fall in
+  // that span at every phase, two windows with their two flushes must fit in the five minutes:
+  // 2 * (profileMs + intervalMs) <= 5 * 60_000.
+  it("is never longer than the ceiling derived from the window that reads it", () => {
+    const c = read({ DOWNTRACE_PROFILE_MS: "600000", DOWNTRACE_INTERVAL_MS: "10000" });
+    expect(c.profileMs).toBe(140000);
+  });
+
+  it("takes the value at the ceiling, with no warning", () => {
+    const result = readResult({ DOWNTRACE_PROFILE_MS: "140000", DOWNTRACE_INTERVAL_MS: "10000" });
+    expect(result.config.profileMs).toBe(140000);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("moves the ceiling with the interval that feeds it", () => {
+    const c = read({ DOWNTRACE_PROFILE_MS: "600000", DOWNTRACE_INTERVAL_MS: "1000" });
+    expect(c.profileMs).toBe(149000);
+  });
+
+  it("clamps a value above the ceiling and says so once at start-up", () => {
+    const result = readResult({ DOWNTRACE_PROFILE_MS: "600000", DOWNTRACE_INTERVAL_MS: "10000" });
+    expect(result.config.profileMs).toBe(140000);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("DOWNTRACE_PROFILE_MS=600000");
+    expect(result.warnings[0]).toContain("140000");
+  });
+
+  it("says nothing when the value is inside the floor and the ceiling", () => {
+    const result = readResult({ DOWNTRACE_PROFILE_MS: "2000", DOWNTRACE_INTERVAL_MS: "1000" });
+    expect(result.config.profileMs).toBe(2000);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("falls back to the default when the value is not a positive whole number", () => {
     for (const value of ["", "abc", "0", "-1", "1500.5"]) {
       expect(read({ DOWNTRACE_PROFILE_MS: value }).profileMs, value).toBe(PROFILE_WINDOW_MS);
     }
+  });
+});
+
+/**
+ * The arithmetic the ceiling is derived against (gh-716). The window it is derived from lives in the cloud,
+ * in the detector's geometry, and this package does not import it; this test pins it the way the detector's
+ * own test pins its own windows, so the derivation and its test cannot drift apart.
+ */
+describe("the ceiling's arithmetic, against the window that reads it", () => {
+  // The reader's window: the last five minutes, ending one minute ago. The minute is the arrival budget —
+  // what is flushed by then has arrived by the check — and it shifts the span of readable starts without
+  // changing its width, so it does not enter the arithmetic below. It lives in the cloud, in the detector's
+  // geometry, and this package does not import it (gh-716).
+  const RECENT_MS = 5 * 60_000;
+
+  // A profile window is counted on the side where it starts, and it has arrived by the check only once it
+  // was flushed at least the lag earlier: the first flush after start + P, at most one interval later. So
+  // the starts a check can still read lie in a span of RECENT − P − I, and starts come one per closed
+  // window, spaced at most P + I apart. The worst phase holds the floor of that division: below it, a phase
+  // exists in which the report's window holds no profile that has arrived, and the report says
+  // `no-profile-after` of a route that was profiled as asked.
+  const minimumReadable = (profileMs: number, intervalMs: number): number =>
+    Math.max(0, Math.floor((RECENT_MS - profileMs - intervalMs) / (profileMs + intervalMs)));
+
+  it("at the ceiling, one profile window is readable at every phase", () => {
+    for (const intervalMs of [1_000, 10_000, 60_000]) {
+      const ceiling = profileCeilingMs(intervalMs);
+      expect(minimumReadable(ceiling, intervalMs), `interval ${intervalMs}`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("with the default cadence, several profile windows are", () => {
+    expect(minimumReadable(PROFILE_WINDOW_MS, DEFAULT_INTERVAL_MS)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("above the ceiling, phases hold none: the ticket's 600000 and the first millisecond over", () => {
+    expect(minimumReadable(600_000, DEFAULT_INTERVAL_MS)).toBe(0);
+    expect(minimumReadable(profileCeilingMs(DEFAULT_INTERVAL_MS) + 1, DEFAULT_INTERVAL_MS)).toBe(0);
   });
 });

@@ -18,6 +18,12 @@ export interface AgentConfig {
    *
    * Never below `intervalMs`. The profile rotates on each flush, so a window shorter than the interval that
    * feeds it closes on the very same flush as one equal to it — below that the number stops meaning anything.
+   *
+   * Never above `profileCeilingMs(intervalMs)` either. The report's diff reads the recent window as the last
+   * five minutes, ending one minute ago, and it counts a profile on the side where it starts; a window that
+   * starts at s is in the store by the check only once it has closed, which is the first flush after
+   * s + profileMs. Above the ceiling, phases exist in which the report's window holds no profile that has
+   * arrived, and the report says `no-profile-after` of a route that was profiled as asked (gh-716).
    */
   profileMs: number;
   /** Which observers are on. `DOWNTRACE_INSTRUMENT` takes `all`, `none`, or a list like `pg,http`. */
@@ -54,7 +60,11 @@ export interface AgentConfig {
   shed: SheddableLevel;
 }
 
-export type ConfigResult = { ok: true; config: AgentConfig } | { ok: false; reason: string };
+/**
+ * The result of reading the environment once, at start-up. `warnings` is what the start-up says about a value
+ * it did not take as given: the operator's number stays visible, and so does what happened to it.
+ */
+export type ConfigResult = { ok: true; config: AgentConfig; warnings: string[] } | { ok: false; reason: string };
 
 /** Everything the agent can observe, each switchable on its own so its cost can be measured on its own. */
 export const INSTRUMENTS = ["pg", "http", "redis", "runtime"] as const;
@@ -62,6 +72,35 @@ export type Instrument = (typeof INSTRUMENTS)[number];
 
 export const DEFAULT_INTERVAL_MS = 10_000;
 const MIN_INTERVAL_MS = 1_000;
+
+/**
+ * The ceiling on `profileMs`, as a function of the interval. Derived, not chosen, the way the floor is
+ * (gh-716):
+ *
+ * - The report's diff reads the recent window as the last five minutes, ending one minute ago. The five
+ *   minutes and the minute live in the cloud, in the detector's geometry; this package does not import them,
+ *   it states the arithmetic it is derived against, and a test pins it.
+ * - The one minute is the arrival budget: what is flushed by then has arrived by the check.
+ * - A profile window is counted on the side where it **starts**, and a window that starts at s has arrived
+ *   by the check only once it has closed and was flushed at least a minute earlier. It closes on the first
+ *   flush after s + profileMs, at most one interval later, so the starts a check can still read lie in a
+ *   span of five minutes minus profileMs minus intervalMs.
+ * - Starts come one per closed window, spaced at most profileMs + intervalMs apart. For at least one to
+ *   fall in that span at **every** phase, the span must hold one whole period of the starts:
+ *
+ *   5 * 60_000 − profileMs − intervalMs ≥ profileMs + intervalMs
+ *   profileMs ≤ 5 * 60_000 / 2 − intervalMs
+ *
+ * Above the ceiling, a phase exists in which the report's window holds no profile that has arrived, whatever
+ * the instrumentation is sent, and the report says `no-profile-after` of a route that was profiled as asked.
+ *
+ * The `max` with the interval guards the arithmetic, not a preference: when the interval is so long that two
+ * windows with their two flushes no longer fit in the five minutes at all, the ceiling would go under the
+ * floor, and the floor — where the number stops meaning anything — is the answer.
+ */
+export function profileCeilingMs(intervalMs: number): number {
+  return Math.max(intervalMs, (5 * 60_000) / 2 - intervalMs);
+}
 
 /** Env vars commonly set by deploy platforms, in order of preference, used when DOWNTRACE_VERSION is absent. */
 export const VERSION_ENV_VARS = [
@@ -94,10 +133,22 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
   const interval = Number(env.DOWNTRACE_INTERVAL_MS);
   const intervalMs = Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS;
   const profile = Number(env.DOWNTRACE_PROFILE_MS);
+  const warnings: string[] = [];
   // Shortening it multiplies the profile rows in proportion, and those count against the project's daily
   // budget (invariant 8). The floor is not a number chosen here: it is the interval, because below it the
-  // setting changes nothing.
-  const profileMs = Number.isInteger(profile) && profile > 0 ? Math.max(profile, intervalMs) : PROFILE_WINDOW_MS;
+  // setting changes nothing. The ceiling is derived the same way (profileCeilingMs); above it the number
+  // would no longer buy a profile in the report's window, so it is clamped and said at start-up rather than
+  // taken silently, which is not a no-op the way the floor is.
+  let profileMs = PROFILE_WINDOW_MS;
+  if (Number.isInteger(profile) && profile > 0) {
+    const ceiling = profileCeilingMs(intervalMs);
+    profileMs = Math.min(Math.max(profile, intervalMs), ceiling);
+    if (profile > ceiling) {
+      warnings.push(
+        `DOWNTRACE_PROFILE_MS=${profile} is above the ceiling of ${ceiling} ms, above which the report's recent window can hold no profile that has arrived; using ${ceiling}`,
+      );
+    }
+  }
   return {
     ok: true,
     config: {
@@ -116,6 +167,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
     },
+    warnings,
   };
 }
 
