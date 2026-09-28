@@ -52,6 +52,26 @@ async function startSink(status = 202) {
   return { url, batches, state, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
+/** A cloud that answers each request after `delay` ms, so a drain is under way when it is asked twice. */
+async function slowCloud(delay: number) {
+  const answered: string[] = [];
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      setTimeout(() => {
+        answered.push(req.url ?? "");
+        res.writeHead(202, { "content-type": "application/json" }).end("{}");
+      }, delay);
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    answered,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
 async function startApp() {
   const app = express();
   app.get("/products", (_req, res) => {
@@ -283,6 +303,24 @@ describe("agent v0 (integration)", () => {
     expect(operation?.hash).toBe("abc123");
     // And it says how partial it was rather than claiming a minute it did not have.
     expect(withProfile?.profile?.durationMs).toBeLessThan(60_000);
+  });
+
+  it("a second stop() while the first is still draining waits for the same drain", async () => {
+    // The other door to the same drain (gh-690): the self-disable does `void stop()` after its tenth error,
+    // and the application's `shutdown()` is the second call, the one that then exits. A slow cloud, so the
+    // drain is under way when it is asked twice.
+    const cloud = await slowCloud(150);
+    cleanups.push(cloud.close);
+    const agent = createAgent(config(cloud.url), { log: quiet });
+    agent.start();
+    const request = { method: "GET", url: "/orders" };
+    channel("http.server.request.start").publish({ request });
+    channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+
+    const first = agent.stop();
+    await agent.stop();
+    expect(cloud.answered, "the second stop() resolved before the drain was done").toContain(AGGREGATES_PATH);
+    await first;
   });
 
   // The other half of gh-371, and the one a mutation slipped past first: draining is for leaving, not for

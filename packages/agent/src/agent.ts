@@ -228,6 +228,12 @@ export class Agent {
    * the set is bounded too.
    */
   private readonly flushing = new Set<Promise<boolean>>();
+  /**
+   * The drain `stop()` is under way, for a second call to wait for instead of resolving over it: the second
+   * caller is the one about to `process.exit()`, and a promise that settles in the instant cuts the first
+   * drain's last batch with the process (gh-690). Cleared when it settles, so a finished drain holds nothing.
+   */
+  private stopping: Promise<void> | undefined;
   private readonly onBeforeExit = (): void => {
     void this.flush(SHUTDOWN_FLUSH_MS, true);
   };
@@ -466,9 +472,13 @@ export class Agent {
     );
   }
 
-  /** Unsubscribes and stops timers; attempts a last flush. Idempotent. */
-  async stop(): Promise<void> {
-    if (!this.started) return;
+  /**
+   * Unsubscribes and stops timers; attempts a last flush. Idempotent, and a second call while the first is
+   * still draining waits for the same drain instead of resolving over it (gh-690).
+   */
+  stop(): Promise<void> {
+    if (this.stopping !== undefined) return this.stopping;
+    if (!this.started) return Promise.resolve();
     this.started = false;
     process.removeListener("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
@@ -481,7 +491,13 @@ export class Agent {
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);
-    await this.flush(SHUTDOWN_FLUSH_MS, true);
+    const stopping: Promise<void> = this.flush(SHUTDOWN_FLUSH_MS, true).then(() => undefined);
+    this.stopping = stopping;
+    const forget = (): void => {
+      this.stopping = undefined;
+    };
+    stopping.then(forget, forget);
+    return stopping;
   }
 
   /** Closes the current interval and sends everything queued. */

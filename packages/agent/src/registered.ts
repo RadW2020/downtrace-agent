@@ -11,10 +11,17 @@ import type { Agent } from "./agent.ts";
  * `process.exit()` silently loses its last interval, its profile window and any capture evidence — which is
  * what was happening (gh-383).
  *
- * One variable, written once, read by one function. Nothing else in the package touches it: the agent
- * itself takes everything it needs as arguments, and this module knows nothing about what an agent does.
+ * Two variables, both touched by this module only: the agent, and the drain under way beside it. Nothing
+ * else in the package touches them: the agent itself takes everything it needs as arguments, and this
+ * module knows nothing about what an agent does.
  */
 let running: Agent | undefined;
+/**
+ * The drain `shutdown()` is under way, beside the agent it started. A second call that finds it returns it:
+ * the second caller is the one about to `process.exit()`, and a promise that settles in the instant cuts
+ * the first drain's last batch with the process (gh-690). Forgotten when it settles.
+ */
+let draining: Promise<void> | undefined;
 
 /** Remembers the agent the entry point started. Called once, by `register.ts`. */
 export function remember(agent: Agent): void {
@@ -47,17 +54,24 @@ export function registered(): Agent | undefined {
  * ```
  *
  * Safe to call when the instrumentation is off — an unconfigured agent was never started — and safe to call
- * twice: the second time there is nothing left to send. Never throws: an application on its way out has
- * nothing to do with an error from its telemetry.
+ * twice: a second call that finds the first still draining waits for the same drain, because its caller is
+ * the one about to `process.exit()` (gh-690). Never throws: an application on its way out has nothing to do
+ * with an error from its telemetry.
  */
 export async function shutdown(): Promise<void> {
+  if (draining !== undefined) return draining;
   const agent = running;
   running = undefined;
   if (!agent) return;
-  try {
-    await agent.stop();
-  } catch {
-    // Deliberately swallowed, and the only place in this package where that is right: the application is
-    // leaving, this is the last thing it does, and there is nobody left to tell.
-  }
+  draining = (async () => {
+    try {
+      await agent.stop();
+    } catch {
+      // Deliberately swallowed, and the only place in this package where that is right: the application is
+      // leaving, this is the last thing it does, and there is nobody left to tell.
+    } finally {
+      draining = undefined;
+    }
+  })();
+  await draining;
 }

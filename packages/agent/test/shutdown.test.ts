@@ -44,14 +44,19 @@ const agentDir = fileURLToPath(new URL("..", import.meta.url));
  * Through the entry point and not through `createAgent`, because the entry point is the thing under test:
  * it is what creates an agent the application never sees, and what has to leave it reachable.
  */
-async function leaving(url: string, waitFirst: boolean, env: Record<string, string> = {}): Promise<number> {
+/** `wait` is what the process does before `process.exit()`: nothing, one awaited `shutdown()`, or a second one. */
+async function leaving(
+  url: string,
+  wait: "none" | "await" | "again",
+  env: Record<string, string> = {},
+): Promise<number> {
   const script = `
     import { channel } from "node:diagnostics_channel";
     import { shutdown } from "${agentDir}src/registered.ts";
     const request = { method: "GET", url: "/orders" };
     channel("http.server.request.start").publish({ request });
     channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
-    ${waitFirst ? "await shutdown();" : ""}
+    ${wait === "await" ? "await shutdown();" : wait === "again" ? "shutdown();\nawait shutdown();" : ""}
     process.exit(0);
   `;
   const child = spawn(
@@ -83,7 +88,7 @@ describe("an application that leaves on its own", () => {
     // The failure, pinned. Not a warning about a race: the batch is simply not there.
     const s = await sink();
     servers.push(s.close);
-    expect(await leaving(s.url, false)).toBe(0);
+    expect(await leaving(s.url, "none")).toBe(0);
     await new Promise((r) => setTimeout(r, 300));
     expect(s.batches, "the batch arrived without anybody waiting for it").toBe(0);
   });
@@ -91,7 +96,18 @@ describe("an application that leaves on its own", () => {
   it("keeps it when it waits", async () => {
     const s = await sink();
     servers.push(s.close);
-    expect(await leaving(s.url, true)).toBe(0);
+    expect(await leaving(s.url, "await")).toBe(0);
+    expect(s.batches).toBe(1);
+  });
+
+  it("a second shutdown() that leaves does not cut the first drain", async () => {
+    // Two callers, the shape an application has: one asks for the hand-over without waiting —a signal's
+    // handler, the self-disable after its tenth error— and the other awaits, and leaves when it resolves.
+    // The second is the one `process.exit()` listens to, and a promise that resolves in the instant cuts
+    // the first drain mid-batch: the last batch leaves with the process (gh-690).
+    const s = await sink();
+    servers.push(s.close);
+    expect(await leaving(s.url, "again")).toBe(0);
     expect(s.batches).toBe(1);
   });
 
@@ -100,7 +116,7 @@ describe("an application that leaves on its own", () => {
     // never started must not be the thing that keeps it from exiting.
     const s = await sink();
     servers.push(s.close);
-    expect(await leaving(s.url, true, { DOWNTRACE_TOKEN: "", DOWNTRACE_URL: "" })).toBe(0);
+    expect(await leaving(s.url, "await", { DOWNTRACE_TOKEN: "", DOWNTRACE_URL: "" })).toBe(0);
     expect(s.batches).toBe(0);
   });
 });
