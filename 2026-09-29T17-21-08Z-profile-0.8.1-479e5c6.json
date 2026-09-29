@@ -1,0 +1,465 @@
+{
+  "kind": "profile",
+  "generatedAt": "2026-09-29T17:21:08.825Z",
+  "subject": {
+    "sourceCommit": "479e5c618410d2992ec342ca1ff29a4f7638dece",
+    "agentPath": "packages/agent/src/register.ts",
+    "version": "0.8.1",
+    "commit": "c5ddfc00b9bc341d7a78ebf05e430692bc6a8e4a",
+    "dirty": false,
+    "source": "working-tree"
+  },
+  "host": {
+    "cores": 4,
+    "memoryMb": 15947,
+    "cpu": null
+  },
+  "node": "v24.21.0",
+  "platform": "linux-arm64",
+  "config": {
+    "rounds": 1,
+    "measureSec": 20,
+    "rps": 200,
+    "seed": 1
+  },
+  "baseline": {
+    "ok": true,
+    "files": 1,
+    "windowMs": 23383.1,
+    "idleMs": 19734.4,
+    "totalMs": 3648.2,
+    "samples": 21911,
+    "groups": [
+      {
+        "group": "agent",
+        "selfMs": 6.4,
+        "share": 0.001744404214967394
+      },
+      {
+        "group": "application",
+        "selfMs": 87.9,
+        "share": 0.024100682055469533
+      },
+      {
+        "group": "pg",
+        "selfMs": 366.3,
+        "share": 0.10040767636532386
+      },
+      {
+        "group": "node",
+        "selfMs": 1319.3,
+        "share": 0.3616278218767037
+      },
+      {
+        "group": "runtime",
+        "selfMs": 1390.1,
+        "share": 0.38103281119072036
+      },
+      {
+        "group": "other",
+        "selfMs": 478.2,
+        "share": 0.13108660429681515
+      }
+    ],
+    "top": [
+      {
+        "function": "writev",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 629.5,
+        "share": 0.1725419702722164
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 219.5,
+        "share": 0.06017810794638616
+      },
+      {
+        "function": "writeUtf8String",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 135.6,
+        "share": 0.03717137894276057
+      },
+      {
+        "function": "writeBuffer",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 134.8,
+        "share": 0.03696223682836395
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 65.2,
+        "share": 0.01785876301347747
+      },
+      {
+        "function": "parse",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/content-type@1.0.5/node_modules/content-type/index.js",
+        "group": "other",
+        "selfMs": 51.5,
+        "share": 0.01412106724426072
+      },
+      {
+        "function": "runMicrotasks",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 47.2,
+        "share": 0.012930081022696716
+      },
+      {
+        "function": "addFields",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/pg@8.23.0/node_modules/pg/lib/result.js",
+        "group": "pg",
+        "selfMs": 46.2,
+        "share": 0.012670503588445597
+      },
+      {
+        "function": "handle",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/application.js",
+        "group": "other",
+        "selfMs": 42,
+        "share": 0.011522551851757438
+      },
+      {
+        "function": "Hash",
+        "url": "node:internal/crypto/hash",
+        "group": "node",
+        "selfMs": 41.9,
+        "share": 0.01149075567184917
+      },
+      {
+        "function": "utf8Slice",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 41.8,
+        "share": 0.011451558656962253
+      },
+      {
+        "function": "nextTick",
+        "url": "node:internal/process/task_queues",
+        "group": "node",
+        "selfMs": 40.7,
+        "share": 0.011145657477844777
+      },
+      {
+        "function": "onStreamRead",
+        "url": "node:internal/stream_base_commons",
+        "group": "node",
+        "selfMs": 35.5,
+        "share": 0.009721956111952156
+      },
+      {
+        "function": "parserOnHeadersComplete",
+        "url": "node:_http_common",
+        "group": "node",
+        "selfMs": 35.3,
+        "share": 0.009688515302048633
+      },
+      {
+        "function": "emit",
+        "url": "node:events",
+        "group": "node",
+        "selfMs": 31.7,
+        "share": 0.008697077519908931
+      },
+      {
+        "function": "stringify",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/response.js",
+        "group": "other",
+        "selfMs": 31.3,
+        "share": 0.008570166905275069
+      },
+      {
+        "function": "parseRow",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/pg@8.23.0/node_modules/pg/lib/result.js",
+        "group": "pg",
+        "selfMs": 29.3,
+        "share": 0.008038129101809998
+      },
+      {
+        "function": "wrapSafe",
+        "url": "node:internal/modules/cjs/loader",
+        "group": "node",
+        "selfMs": 26.6,
+        "share": 0.007299964338939603
+      },
+      {
+        "function": "toString",
+        "url": "node:buffer",
+        "group": "node",
+        "selfMs": 23.7,
+        "share": 0.00650588215623053
+      },
+      {
+        "function": "_addHeaderLine",
+        "url": "node:_http_incoming",
+        "group": "node",
+        "selfMs": 23.5,
+        "share": 0.006434340751436927
+      },
+      {
+        "function": "createWriteWrap",
+        "url": "node:internal/stream_base_commons",
+        "group": "node",
+        "selfMs": 21.5,
+        "share": 0.005891886958001906
+      },
+      {
+        "function": "processTicksAndRejections",
+        "url": "node:internal/process/task_queues",
+        "group": "node",
+        "selfMs": 21.5,
+        "share": 0.005882841493028002
+      },
+      {
+        "function": "(anonymous)",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 21.3,
+        "share": 0.005845837318134759
+      },
+      {
+        "function": "parserOnIncoming",
+        "url": "node:_http_server",
+        "group": "node",
+        "selfMs": 19.8,
+        "share": 0.005415492469376304
+      },
+      {
+        "function": "Socket._writeGeneric",
+        "url": "node:net",
+        "group": "node",
+        "selfMs": 18.5,
+        "share": 0.005062719335394055
+      }
+    ]
+  },
+  "agent": {
+    "ok": true,
+    "files": 1,
+    "windowMs": 23346.2,
+    "idleMs": 19269.5,
+    "totalMs": 4076.1,
+    "samples": 21917,
+    "groups": [
+      {
+        "group": "agent",
+        "selfMs": 319.7,
+        "share": 0.07844448587858924
+      },
+      {
+        "group": "application",
+        "selfMs": 94.1,
+        "share": 0.023079282055308042
+      },
+      {
+        "group": "pg",
+        "selfMs": 360.5,
+        "share": 0.08845410296166906
+      },
+      {
+        "group": "node",
+        "selfMs": 1443.3,
+        "share": 0.3540865243076681
+      },
+      {
+        "group": "runtime",
+        "selfMs": 1356.3,
+        "share": 0.332744941218033
+      },
+      {
+        "group": "other",
+        "selfMs": 502.1,
+        "share": 0.12319066357873251
+      }
+    ],
+    "top": [
+      {
+        "function": "writev",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 571.6,
+        "share": 0.14023645267021256
+      },
+      {
+        "function": "(program)",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 206.7,
+        "share": 0.05070778787462464
+      },
+      {
+        "function": "writeBuffer",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 142,
+        "share": 0.03482659810406077
+      },
+      {
+        "function": "writeUtf8String",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 127.6,
+        "share": 0.031294282742242545
+      },
+      {
+        "function": "(garbage collector)",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 77,
+        "share": 0.018879168220447096
+      },
+      {
+        "function": "utf8Slice",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 52,
+        "share": 0.012751467095837177
+      },
+      {
+        "function": "parse",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/content-type@1.0.5/node_modules/content-type/index.js",
+        "group": "other",
+        "selfMs": 46.9,
+        "share": 0.01149633962041962
+      },
+      {
+        "function": "runMicrotasks",
+        "url": "",
+        "group": "runtime",
+        "selfMs": 44.9,
+        "share": 0.011026525485270161
+      },
+      {
+        "function": "_addHeaderLine",
+        "url": "node:_http_incoming",
+        "group": "node",
+        "selfMs": 40.5,
+        "share": 0.009939451629997448
+      },
+      {
+        "function": "addFields",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/pg@8.23.0/node_modules/pg/lib/result.js",
+        "group": "pg",
+        "selfMs": 40.2,
+        "share": 0.00985579282055308
+      },
+      {
+        "function": "nextTick",
+        "url": "node:internal/process/task_queues",
+        "group": "node",
+        "selfMs": 36.5,
+        "share": 0.00895934329061255
+      },
+      {
+        "function": "bind",
+        "url": "node:async_hooks",
+        "group": "node",
+        "selfMs": 35.4,
+        "share": 0.008676964142018802
+      },
+      {
+        "function": "stringify",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/response.js",
+        "group": "other",
+        "selfMs": 32.3,
+        "share": 0.007912994838177857
+      },
+      {
+        "function": "handle",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/application.js",
+        "group": "other",
+        "selfMs": 32,
+        "share": 0.007854850738945261
+      },
+      {
+        "function": "recordCallIn",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/packages/agent/src/context.ts",
+        "group": "agent",
+        "selfMs": 31,
+        "share": 0.007613932994445644
+      },
+      {
+        "function": "requestStarted",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/packages/agent/src/agent.ts",
+        "group": "agent",
+        "selfMs": 29.9,
+        "share": 0.007340385860925202
+      },
+      {
+        "function": "onStreamRead",
+        "url": "node:internal/stream_base_commons",
+        "group": "node",
+        "selfMs": 28.8,
+        "share": 0.0070771427449902845
+      },
+      {
+        "function": "emit",
+        "url": "node:events",
+        "group": "node",
+        "selfMs": 28.6,
+        "share": 0.007017526643245471
+      },
+      {
+        "function": "parserOnHeadersComplete",
+        "url": "node:_http_common",
+        "group": "node",
+        "selfMs": 27.9,
+        "share": 0.006848737021844517
+      },
+      {
+        "function": "toString",
+        "url": "node:buffer",
+        "group": "node",
+        "selfMs": 27,
+        "share": 0.006613952621145807
+      },
+      {
+        "function": "Hash",
+        "url": "node:internal/crypto/hash",
+        "group": "node",
+        "selfMs": 25.8,
+        "share": 0.006322496123726718
+      },
+      {
+        "function": "record",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/packages/agent/src/aggregator.ts",
+        "group": "agent",
+        "selfMs": 25.8,
+        "share": 0.00632494946124708
+      },
+      {
+        "function": "wrapSafe",
+        "url": "node:internal/modules/cjs/loader",
+        "group": "node",
+        "selfMs": 25.6,
+        "share": 0.006283733390904987
+      },
+      {
+        "function": "parserOnIncoming",
+        "url": "node:_http_server",
+        "group": "node",
+        "selfMs": 21.7,
+        "share": 0.00533110243174815
+      },
+      {
+        "function": "header",
+        "url": "file:///home/runner/work/downtrace-agent/downtrace-agent/node_modules/.pnpm/express@5.2.1/node_modules/express/lib/response.js",
+        "group": "other",
+        "selfMs": 20.6,
+        "share": 0.005057555298227709
+      }
+    ]
+  },
+  "hooks": {
+    "hookMsPerRequest": 0.0342,
+    "insideHooksPp": 0.007,
+    "deltaCpuPp": 2.907,
+    "outsideHooksPp": 2.9
+  }
+}
