@@ -452,12 +452,11 @@ describe("the rating of a finding, given through this server", () => {
     const { s, calls } = server([{}]);
     await s.handle("tools/call", {
       name: "give_feedback",
-      arguments: { project: "tienda", finding: "7", accuracy: "correct", usefulness: "useful", by: "claude" },
+      arguments: { project: "tienda", finding: "7", accuracy: "correct", usefulness: "useful" },
     });
     expect(only(calls, 0).body).toEqual({
       accuracy: "correct",
       usefulness: "useful",
-      by: "claude",
       kind: "coding-agent",
     });
   });
@@ -481,14 +480,12 @@ describe("the rating of a finding, given through this server", () => {
           finding: "7",
           accuracy: "correct",
           usefulness: "useful",
-          by: "claude",
           kind: written,
         },
       });
       expect(only(calls, 0).body).toEqual({
         accuracy: "correct",
         usefulness: "useful",
-        by: "claude",
         kind: "coding-agent",
       });
     }
@@ -503,19 +500,119 @@ describe("the rating of a finding, given through this server", () => {
     expect(description).toContain("signal, not as accuracy");
   });
 
-  it("keeps the two axes and the attribution beside the declared kind", async () => {
+  // The justification the agent records with the rating (product.md:211): it is an argument the schema
+  // offers, and it travels in the body beside the declared kind. Before, it had to be hand-written in
+  // to travel at all, because the schema did not name it.
+  it("carries the rating's justification in the body, beside the declared kind", async () => {
     const { s, calls } = server([{}]);
     await s.handle("tools/call", {
       name: "give_feedback",
-      arguments: { project: "tienda", finding: "7", usefulness: "useful", by: "claude", note: "worth having" },
+      arguments: {
+        project: "tienda",
+        finding: "7",
+        accuracy: "correct",
+        usefulness: "useful",
+        note: "the loop was in the commit the report pointed at",
+      },
     });
     expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/findings/7/feedback");
     expect(only(calls, 0).body).toEqual({
+      accuracy: "correct",
       usefulness: "useful",
-      by: "claude",
-      note: "worth having",
+      note: "the loop was in the commit the report pointed at",
       kind: "coding-agent",
     });
+  });
+
+  // The justification is a string by the schema. A note that is not one is passed through as the cloud
+  // will read it — the server does not guess at the agent's words — and the kind is not lost for it.
+  it("keeps the declared kind when the note is not a string", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "give_feedback",
+      arguments: { project: "tienda", finding: "7", accuracy: "correct", note: 42 },
+    });
+    expect(only(calls, 0).body).toEqual({
+      accuracy: "correct",
+      note: 42,
+      kind: "coding-agent",
+    });
+  });
+
+  // gh-863: the tool no longer offers `by` — the cloud ignores it when a credential is present, and this
+  // server always presents one — and it offers `note`, the justification. From the source, not a copy.
+  it("does not declare by, and declares the justification as an optional string", () => {
+    const tool = toolNamed("give_feedback");
+    expect(tool?.inputSchema.properties.by).toBeUndefined();
+    expect(tool?.inputSchema.required).not.toContain("by");
+    expect(tool?.inputSchema.properties.note?.type).toBe("string");
+    // Optional: a rating without a justification is still a rating.
+    expect(tool?.inputSchema.required).not.toContain("note");
+  });
+});
+
+/**
+ * FDB-01 and invariant 12, on the reading of a hypothesis: the product keeps the coding agent's
+ * assessment of a hypothesis apart from the person's, the same way it keeps the rating apart. Before,
+ * the body carried no kind and the cloud defaulted a missing one to `person`, so an assessment made
+ * through this server was stored as the person's (gh-863, the hole gh-746 closed in the rating and left
+ * in this one).
+ */
+describe("the assessment of a hypothesis, given through this server", () => {
+  // The case the ticket names: the assessment an agent makes was stored as a person's, because the body
+  // carried no kind and the cloud defaults to one. The body says who it is.
+  it("sends the assessment as a coding agent's, so the cloud does not default it to a person's", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "assess_hypothesis",
+      arguments: {
+        project: "tienda",
+        finding: "7",
+        hypothesis: "n-plus-one",
+        state: "supported",
+        why: "the query repeats in the diff of the deploy",
+        version: "abc123",
+      },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/findings/7/hypotheses/n-plus-one/assessment");
+    expect(only(calls, 0).headers["if-match"]).toBe("abc123");
+    expect(only(calls, 0).body).toEqual({
+      state: "supported",
+      why: "the query repeats in the diff of the deploy",
+      kind: "coding-agent",
+    });
+  });
+
+  it("does not offer the kind in the schema, and does not let a hand-written one override it", async () => {
+    // What is not in the schema is not offered: the caller of this server is by construction a coding
+    // agent, and there is nothing to choose.
+    const tool = toolNamed("assess_hypothesis");
+    expect(tool?.inputSchema.properties.kind).toBeUndefined();
+    expect(tool?.inputSchema.required).not.toContain("kind");
+
+    // A kind hand-written into the call would have reached the cloud, because the body carries every
+    // argument that does not address the resource: the one that says `person` would have let an agent
+    // assess as a person. It does not get through, whatever it says or what type it is.
+    for (const written of ["person", 42]) {
+      const { s, calls } = server([{}]);
+      await s.handle("tools/call", {
+        name: "assess_hypothesis",
+        arguments: {
+          project: "tienda",
+          finding: "7",
+          hypothesis: "n-plus-one",
+          state: "supported",
+          why: "the query repeats in the diff of the deploy",
+          version: "abc123",
+          kind: written,
+        },
+      });
+      expect(only(calls, 0).body).toEqual({
+        state: "supported",
+        why: "the query repeats in the diff of the deploy",
+        kind: "coding-agent",
+      });
+    }
   });
 });
 

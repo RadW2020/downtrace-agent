@@ -455,7 +455,7 @@ export const tools: Tool[] = [
         finding,
         accuracy: { type: "string", description: "correct | partial | incorrect | not-assessable" },
         usefulness: { type: "string", description: "useful | unnecessary" },
-        by: { type: "string", description: "Who is saying it." },
+        note: { type: "string", description: "The justification of the rating, when you have one." },
         idempotencyKey,
       },
       required: ["project", "finding"],
