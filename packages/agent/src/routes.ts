@@ -31,6 +31,11 @@ export interface RouteSource {
   baseUrl?: unknown;
   /** The Express app the request is being answered by, when there is one: the root of the mount walk. */
   app?: unknown;
+  /**
+   * The path the client asked for, as Express keeps it: not trimmed by the mounts, and not changed when the
+   * request moves through them, so it can be read at the end of the response (gh-766).
+   */
+  originalUrl?: unknown;
 }
 
 /**
@@ -39,10 +44,17 @@ export interface RouteSource {
  * they were registered with — never as the values they matched (invariant 5, gh-858); otherwise collapses
  * a segment that carries a value into `:id`, so that a parameter of the request does not leave
  * (invariant 5, gh-756).
+ *
+ * Without a template, the heuristic starts from the path the client asked for, `originalUrl`, when it is a
+ * string: Express trims `url` as the request passes through the mounts, and a middleware that answers before
+ * any route matched would lose the mount's prefix (gh-766). `originalUrl` is what the request was born with,
+ * and it stays what it was whatever `next()` did, which is why it can be read at the end of the response,
+ * where `baseUrl` plus `url` could not be.
  */
 export function routeOf(req: RouteSource): string {
   const template = expressTemplate(req);
-  const route = template ?? heuristicTemplate(req.url ?? "/");
+  const asked = typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/");
+  const route = template ?? heuristicTemplate(asked);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
 }
 

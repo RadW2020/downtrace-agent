@@ -245,6 +245,72 @@ describe("what actually leaves, in the bytes", () => {
   });
 
   /**
+   * gh-766. The other half of the same door: a middleware of a mounted router answers before any route
+   * matched, and Express has trimmed `url` for it — the path the client asked for sits in `originalUrl`,
+   * and so do the values. The route is read off a request a real Express (5.2.1, the package's
+   * devDependency) answered, at the end of the response, the way the agent reads it.
+   */
+  it("carries none of the values a mounted middleware's originalUrl held, and the route they became", async () => {
+    const router = express.Router();
+    router.use((_req, res) => {
+      res.status(401).json({});
+    });
+    const app = express();
+    app.use("/admin", router);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const routes: string[] = [];
+    const finish = (message: unknown): void => {
+      const request = (message as { request?: unknown }).request;
+      if (request !== null && typeof request === "object") routes.push(routeOf(request as RouteSource));
+    };
+    const ch = channel("http.server.response.finish");
+    ch.subscribe(finish);
+    for (const path of ["/admin/users/ana%40cliente.com/orders", "/admin/reset-password/Zx8kQ2vN4pL9mR7tY3wB"]) {
+      const res = await fetch(base + path);
+      await res.arrayBuffer();
+    }
+    ch.unsubscribe(finish);
+    server.close();
+    expect(routes, "the two requests were read").toEqual(["/admin/users/:id/orders", "/admin/reset-password/:id"]);
+
+    // The aggregates door: the real interval the sender enqueues.
+    const recorder = new IntervalAggregator({ now: () => 1_000_000 });
+    for (const route of routes) recorder.record("GET", route, 401, 1);
+    const interval = recorder.rotate();
+    expect(interval, "the interval should have rotated").not.toBeNull();
+
+    let body = "";
+    const sender = new Sender({
+      url: "http://sink.invalid",
+      token: "t",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v0" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        body = String(init.body);
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch,
+      now: () => 1_000_000,
+    });
+    if (interval) sender.enqueue(interval);
+    expect(await sender.flush()).toBe(true);
+    expect(body, "nothing was sent").not.toBe("");
+
+    for (const value of ["ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB"]) {
+      expect(body, `«${value}» reached the wire`).not.toContain(value);
+    }
+    // And what those values became did arrive, prefix and all: omission has to be the exception.
+    for (const route of routes) {
+      expect(body, `«${route}» never reached the wire`).toContain(`"route":"${route}"`);
+    }
+    expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
+  });
+
+  /**
    * gh-858. The mount's own value used to be the route: `app.use("/tenants/:tenant", router)` put the
    * tenant's name in every batch, and the heuristic would not have saved it, because a slug like
    * `acme-corp` is of what `segmentLooksLikeValue` leaves as written. The route is built here from a

@@ -131,7 +131,7 @@ export interface AgentStats {
 }
 
 interface FinishMessage {
-  request?: { method?: string; url?: string; route?: unknown; baseUrl?: unknown };
+  request?: { method?: string; url?: string; route?: unknown; baseUrl?: unknown; originalUrl?: unknown };
   response?: { statusCode?: number };
 }
 

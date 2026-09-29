@@ -545,7 +545,8 @@ its segments come out as `:param` instead of the values they carried — the req
 route. That happens for a mount registered with a regular expression (there is no pattern to read), for an app
 mounted under a router (Express records no prefix in that case), and for routes registered on a copy of Express
 different from the one the agent wrapped (a duplicated dependency). Without a framework — and for whatever Express
-answers before a route matched, a middleware's 401 or a 404 — a segment that carries a value is collapsed into `:id`: anything with
+answers before a route matched, a middleware's 401 or a 404, read as the path the client asked for, the prefix of
+the mount it passed through and all — a segment that carries a value is collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
 version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
 A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a

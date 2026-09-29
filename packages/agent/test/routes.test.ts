@@ -25,6 +25,30 @@ describe("routeOf", () => {
     expect(routeOf({ url: "/", route: { path: 42 } })).toBe("/");
   });
 
+  it("starts the heuristic from the path the client asked for, when Express trimmed it (gh-766)", () => {
+    // The shape a mounted middleware's request has when the response finishes: `url` trimmed by the mount,
+    // `originalUrl` the path the client asked for.
+    expect(routeOf({ url: "/x", originalUrl: "/admin/x" })).toBe("/admin/x");
+    expect(routeOf({ url: "/app.css", originalUrl: "/static/app.css" })).toBe("/static/app.css");
+    // A value in any segment of the path, the prefix and all.
+    expect(
+      routeOf({ url: "/users/ana%40cliente.com/orders", originalUrl: "/admin/users/ana%40cliente.com/orders" }),
+    ).toBe("/admin/users/:id/orders");
+    expect(routeOf({ url: "/Zx8kQ2vN4pL9mR7tY3wB", originalUrl: "/admin/reset-password/Zx8kQ2vN4pL9mR7tY3wB" })).toBe(
+      "/admin/reset-password/:id",
+    );
+    // What is not a string is not read: plain Node has no `originalUrl`, and a top-level middleware's is the
+    // same as `url`, so neither of them changes what the heuristic already did.
+    expect(routeOf({ url: "/users/42" })).toBe("/users/:id");
+    expect(routeOf({ url: "/x", originalUrl: 42 })).toBe("/x");
+    expect(routeOf({ url: "/x", originalUrl: undefined })).toBe("/x");
+    expect(routeOf({ originalUrl: "/admin/x" })).toBe("/admin/x");
+    // A matched route still wins, whatever the client asked for.
+    expect(
+      routeOf({ url: "/items/42", originalUrl: "/admin/items/42", route: { path: "/items/:id" }, baseUrl: "" }),
+    ).toBe("/items/:id");
+  });
+
   it("caps very long routes", () => {
     expect(routeOf({ url: `/${"x".repeat(1000)}` })).toHaveLength(256);
     expect(heuristicTemplate(`/${"a".repeat(1000)}`)).toBe("/:id"); // long hex looks like an id
