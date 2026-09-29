@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import express from "express";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntervalAggregator } from "../src/aggregator.ts";
 import { enterRequest, recordOperationIn } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
@@ -63,7 +63,16 @@ const SECRETS = [
 ];
 
 describe("what actually leaves, in the bytes", () => {
+  afterEach(() => {
+    // The first test pins the system clock; the pin must not leak past it.
+    vi.useRealTimers();
+  });
+
   it("carries none of it, and is still a batch the schema accepts", async () => {
+    // The system clock pinned at the 2026-09-28 failure: ten seconds below, the thirteen digits the interval
+    // used to carry read 1790604821940, which holds "4821". If the real clock ever rides a swept byte again,
+    // the sweep below fails (gh-829).
+    vi.useFakeTimers({ now: 1_790_604_831_940, toFake: ["Date"] });
     const fingerprints = new FingerprintCache();
     const errors = new ErrorFingerprintCache();
     const profile = new ProfileAggregator({
@@ -98,8 +107,9 @@ describe("what actually leaves, in the bytes", () => {
       }) as unknown as typeof fetch,
       now: () => 1_000_000,
     });
-    // A batch needs an interval: the profile rides with one, it is not a batch on its own.
-    sender.enqueue({ start: Date.now() - 10_000, durationMs: 10_000, endpoints: [] });
+    // A batch needs an interval: the profile rides with one, it is not a batch on its own. Its start comes from
+    // the sender's clock and never from the system's, so no swept byte carries the real clock (gh-829).
+    sender.enqueue({ start: 1_000_000 - 10_000, durationMs: 10_000, endpoints: [] });
     if (rotated) sender.enqueueProfile(rotated);
     expect(await sender.flush()).toBe(true);
     expect(body, "nothing was sent").not.toBe("");
@@ -166,7 +176,8 @@ describe("what actually leaves, in the bytes", () => {
       }) as unknown as typeof fetch,
       now: () => 1_000_000,
     });
-    sender.enqueue({ start: Date.now() - 10_000, durationMs: 10_000, endpoints: [] });
+    // The start comes from the sender's clock, not the system's (gh-829).
+    sender.enqueue({ start: 1_000_000 - 10_000, durationMs: 10_000, endpoints: [] });
     if (rotated) sender.enqueueProfile(rotated);
     expect(await sender.flush()).toBe(true);
 
