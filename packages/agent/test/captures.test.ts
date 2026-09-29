@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Captures, type LiveCapture, MAX_LIVE_CAPTURES, type PrearmReserve, sliceFor } from "../src/captures.ts";
 import { dependencyKey } from "../src/context.ts";
 import type { FineRequest, FineSnapshot } from "../src/fine.ts";
+import { withheldName } from "../src/minimal.ts";
 import type { PendingCapture } from "../src/transport.ts";
 
 const order = (id: string, over: Partial<PendingCapture> = {}): PendingCapture => ({
@@ -306,6 +307,65 @@ describe("evidence of an armed route", () => {
     } as unknown as FineSnapshot;
 
     expect(sliceFor(capture, snapshot, (r) => r, []).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
+  });
+});
+
+// gh-860, at the level where the two registers meet, in minimal mode. `nameOf` is no longer the identity and
+// it is not idempotent: the order carries the withheld name, the arm is keyed by it, and the rows — ring and
+// reserve — keep the template as it was served. The one comparison goes through the one encryption; a name
+// withheld twice matches nothing, and a row that leaves encrypted twice carries a name the cloud has never
+// seen.
+describe("evidence of an armed route, in minimal mode", () => {
+  const template = "/cart";
+  const nameOf = (route: string): string => withheldName(route);
+  const capture: LiveCapture = {
+    id: "cap-1",
+    footprint: { method: "GET", route: withheldName(template) },
+    startedAt: 1_000,
+    endsAt: 9_000,
+    reported: false,
+  };
+  const row = (startedAt: number, over: Partial<FineRequest> = {}): FineRequest => ({
+    method: "GET",
+    route: template,
+    status: 200,
+    startedAt,
+    durationMs: 10,
+    operations: [],
+    dependencies: [],
+    truncated: false,
+    detailLost: false,
+    ...over,
+  });
+  const snapshot = {
+    requests: [row(900), row(1_100)],
+    coverage: { requestCapacity: 10, operationCapacity: 10, requests: 2, detailLost: 0, truncated: 0 },
+  } as unknown as FineSnapshot;
+
+  it("joins the ring and the reserve by the withheld name, and no request appears twice", () => {
+    // The reserve is keyed by the name the cloud knows; its rows keep the template, the same the ring's do.
+    const slice = sliceFor(capture, snapshot, nameOf, [
+      { method: "GET", route: withheldName(template), armedAt: 1_050, requests: [row(1_100), row(1_200)] },
+    ]);
+    // 900 is the ring's alone (before the arm), 1100 the ring gave up to the reserve, 1200 only the reserve
+    // holds.
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([900, 1_100, 1_200]);
+    // And the rows keep the template as it was served: the encryption is the exit's, not this one's.
+    expect(slice.requests.every((r) => r.route === template)).toBe(true);
+  });
+
+  it("finds nothing of a reserve whose rows left withheld already, the way they used to", () => {
+    // The bug gh-860 fixed, asked of the matcher alone: a row stored under the outside name is withheld
+    // again by the comparison and matches nothing. Only the ring's rows remain.
+    const slice = sliceFor(capture, snapshot, nameOf, [
+      {
+        method: "GET",
+        route: withheldName(template),
+        armedAt: 1_050,
+        requests: [row(1_100, { route: withheldName(template) }), row(1_200, { route: withheldName(template) })],
+      },
+    ]);
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([900]);
   });
 });
 

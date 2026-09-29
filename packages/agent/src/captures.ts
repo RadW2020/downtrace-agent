@@ -143,9 +143,11 @@ export class Captures {
  * What an armed route kept for itself, if this capture is about one. `armedAt` is when its arm began, which is
  * the instant from which the reserve —and not the shared ring— is what this route's detail comes from.
  *
- * The method and the route are the arm's label, the one every row of this reserve carries: a capture that is
- * about none of its routes by name reads several of these at once, and each owns the window of the ring it
- * replaced, which is where the label is needed to tell the ring's rows apart (gh-861).
+ * The method and the route are the arm's label — the outside name, the one the arm is keyed on — and the
+ * rows keep the template as it was served, the same the ring does: what is compared is `nameOf` of the row
+ * against the outside name (gh-860). A capture that is about none of its routes by name reads several of
+ * these at once, and each owns the window of the ring it replaced, which is where the label is needed to
+ * tell the ring's rows apart (gh-861).
  */
 export interface PrearmReserve {
   method: string;

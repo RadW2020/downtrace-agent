@@ -89,6 +89,7 @@ const O_FIELDS = 3;
 /** One request as the reserve gives it back, in the shape `sliceFor` already reads. */
 export interface PrearmRequest {
   method: string;
+  /** The template as it was served, the same the ring keeps: the name is withheld at the exit, not here (gh-860). */
   route: string;
   status: number;
   startedAt: number;
@@ -103,7 +104,10 @@ export interface PrearmRequest {
 /** What the register is told about a request that just finished. */
 export interface ObservedRequest {
   method: string;
+  /** The template as it was served: what the row keeps, the same the ring does (gh-860). */
   route: string;
+  /** The name the arm is keyed on: itself in normal mode, the digest in minimal mode (gh-860). */
+  armRoute: string;
   status: number;
   startedAt: number;
   durationMs: number;
@@ -123,6 +127,14 @@ export interface PrearmOptions {
 /** One armed route: which slots are its own, and until when. */
 interface Arm {
   label: string;
+  /**
+   * The template as it was served, learned from the first request the arm took.
+   *
+   * The arm is keyed by the outside name — that is all the signal that arms it can see — and the rows keep
+   * the template as it was served, the same the ring does: the name is withheld at the exit, not here
+   * (gh-860). Undefined while the arm holds no row, which is the normal case.
+   */
+  realRoute?: string;
   armedAt: number;
   until: number;
   written: number;
@@ -226,11 +238,14 @@ export class PrearmRegister {
   /** Records a request, if its route is armed. Costs nothing for every other request in the process. */
   observe(r: ObservedRequest): void {
     if (this.shedding) return;
-    const label = `${r.method} ${r.route}`;
+    const label = `${r.method} ${r.armRoute}`;
     const slot = this.slotOf(label, r.startedAt);
     if (slot < 0) return;
     const arm = this.arms[slot];
     if (!arm) return;
+    // The arm is keyed by the outside name, and the row keeps the template as it was served, the same the
+    // ring does: the name is withheld at the exit, not here (gh-860).
+    if (arm.realRoute === undefined) arm.realRoute = r.route;
 
     const index = slot * this.perRoute + (arm.written % this.perRoute);
     const at = index * R_FIELDS;
@@ -275,6 +290,10 @@ export class PrearmRegister {
 
   /**
    * What this route kept, in the shape a capture is assembled from, or `null` when it is not armed.
+   *
+   * `route` is the name the arm is keyed on — the outside name, which is what the cloud's order carries —
+   * not a name to be withheld again on the way in (gh-860). The rows it returns keep the template as it was
+   * served, the same the ring does: the name is withheld at the exit, not here.
    *
    * The conversion is here and not at the call site because the two registers answer the same question and a
    * capture must not have to know they are two. `truncated` and `detailLost` are false by construction: the
@@ -338,6 +357,9 @@ export class PrearmRegister {
     const held = Math.min(arm.written, this.perRoute);
     const first = arm.written - held;
     const space = label.indexOf(" ");
+    // The arm's label names the route the way the arm knows it; the row keeps the way it was served. The
+    // fallback is the label itself, which is what the arm's label is when the two agree (gh-860).
+    const route = arm.realRoute ?? (space < 0 ? "" : label.slice(space + 1));
     for (let n = 0; n < held; n++) {
       const index = slot * this.perRoute + ((first + n) % this.perRoute);
       if (this.methods[index] !== label) continue;
@@ -362,7 +384,7 @@ export class PrearmRegister {
       }
       out.push({
         method: space < 0 ? label : label.slice(0, space),
-        route: space < 0 ? "" : label.slice(space + 1),
+        route,
         status: this.requests[at + R_STATUS] ?? 0,
         startedAt: this.requests[at + R_START] ?? 0,
         durationMs: this.requests[at + R_DURATION] ?? 0,

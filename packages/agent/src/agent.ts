@@ -658,7 +658,10 @@ export class Agent {
       const now = this.now();
       let prearm: PrearmReserve[];
       if (route !== undefined && route !== "") {
-        const own = this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(route), now);
+        // The order carries the name the cloud knows — the outside name — and that is what the arm is keyed
+        // on. A `nameOf` here would withhold a name that already left withheld, and the reserve of an armed
+        // route would never be found (gh-860).
+        const own = this.prearm.reserveFor(capture.footprint.method ?? "", route, now);
         prearm = own === null ? [] : [own];
       } else {
         prearm = this.prearm.armedReserves(now);
@@ -826,6 +829,10 @@ export class Agent {
    * One place rather than three, because the name has to be the **same** in the batch, in the evidence and
    * in the comparison against what the cloud asks to capture — the cloud only ever knew the digest, and a
    * filter that compared it against the real template found nothing (gh-395).
+   *
+   * It is applied to the template as it was served, and only at the exit — the batch, the evidence, the
+   * comparison. Never to a name that already left withheld: `withheldName` is not idempotent, and a digest
+   * of a digest is a name the cloud has never seen (gh-860).
    */
   private nameOf(route: string): string {
     return this.config.minimal ? withheldName(route) : route;
@@ -957,7 +964,12 @@ export class Agent {
       this.prearm.shed(!this.overhead.keeping(Sheddable.Fine));
       this.prearm.observe({
         method,
-        route: this.nameOf(route),
+        // The template as it was served, the same the ring keeps a few lines above: the reserve is inside
+        // the black box, and the name is withheld at the exit, not here (gh-860).
+        route,
+        // The arm is keyed by the name the cloud knows, because that is all the signal that arms it can
+        // see (gh-860).
+        armRoute: named,
         status: response?.statusCode ?? 0,
         startedAt: startedWall,
         durationMs: ms,

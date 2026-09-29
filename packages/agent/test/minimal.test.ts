@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import type { AgentConfig } from "../src/config.ts";
 import { currentContext, recordCallIn, recordOperationIn } from "../src/context.ts";
+import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
 import { withheldName } from "../src/minimal.ts";
+import { PrearmRegister } from "../src/prearm.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
@@ -218,6 +220,100 @@ describe("the minimal mode", () => {
     expect(sent.coarse?.routes.length, "the coarse summary carried no route").toBeGreaterThan(0);
     expect(sent.coarse?.routes[0]?.route).toBe(withheldName(THEIRS.route));
     expect(sent.coarse?.routes[0]?.route).toBe(sent.requests[0]?.route);
+  });
+
+  // gh-860, the mirror of gh-498 in minimal mode. gh-395 made the capture find the ring's rows by the
+  // withheld name, but the reserve's rows were stored under a name the cloud does not know, and each of the
+  // three places where the two meet — the reserve's key, the matcher, the evidence — encrypted again a name
+  // that had already left encrypted. A capture of an armed route in minimal mode came out with only what the
+  // global ring happened to keep.
+  it("finds the reserve of an armed route by the withheld name, and it leaves encrypted once", async () => {
+    const prearm = new PrearmRegister();
+    // A ring so small that a few requests of other routes evict the armed one: whatever the evidence still
+    // shows of this route can only be what the reserve kept (ADR 0122).
+    const fine = new FineRegister({
+      requests: 4,
+      operations: 64,
+      operationsPerRequest: 8,
+      routeLabels: 16,
+      fingerprintLabels: 16,
+      dependencyLabels: 16,
+    });
+    const evidence: { path: string; body: string }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/v0/aggregates")) {
+        // The cloud only ever knew the withheld name, so its order carries it.
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-1",
+                windowSeconds: 0.05,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                method: "GET",
+                route: withheldName(THEIRS.route),
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: String(init.body) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const agent = createAgent(config({ minimal: true, instrument: new Set(["http"]) }), {
+      log: quiet,
+      fetchImpl,
+      fine,
+      prearm,
+    });
+    // The arm is keyed by the name the cloud knows: that is all the signal that arms it can see.
+    prearm.arm(`GET ${withheldName(THEIRS.route)}`, Date.now() - 1_000, 60_000);
+    agent.start();
+    try {
+      const request = { method: "GET", url: THEIRS.path };
+      channel(REQUEST_START).publish({ request });
+      const ctx = currentContext();
+      if (ctx) {
+        recordOperationIn(ctx, {
+          kind: "query",
+          fingerprint: { hash: "abc123", text: THEIRS.query },
+          startedAt: 0,
+          endedAt: 1,
+        });
+      }
+      channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+      // Traffic that evicts the armed row from the shared ring.
+      for (const url of ["/other/a", "/other/b", "/other/c", "/other/d"]) {
+        const other = { method: "GET", url };
+        channel(REQUEST_START).publish({ request: other });
+        channel(RESPONSE_FINISH).publish({ request: other, response: { statusCode: 200 } });
+      }
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await agent.flushNow()).toBe(true);
+      await new Promise((r) => setTimeout(r, 80));
+      expect(await agent.flushNow()).toBe(true);
+    } finally {
+      await agent.stop();
+    }
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    const body = evidence[0]?.body ?? "";
+    // The real template never reaches the bytes, in the capture as in the batch.
+    expect(body, `«${THEIRS.route}» reached the wire in a capture`).not.toContain(THEIRS.route);
+    const sent = JSON.parse(body) as {
+      requests: { method: string; route: string }[];
+      coverage: { observedRequests: number; attachedRequests: number };
+    };
+    // The armed request is in the evidence and the ring no longer holds it: it is the reserve's.
+    expect(sent.requests, "the capture of the armed route came out empty").toHaveLength(1);
+    // Encrypted once: the outside name the cloud knows, and not the digest of a digest.
+    expect(sent.requests[0]?.route).toBe(withheldName(THEIRS.route));
+    expect(sent.requests[0]?.route).not.toBe(withheldName(withheldName(THEIRS.route)));
+    // And it is one that ran before the capture began, which is what the reserve exists for.
+    expect(sent.coverage.attachedRequests).toBeGreaterThanOrEqual(1);
   });
 
   it("leaves the finer control doing exactly what it did", async () => {

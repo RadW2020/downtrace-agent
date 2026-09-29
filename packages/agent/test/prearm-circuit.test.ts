@@ -24,6 +24,7 @@ describe("the prearmed reserve carries what a capture needs", () => {
     prearm.observe({
       method: "GET",
       route: "/cart",
+      armRoute: "/cart",
       status: 200,
       startedAt: 1_100,
       durationMs: 42,
@@ -60,6 +61,7 @@ describe("the prearmed reserve carries what a capture needs", () => {
     prearm.observe({
       method: "GET",
       route: "/cart",
+      armRoute: "/cart",
       status: 200,
       startedAt: 1_100,
       durationMs: 42,

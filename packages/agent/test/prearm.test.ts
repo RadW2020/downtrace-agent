@@ -8,6 +8,7 @@ import { OTHER_ROUTE } from "../src/routes.ts";
 const request = (route: string, startedAt: number, durationMs = 10) => ({
   method: "GET",
   route,
+  armRoute: route,
   status: 200,
   startedAt,
   durationMs,
@@ -119,6 +120,7 @@ describe("the label tables of the reserve", () => {
   const fresh = (i: number, startedAt: number) => ({
     method: "GET",
     route: "/cart",
+    armRoute: "/cart",
     status: 200,
     startedAt,
     durationMs: 10,
@@ -169,6 +171,7 @@ describe("the label tables of the reserve", () => {
     r.observe({
       method: "GET",
       route: "/cart",
+      armRoute: "/cart",
       status: 200,
       startedAt: 1_100,
       durationMs: 10,
@@ -192,6 +195,7 @@ describe("the label tables of the reserve", () => {
     r.observe({
       method: "GET",
       route: "/cart",
+      armRoute: "/cart",
       status: 200,
       startedAt: 1_110,
       durationMs: 10,
@@ -268,6 +272,7 @@ describe("the label tables of the reserve", () => {
         r.observe({
           method: "GET",
           route,
+          armRoute: route,
           status: 200,
           startedAt: 1_000 + i,
           durationMs: 10,
