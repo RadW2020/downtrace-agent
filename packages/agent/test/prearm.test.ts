@@ -249,6 +249,7 @@ describe("the label tables of the reserve", () => {
       endsAt: 2_000,
       footprint: { method: "GET", route: "/cart" },
       reported: false,
+      shedMs: 0,
     };
     const slice = sliceFor(capture, new FineRegister().snapshot(), (route) => route, [reserve]);
     expect(slice.requests.map((x) => x.startedAt)).toEqual([1_100, 1_101, 1_102, 1_103, 1_104, 1_105]);

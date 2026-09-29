@@ -62,6 +62,19 @@ export const ThrottleReasons = {
   Memory: "the registers were holding more than they reserve",
 } as const;
 
+/**
+ * The protocol's name for a `ThrottleReasons` phrase, or `undefined` when the phrase is not one of them.
+ *
+ * One place for the translation: the batch's `agent.resources.shedReason` and the evidence's
+ * `coverage.shed.reason` are the same enum, and a second copy of this would be a second way to spell one
+ * fact (ADR 0210).
+ */
+export function shedReasonOf(phrase: string): "latency" | "memory" | undefined {
+  if (phrase === ThrottleReasons.Latency) return "latency";
+  if (phrase === ThrottleReasons.Memory) return "memory";
+  return undefined;
+}
+
 export interface OverheadOptions {
   sampleEvery?: number;
   windowRequests?: number;
@@ -108,6 +121,17 @@ export class OverheadMeter {
   private estimateMs = 0;
   private level: SheddableLevel;
   private why = "";
+  /**
+   * The closed episodes of shed fine detail, in milliseconds of this meter's clock: how long the detail has
+   * been given up **by this meter's own decision**. The open episode's time is not here; it is in
+   * `shedOpenSince`, and the reading adds it, so a window that ends mid-episode is not read as if the
+   * episode had ended when it did not.
+   */
+  private shedAccumMs = 0;
+  /** When the open episode began, in this meter's clock. `undefined` while no episode is open. */
+  private shedOpenSince: number | undefined;
+  /** The last reason in force while the fine detail was shed, in the protocol's words. */
+  private shedLastReason: "latency" | "memory" | undefined;
 
   constructor(opts: OverheadOptions = {}) {
     this.every = opts.sampleEvery ?? SAMPLE_EVERY;
@@ -169,11 +193,13 @@ export class OverheadMeter {
     if (this.estimateMs > this.budget && this.level < Sheddable.Profile) {
       this.level = (this.level + 1) as SheddableLevel;
       this.why = ThrottleReasons.Latency;
+      this.settleShed();
       return;
     }
     if (this.estimateMs < this.budget / 2 && this.level > this.floor) {
       this.level = (this.level - 1) as SheddableLevel;
       if (this.level === this.floor) this.why = "";
+      this.settleShed();
     }
   }
 
@@ -182,7 +208,51 @@ export class OverheadMeter {
     if (this.level < Sheddable.Fine) {
       this.level = Sheddable.Fine;
       this.why = ThrottleReasons.Memory;
+      this.settleShed();
     }
+  }
+
+  /**
+   * Seals the shed episodes around a change of the level, on this meter's own clock.
+   *
+   * Called from `decide` and `shedForMemory` — the only two places the level moves — and only when it
+   * moved: a request that changes no level pays nothing here, which is the measurement adding no work to
+   * the path of a request (invariant 3). The clock is read only on the two moments that matter, when
+   * `keeping(Sheddable.Fine)` flips, and the reason in force is kept whichever level the meter is at
+   * while it sheds.
+   *
+   * With the floor at or above the fine detail the episodes never run: that shedding is the
+   * configuration's (ADR 0210, point 1), and a meter that timed it would claim a decision it did not make.
+   */
+  private settleShed(): void {
+    if (this.floor >= Sheddable.Fine) return;
+    const shedding = this.level >= Sheddable.Fine;
+    if (shedding) {
+      if (this.shedOpenSince === undefined) this.shedOpenSince = this.now();
+      const reason = shedReasonOf(this.why);
+      if (reason !== undefined) this.shedLastReason = reason;
+    } else if (this.shedOpenSince !== undefined) {
+      this.shedAccumMs += this.now() - this.shedOpenSince;
+      this.shedOpenSince = undefined;
+    }
+  }
+
+  /**
+   * How long the fine detail has been shed by this meter's own decision, read at this instant: the closed
+   * episodes plus the open one, up to now.
+   *
+   * A capture stores the reading at its start and subtracts it from the reading at its end; the difference
+   * is the shedding inside its window, in whatever clock the window's own instants use, because two
+   * readings of one clock subtract to a duration (ADR 0210).
+   */
+  shedMs(): number {
+    if (this.shedOpenSince === undefined) return this.shedAccumMs;
+    return this.shedAccumMs + this.now() - this.shedOpenSince;
+  }
+
+  /** The last reason in force while the fine detail was shed, or `undefined` when it never was by this meter. */
+  lastShedReason(): "latency" | "memory" | undefined {
+    return this.shedLastReason;
   }
 
   /** Whether a given piece of work is still being done. */

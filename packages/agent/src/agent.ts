@@ -34,7 +34,7 @@ import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
-import { OverheadMeter, Sheddable, type SheddableLevel, ThrottleReasons } from "./overhead.ts";
+import { OverheadMeter, Sheddable, type SheddableLevel, shedReasonOf } from "./overhead.ts";
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
@@ -498,7 +498,9 @@ export class Agent {
     // the cloud settles the race with a `409` on the second evidence (gh-379).
     this.sender.onCaptures = (pending) =>
       this.guard(() => {
-        this.captures.accept(pending, this.now());
+        // The shed reading and the start are sealed together: both are this capture's beginning, and the
+        // evidence later subtracts it from the reading it takes at the end (ADR 0210).
+        this.captures.accept(pending, this.now(), this.overhead.shedMs());
         this.renewReference();
       });
     this.sender.onReported = (ids) => this.guard(() => this.captures.reported(ids));
@@ -675,6 +677,12 @@ export class Agent {
         prearm = this.prearm.armedReserves(now);
       }
       const slice = sliceFor(capture, this.fine.snapshot(), (route) => this.nameOf(route), prearm);
+      // The shedding inside this window: the meter's reading now minus the one sealed at the capture's
+      // start, both on the meter's own clock, so nothing compares an instant across clocks (ADR 0131).
+      // Rounded up: a fraction of a millisecond of shedding is still shedding, and an `ms` of 0 would be
+      // refused by the contract anyway (ADR 0210).
+      const shedMs = Math.ceil(this.overhead.shedMs() - capture.shedMs);
+      const shedReason = shedMs > 0 ? this.overhead.lastShedReason() : undefined;
       const evidence: CaptureEvidence = {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },
@@ -685,6 +693,10 @@ export class Agent {
           attachedRequests: slice.attachedRequests,
           detailLost: slice.detailLost,
           truncated: slice.truncated,
+          // Present only when the meter itself decided the shedding inside this window: absent means «the
+          // evidence does not say» — no shedding, the configuration's floor, or a sender older than the
+          // field (ADR 0210).
+          ...(shedMs > 0 && shedReason !== undefined ? { shed: { ms: shedMs, reason: shedReason } } : {}),
         },
         reference: this.referenceFor(),
         coarse: this.coarseFor(),
@@ -827,8 +839,10 @@ export class Agent {
     if (overhead.perRequestMs > 0) out.hookMsPerRequest = overhead.perRequestMs;
     if (overhead.shed !== Sheddable.Nothing) {
       out.shed = overhead.shed === Sheddable.Fine ? "fine" : "profile";
-      if (overhead.reason === ThrottleReasons.Latency) out.shedReason = "latency";
-      else if (overhead.reason === ThrottleReasons.Memory) out.shedReason = "memory";
+      // The one place the phrase becomes the protocol's word: the evidence's `coverage.shed.reason` is
+      // translated by the same function (ADR 0210).
+      const reason = shedReasonOf(overhead.reason);
+      if (reason !== undefined) out.shedReason = reason;
     }
     return Object.keys(out).length > 0 ? out : undefined;
   }

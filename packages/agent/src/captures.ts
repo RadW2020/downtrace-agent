@@ -41,6 +41,14 @@ export interface LiveCapture {
   reported: boolean;
   /** What the cloud asked to watch. What the evidence is filtered by (gh-397). */
   footprint: CaptureFootprint;
+  /**
+   * The overhead meter's shed reading, in the meter's own clock, sealed with `startedAt` (ADR 0210).
+   *
+   * The evidence subtracts it from the reading it takes at the end, and the difference is the shedding
+   * inside this window and only this one: two captures that overlap carry two starts, and never trade
+   * each other's time.
+   */
+  shedMs: number;
 }
 
 /** What the next batch says about the captures under way. */
@@ -62,8 +70,11 @@ export class Captures {
    * An order already under way is not started twice — the answer repeats it until the cloud sees the start.
    * One whose deadline has passed is not started at all: the cloud has stopped waiting, and evidence for it
    * would arrive to a capture that is already closed.
+   *
+   * `shedMs` is the overhead meter's reading at the same instant `now` is: the caller takes it there, and
+   * each capture keeps it apart, so this class still reads no clock of its own (ADR 0210).
    */
-  accept(pending: PendingCapture[], now: number): void {
+  accept(pending: PendingCapture[], now: number, shedMs: number): void {
     for (const order of pending) {
       if (this.live.size >= MAX_LIVE_CAPTURES) return;
       if (this.live.has(order.id)) continue;
@@ -80,6 +91,7 @@ export class Captures {
         endsAt: now + order.windowSeconds * 1000,
         reported: false,
         footprint,
+        shedMs,
       });
     }
   }

@@ -231,6 +231,101 @@ describe("giving ground", () => {
   });
 });
 
+describe("the shed it measures", () => {
+  /**
+   * A meter whose clock a test moves by hand, counting how many times it is read. One request is one hook
+   * of `cost` ms; a window of one request so every request re-decides.
+   */
+  function shedMeter(over: { floor?: (typeof Sheddable)[keyof typeof Sheddable] } = {}) {
+    let clock = 0;
+    let reads = 0;
+    const m = new OverheadMeter({
+      sampleEvery: 1,
+      windowRequests: 1,
+      budgetMs: OVERHEAD_BUDGET_MS,
+      ...(over.floor === undefined ? {} : { floor: over.floor }),
+      now: () => {
+        reads += 1;
+        return clock;
+      },
+    });
+    const request = (cost: number): void => {
+      const started = m.enter();
+      clock += cost;
+      m.leave(started);
+      m.requestFinished();
+    };
+    return { m, request, tick: (ms: number) => (clock += ms), reads: () => reads };
+  }
+
+  it("reads the closed episodes plus the one under way, and the last reason in force while it was shed", () => {
+    const { m, request, tick } = shedMeter();
+    request(0.8); // over the budget: the fine detail is shed for latency
+    tick(10);
+    request(0); // under half of it: it is kept again
+    expect(m.shedMs()).toBe(10);
+    expect(m.lastShedReason()).toBe("latency");
+    // The reading includes the episode that is still open, whatever the window that reads it ends when.
+    m.shedForMemory();
+    expect(m.shedMs()).toBe(10);
+    tick(2.5);
+    expect(m.shedMs()).toBeCloseTo(12.5, 6);
+    expect(m.lastShedReason()).toBe("memory");
+  });
+
+  it("keeps the reason in force while the level moves within the shed", () => {
+    const { m, request } = shedMeter();
+    m.shedForMemory(); // Fine, for memory
+    request(0.8); // over the budget: one more level, and the reason in force is the latency's
+    expect(m.state().shed).toBe(Sheddable.Profile);
+    expect(m.lastShedReason()).toBe("latency");
+  });
+
+  it("keeps a thousand episodes as a sum, not a list", () => {
+    const { m, request, tick } = shedMeter();
+    for (let i = 0; i < 1000; i += 1) {
+      request(0.8);
+      tick(0.3);
+      request(0);
+    }
+    expect(m.shedMs()).toBeCloseTo(300, 6);
+    expect(m.state().shed).toBe(Sheddable.Nothing);
+    // One more episode adds exactly its time: nothing of the episodes is kept, only their sum.
+    request(0.8);
+    tick(0.3);
+    request(0);
+    expect(m.shedMs()).toBeCloseTo(300.3, 6);
+    expect(m.state().shed).toBe(Sheddable.Nothing);
+  });
+
+  it("never runs with the floor at or above the fine detail, even shedding above it", () => {
+    const { m, request, tick } = shedMeter({ floor: Sheddable.Fine });
+    request(0.8);
+    request(0.8);
+    expect(m.state().shed).toBe(Sheddable.Profile);
+    expect(m.state().reason).toBe(ThrottleReasons.Latency);
+    tick(1_000);
+    // That shedding was the configuration's, and the meter never claims it (ADR 0210, point 1).
+    expect(m.shedMs()).toBe(0);
+    expect(m.lastShedReason()).toBeUndefined();
+    request(0);
+    request(0);
+    expect(m.state().shed).toBe(Sheddable.Fine);
+    expect(m.shedMs()).toBe(0);
+  });
+
+  it("reads no clock on a request that changes no level", () => {
+    const s = shedMeter();
+    const before = s.reads();
+    for (let i = 0; i < 100; i += 1) {
+      s.request(0.1); // under half the budget: the level never moves
+    }
+    // Two reads per request are the sampling it always had: enter and leave. The shed bookkeeping adds none,
+    // which is the measurement paying for nothing on the path of a request (invariant 3).
+    expect(s.reads() - before).toBe(200);
+  });
+});
+
 describe("the agent", () => {
   /**
    * A meter whose window never closes while the test runs: the latency path is tested above, and the

@@ -77,6 +77,7 @@ describe("the prearmed reserve carries what a capture needs", () => {
       endsAt: 2_000,
       footprint: { method: "GET", route: "/cart" },
       reported: false,
+      shedMs: 0,
     };
     // An empty ring: whatever the reserve does not hold is gone.
     const empty = new FineRegister().snapshot();

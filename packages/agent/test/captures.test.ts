@@ -19,7 +19,7 @@ const order = (id: string, over: Partial<PendingCapture> = {}): PendingCapture =
 describe("Captures", () => {
   it("starts watching what it was asked for, and says so once", () => {
     const c = new Captures();
-    c.accept([order("cap-1")], 1_000);
+    c.accept([order("cap-1")], 1_000, 0);
     expect(c.size).toBe(1);
     expect(c.toReport()).toEqual([{ id: "cap-1", startedAt: 1_000 }]);
     c.reported(["cap-1"]);
@@ -30,15 +30,15 @@ describe("Captures", () => {
 
   it("does not start the same capture twice", () => {
     const c = new Captures();
-    c.accept([order("cap-1")], 1_000);
-    c.accept([order("cap-1")], 5_000);
+    c.accept([order("cap-1")], 1_000, 0);
+    c.accept([order("cap-1")], 5_000, 0);
     expect(c.size).toBe(1);
     expect(c.toReport()[0]?.startedAt).toBe(1_000);
   });
 
   it("does not start one the cloud has stopped waiting for", () => {
     const c = new Captures();
-    c.accept([order("stale", { expiresAt: 900 })], 1_000);
+    c.accept([order("stale", { expiresAt: 900 })], 1_000, 0);
     expect(c.size).toBe(0);
   });
 
@@ -47,13 +47,25 @@ describe("Captures", () => {
     c.accept(
       Array.from({ length: MAX_LIVE_CAPTURES + 3 }, (_, i) => order(`cap-${i}`)),
       1_000,
+      0,
     );
     expect(c.size).toBe(MAX_LIVE_CAPTURES);
   });
 
+  // ADR 0210: each window carries only its own shed, which is what this reading is for. Sealed with the
+  // start and kept apart per capture, whatever the captures overlap.
+  it("seals the meter's shed reading with the start, apart per capture", () => {
+    const c = new Captures();
+    c.accept([order("cap-a")], 1_000, 10);
+    c.accept([order("cap-b")], 5_000, 20);
+    const [a, b] = c.takeAll();
+    expect(a?.shedMs).toBe(10);
+    expect(b?.shedMs).toBe(20);
+  });
+
   it("hands over a capture when its window closes, and only once", () => {
     const c = new Captures();
-    c.accept([order("cap-1", { windowSeconds: 10 })], 1_000);
+    c.accept([order("cap-1", { windowSeconds: 10 })], 1_000, 0);
     expect(c.take(5_000)).toEqual([]);
     const done = c.take(11_000);
     expect(done.map((d) => d.id)).toEqual(["cap-1"]);
@@ -67,7 +79,7 @@ describe("Captures", () => {
   // intervals, the profile and the exceptions that were riding with it.
   it("reports a start the contract can carry, rounded down to the millisecond", () => {
     const c = new Captures();
-    c.accept([order("cap-1")], 1_000.4165);
+    c.accept([order("cap-1")], 1_000.4165, 0);
     expect(c.toReport()).toEqual([{ id: "cap-1", startedAt: 1_000 }]);
     expect(Number.isInteger(c.toReport()[0]?.startedAt)).toBe(true);
   });
@@ -78,7 +90,7 @@ describe("Captures", () => {
   // says of this very field that two paths for one fact are two truths waiting to disagree.
   it("rounds the way the evidence route already does", () => {
     const c = new Captures();
-    c.accept([order("cap-1")], 1_000.75);
+    c.accept([order("cap-1")], 1_000.75, 0);
     expect(c.toReport()[0]?.startedAt).toBe(new Date(1_000.75).getTime());
   });
 
@@ -87,7 +99,7 @@ describe("Captures", () => {
   // resolution; rounding what is stored would hand back up to a millisecond of it.
   it("keeps the instant it really started at, which is not the one it reports", () => {
     const c = new Captures();
-    c.accept([order("cap-1", { windowSeconds: 10 })], 1_000.75);
+    c.accept([order("cap-1", { windowSeconds: 10 })], 1_000.75, 0);
     const [live] = c.takeAll();
     expect(live?.startedAt).toBe(1_000.75);
     expect(live?.endsAt).toBe(11_000.75);
@@ -96,7 +108,7 @@ describe("Captures", () => {
   it("hands over everything when the process is leaving", () => {
     // Partial evidence is an answer; silence is not. The same reasoning as the profile (gh-371).
     const c = new Captures();
-    c.accept([order("cap-1"), order("cap-2")], 1_000);
+    c.accept([order("cap-1"), order("cap-2")], 1_000, 0);
     expect(
       c
         .takeAll()
@@ -138,6 +150,7 @@ describe("what one capture saw", () => {
     endsAt: 2_000,
     reported: true,
     footprint: {},
+    shedMs: 0,
     ...over,
   });
 
@@ -268,6 +281,7 @@ describe("evidence of an armed route", () => {
     startedAt: 1_000,
     endsAt: 9_000,
     reported: false,
+    shedMs: 0,
   };
   const fine = (startedAt: number): FineRequest => ({
     method: "GET",
@@ -324,6 +338,7 @@ describe("evidence of an armed route, in minimal mode", () => {
     startedAt: 1_000,
     endsAt: 9_000,
     reported: false,
+    shedMs: 0,
   };
   const row = (startedAt: number, over: Partial<FineRequest> = {}): FineRequest => ({
     method: "GET",
@@ -383,6 +398,7 @@ describe("evidence of a dependency, across the armed routes' reserves", () => {
     startedAt: 1_000,
     endsAt: 9_000,
     reported: false,
+    shedMs: 0,
   };
   const row = (startedAt: number, over: Partial<FineRequest> = {}): FineRequest => ({
     method: "GET",
