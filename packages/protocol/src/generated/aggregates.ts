@@ -4,6 +4,14 @@
  * Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14).
  */
 export type ObserverState = "on" | "off" | "unavailable";
+/**
+ * A value of `Operation.kind` but a query: the ways an error inside a request arrives, and so the sources that can produce one.
+ */
+export type InRequestErrorSource = "error" | "framework" | "explicit";
+/**
+ * A value of `ProcessException.kind`: the ways an error outside any request arrives, and so the sources that can produce one.
+ */
+export type OutsideRequestErrorSource = "uncaught" | "unhandled-rejection" | "framework" | "explicit";
 
 /**
  * A batch of per-interval, per-route aggregates sent by an agent to the cloud (POST /v0/aggregates).
@@ -209,6 +217,7 @@ export interface AgentInfo {
   observers?: Observers;
   withholding?: Withholding;
   resources?: AgentResources;
+  errorSources?: ErrorSources;
 }
 /**
  * Absent from an instrumentation older than protocol 0.7.0. Absent is not 'nothing is observed': it is 'this one did not say', and the two must not be shown alike.
@@ -276,6 +285,19 @@ export interface AgentResources {
    * Why it gave ground. Absent when nothing was given up.
    */
   shedReason?: "latency" | "memory";
+}
+/**
+ * Which of the sources of error this process has connected, as of the moment this batch is sealed. A source is on its list when the process has, at that moment, the instrumentation that produces it installed; the application calling `captureException` does not make it one without the hook connected. Absent means **this sender did not say**, the same reading as `observers` and `resources`: an instrumentation older than protocol 0.9.0 says nothing, and the two lists left empty are not the same thing, because they are a statement — the sender says it has connected no source of error.
+ */
+export interface ErrorSources {
+  /**
+   * The sources of the errors this process sees inside a request, by the value of `Operation.kind` they arrive as, a query excluded: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself. No value appears twice.
+   */
+  inRequest: InRequestErrorSource[];
+  /**
+   * The sources of the errors this process sees outside any request, by the value of `ProcessException.kind`: `uncaught`, an exception nothing caught; `unhandled-rejection`, a promise rejected with nothing to handle it; `framework`, one that reached a framework's error path; `explicit`, one the application handed over itself. No value appears twice.
+   */
+  outsideRequest: OutsideRequestErrorSource[];
 }
 export interface InstanceInfo {
   /**

@@ -63,6 +63,27 @@ describe("aggregates schema v0", () => {
     }
   });
 
+  it("says, for the sources of error, which kind of error arrives as each value", () => {
+    // The declaration's lists hold the values of the two `kind` enums, a query excluded from the one inside a
+    // request, so the cloud can count a declared source only when the protocol carries it. The lists are
+    // compared against the enums themselves, so a value added to a kind without its source fails here.
+    const defs = (AGGREGATES_SCHEMA_V0 as { $defs: Record<string, { properties?: Record<string, unknown> }> }).$defs;
+    const kind = (name: string) => (defs[name]?.properties?.kind as { enum?: string[] } | undefined)?.enum ?? [];
+    const list = (name: string) =>
+      (
+        (defs.ErrorSources?.properties as Record<string, { items?: { $ref?: string } }> | undefined)?.[name]?.items
+          ?.$ref ?? ""
+      ).replace("#/$defs/", "");
+    const sourceEnum = (name: string) => (defs[name] as { enum?: string[] } | undefined)?.enum ?? [];
+    const inDef = list("inRequest");
+    const outDef = list("outsideRequest");
+    expect(inDef).toBeTruthy();
+    expect(outDef).toBeTruthy();
+    expect(inDef).not.toBe(outDef);
+    expect(sourceEnum(inDef)).toEqual(kind("Operation").filter((v) => v !== "query"));
+    expect(sourceEnum(outDef)).toEqual(kind("ProcessException"));
+  });
+
   it("never drops a minor it once published", () => {
     // Agents already installed keep working: the cloud never stops accepting a minor it once published (ADR 0008).
     // Removing one from the enum is how a released agent starts getting 400s it cannot do anything about.
@@ -111,6 +132,30 @@ describe("aggregates schema v0", () => {
     // A way of ending the schema does not declare is a sender that is broken or ahead of the cloud, and it
     // gets a 400 at the door rather than being stored as something nobody can read (ADR 0008, gh-598).
     expect(reason("an-ending-nobody-declared.json")).toMatch(/ending must be equal to one of the allowed values/);
+    // A query is not a source of error, a value the sources do not declare, and one declared twice are all
+    // declarations that do not say a thing the process is (gh-768).
+    expect(reason("error-sources-with-a-query.json")).toMatch(/inRequest.*must be equal to one of the allowed values/);
+    expect(reason("error-sources-with-a-repeat.json")).toMatch(/inRequest must NOT have duplicate items/);
+    expect(reason("error-sources-with-an-unknown-value.json")).toMatch(
+      /inRequest.*must be equal to one of the allowed values/,
+    );
+  });
+
+  it("reads a declaration of the sources of error the sender has connected", async () => {
+    // A source is on its list when the process has, at the moment the batch is sealed, what produces it
+    // installed; absent is «did not declare», and the two empty lists are a statement (gh-768).
+    const doc = byName(await load("valid"), "error-sources.json") as unknown as {
+      agent: Record<string, unknown>;
+    };
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+    expect(doc.agent.errorSources).toEqual({
+      inRequest: ["error", "framework", "explicit"],
+      outsideRequest: ["uncaught", "unhandled-rejection", "framework", "explicit"],
+    });
+    // A sender that declares is also one that may declare nothing at all.
+    const silent = byName(await load("valid"), "minimal.json");
+    expect(silent.agent.errorSources).toBeUndefined();
+    expect(validate(silent), ajv.errorsText(validate.errors)).toBe(true);
   });
 
   it("reads a batch that says it is the last one of its process", async () => {

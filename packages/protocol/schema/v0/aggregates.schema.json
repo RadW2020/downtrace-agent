@@ -99,8 +99,48 @@
         "resources": {
           "$ref": "#/$defs/AgentResources",
           "description": "What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «measured internal resources»."
+        },
+        "errorSources": {
+          "$ref": "#/$defs/ErrorSources",
+          "description": "Which of the sources of error this process has connected, as of the moment this batch is sealed. A source is on its list when the process has, at that moment, the instrumentation that produces it installed; the application calling `captureException` does not make it one without the hook connected. Absent means **this sender did not say**, the same reading as `observers` and `resources`: an instrumentation older than protocol 0.9.0 says nothing, and the two lists left empty are not the same thing, because they are a statement — the sender says it has connected no source of error."
         }
       }
+    },
+    "ErrorSources": {
+      "title": "ErrorSources",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inRequest", "outsideRequest"],
+      "properties": {
+        "inRequest": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/InRequestErrorSource"
+          },
+          "description": "The sources of the errors this process sees inside a request, by the value of `Operation.kind` they arrive as, a query excluded: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself. No value appears twice."
+        },
+        "outsideRequest": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/OutsideRequestErrorSource"
+          },
+          "description": "The sources of the errors this process sees outside any request, by the value of `ProcessException.kind`: `uncaught`, an exception nothing caught; `unhandled-rejection`, a promise rejected with nothing to handle it; `framework`, one that reached a framework's error path; `explicit`, one the application handed over itself. No value appears twice."
+        }
+      }
+    },
+    "InRequestErrorSource": {
+      "title": "InRequestErrorSource",
+      "type": "string",
+      "enum": ["error", "framework", "explicit"],
+      "description": "A value of `Operation.kind` but a query: the ways an error inside a request arrives, and so the sources that can produce one."
+    },
+    "OutsideRequestErrorSource": {
+      "title": "OutsideRequestErrorSource",
+      "type": "string",
+      "enum": ["uncaught", "unhandled-rejection", "framework", "explicit"],
+      "description": "A value of `ProcessException.kind`: the ways an error outside any request arrives, and so the sources that can produce one."
     },
     "InstanceInfo": {
       "title": "InstanceInfo",
