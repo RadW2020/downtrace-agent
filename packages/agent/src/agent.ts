@@ -175,7 +175,10 @@ export class Agent {
   private readonly prearm: PrearmRegister;
   /** The local signals that ask for a capture when the process is in trouble (gh-409). */
   private readonly triggers = new LocalTriggers();
-  /** How many internal errors have already been reported, so each is counted once (gh-243). */
+  /**
+   * How many internal errors have already been said — carried by a batch that **landed** — so each is counted
+   * once (gh-243, gh-724).
+   */
   private reportedInternalErrors = 0;
   private readonly sender: Sender;
   private readonly handleSignals: boolean;
@@ -324,6 +327,11 @@ export class Agent {
         // What the sender cannot know about itself: the memory the registers hold, what the hooks cost,
         // and what has been given up to stay inside the budget (gh-243).
         resources: () => this.ownResources(),
+        // Its `internalErrors` is said when the batch that carried it lands, and only then, so a batch that
+        // failed or was refused says them again (gh-724).
+        resourcesLanded: (declared) => {
+          if (declared?.internalErrors !== undefined) this.reportedInternalErrors += declared.internalErrors;
+        },
         inspector: createInspector(config.inspect, this.log),
       });
     this.handleSignals = deps.handleSignals ?? false;
@@ -797,9 +805,11 @@ export class Agent {
   private ownResources(): AgentResources | undefined {
     const overhead = this.overhead.state();
     const out: AgentResources = {};
+    // Declared, not yet said: what `reportedInternalErrors` advances by is what a batch that **lands**
+    // declared, through the sender's `resourcesLanded`. Advanced here, at the build, a batch that failed or
+    // was refused would have lost the number — a counter that dies with its batch lies downwards (gh-724).
     if (this.internalErrors > this.reportedInternalErrors) {
       out.internalErrors = this.internalErrors - this.reportedInternalErrors;
-      this.reportedInternalErrors = this.internalErrors;
     }
     // The label tables the registers key by traffic are in their `bytes` (gh-765), the reserve is the
     // register that is preallocated for a route nobody has served yet (gh-805), and the decisions the

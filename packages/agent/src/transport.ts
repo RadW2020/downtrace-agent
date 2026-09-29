@@ -34,6 +34,12 @@ export interface SenderOptions {
    * that a stepped wall clock moves (gh-610, ADR 0126). A test drives it so a wait of hours does not take hours.
    */
   now: () => number;
+  /**
+   * What the declarer of `resources` does when a batch that carried them lands: what it said is said now, and
+   * only now. Only on success, like every other accounting in the landing — a batch that does not land has not
+   * said its resources, and the next one says them again (gh-724).
+   */
+  resourcesLanded?: ((declared: AgentResources | undefined) => void) | undefined;
   /** Writes every batch exactly as it would be sent. Absent means the inspection mode is off (gh-181). */
   inspector?: Inspector | undefined;
   /**
@@ -250,8 +256,8 @@ export class Sender {
    * nothing in it told the cloud which part it already had (gh-625).
    *
    * `dropped` is what the register did not admit on its own cap, taken with what it handed over (gh-659). It
-   * joins the same `since` as the three batch counters, because it has the same fate: it rides the batch and
-   * is reset when the batch lands, never when it is sent.
+   * joins the same `since` as the three batch counters, because it has the same fate: it rides the batch, and
+   * what the batch declared of it is taken off when the batch lands, never when it is sent (gh-724).
    */
   enqueueExceptions(args: { exceptions: CountedException[]; dropped: number }): void {
     this.since.droppedExceptions += args.dropped;
@@ -472,9 +478,15 @@ export class Sender {
         // never asked, and a signal that has passed is one nobody will ever ask about (gh-409). And only what it
         // asked, for the same reason as the exceptions.
         this.triggers = this.triggers.filter((t) => !triggers.includes(t));
-        // Said, so it is not said twice. A counter that repeated itself would read as loss that keeps
-        // happening (gh-243).
-        this.since = { dropped: 0, failed: 0, rejected: 0, droppedExceptions: 0 };
+        // Said, so it is not said twice. What this batch declared is taken off, and only that: what counted
+        // while the batch was in flight is still to say, and rides the next one. Zeroed whole, as it was, a
+        // drop that happened in flight died with the batch — a counter that dies with its batch lies
+        // downwards (gh-243, gh-724).
+        this.since.dropped -= resources?.droppedBatches ?? 0;
+        this.since.failed -= resources?.failedBatches ?? 0;
+        this.since.rejected -= resources?.rejectedBatches ?? 0;
+        this.since.droppedExceptions -= resources?.droppedExceptions ?? 0;
+        this.opts.resourcesLanded?.(resources);
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants

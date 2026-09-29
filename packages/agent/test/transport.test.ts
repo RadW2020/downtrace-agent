@@ -789,40 +789,45 @@ describe("Sender, bounded on every array a batch carries", () => {
  * what lets the cloud recognise a resend: before, a delivery whose answer was lost went out again with its count
  * added to what came after, and nothing in it said which part the cloud already had.
  */
-describe("Sender, delivering what the process threw", () => {
-  const thrown = (hash: string, count: number): CountedException => ({ kind: "uncaught", hash, text: "", count });
-  type Sent = { exceptions?: { hash: string; count: number; total?: number }[]; triggers?: LocalTrigger[] };
+const thrown = (hash: string, count: number): CountedException => ({ kind: "uncaught", hash, text: "", count });
+type Sent = {
+  agent?: { resources?: Record<string, number | string> };
+  exceptions?: { hash: string; count: number; total?: number }[];
+  triggers?: LocalTrigger[];
+};
 
-  /** A sender whose cloud answers each batch only when the test says so, which is what a batch in flight is. */
-  function held() {
-    const bodies: Sent[] = [];
-    const answers: Array<(r: Response) => void> = [];
-    const waiting: Array<{ n: number; resolve: () => void }> = [];
-    const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body)) as Sent);
-      for (const w of waiting) if (bodies.length >= w.n) w.resolve();
-      return new Promise<Response>((resolve) => answers.push(resolve));
-    }) as unknown as typeof fetch;
-    const s = new Sender({
-      url: "http://cloud.test",
-      token: "tok",
-      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v24" },
-      instance: { id: "i", hostname: "h", pid: 1 },
-      deploy: { version: "v", environment: "test" },
-      log: quiet,
-      fetchImpl,
-      now: () => 1_000_000,
+/** A sender whose cloud answers each batch only when the test says so, which is what a batch in flight is. */
+function held() {
+  const bodies: Sent[] = [];
+  const answers: Array<(r: Response) => void> = [];
+  const waiting: Array<{ n: number; resolve: () => void }> = [];
+  const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Sent);
+    for (const w of waiting) if (bodies.length >= w.n) w.resolve();
+    return new Promise<Response>((resolve) => answers.push(resolve));
+  }) as unknown as typeof fetch;
+  const s = new Sender({
+    url: "http://cloud.test",
+    token: "tok",
+    agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v24" },
+    instance: { id: "i", hostname: "h", pid: 1 },
+    deploy: { version: "v", environment: "test" },
+    log: quiet,
+    fetchImpl,
+    now: () => 1_000_000,
+  });
+  /** Resolves once the cloud has received `n` batches: a flush reaches `fetch` a turn after it is called. */
+  const requested = (n: number): Promise<"sent"> =>
+    new Promise((resolve) => {
+      if (bodies.length >= n) resolve("sent");
+      else waiting.push({ n, resolve: () => resolve("sent") });
     });
-    /** Resolves once the cloud has received `n` batches: a flush reaches `fetch` a turn after it is called. */
-    const requested = (n: number): Promise<"sent"> =>
-      new Promise((resolve) => {
-        if (bodies.length >= n) resolve("sent");
-        else waiting.push({ n, resolve: () => resolve("sent") });
-      });
-    /** Answers the oldest request still waiting for one. */
-    const answer = (status: number): void => answers.shift()?.(new Response(null, { status }));
-    return { s, bodies, requested, answer };
-  }
+  /** Answers the oldest request still waiting for one. */
+  const answer = (status: number): void => answers.shift()?.(new Response(null, { status }));
+  return { s, bodies, requested, answer };
+}
+
+describe("Sender, delivering what the process threw", () => {
   const carried = (b: Sent | undefined) => (b?.exceptions ?? []).map((e) => [e.hash, e.count, e.total]);
 
   it("says with every delivery how many times a signature has happened since the instance started", async () => {
@@ -916,6 +921,80 @@ describe("Sender, delivering what the process threw", () => {
     ajv.addKeyword("x-since");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(last), JSON.stringify(validate.errors)).toBe(true);
+  });
+});
+
+/**
+ * The loss counters a batch declares in its `resources` are said when the batch **lands**. What counted while
+ * the batch was in flight dies with no batch if the landing zeroes the counters — the lie downwards (gh-243) —
+ * and the landing takes off what the batch declared and only that, so the next one says only what is new
+ * (gh-724).
+ */
+describe("Sender, the loss counters say what is new when they say it", () => {
+  const declared = (b: Sent | undefined): Record<string, number | string> | undefined => b?.agent?.resources;
+
+  it("a drop that happens while a batch is in flight rides the next one (gh-724)", async () => {
+    const { s, bodies, requested, answer } = held();
+    // The queue is full and the batch is in flight: one more interval drops the oldest during the flight.
+    for (let i = 1; i <= 6; i += 1) s.enqueue(interval(i));
+    const first = s.flush();
+    await requested(1);
+    s.enqueue(interval(7));
+    expect(await s.flush()).toBe(false);
+    answer(202);
+    expect(await first).toBe(true);
+    // Zeroed on the landing, as it was, this drop was counted into the zero and never travelled.
+    const second = s.flush();
+    await requested(2);
+    expect(declared(bodies[1])?.droppedBatches).toBe(1);
+    answer(202);
+    expect(await second).toBe(true);
+  });
+
+  it("a dropped exception that happens while a batch is in flight rides the next one (gh-724)", async () => {
+    const { s, bodies, requested, answer } = held();
+    // The list of 32 signatures is carried by the batch, so while it is in flight the list is full, and a
+    // signature that arrives then is the loss.
+    s.enqueue(interval(1));
+    s.enqueueExceptions({ exceptions: Array.from({ length: 32 }, (_, i) => thrown(`h${i}`, 1)), dropped: 0 });
+    const first = s.flush();
+    await requested(1);
+    s.enqueueExceptions({ exceptions: [thrown("late", 5)], dropped: 0 });
+    expect(await s.flush()).toBe(false);
+    answer(202);
+    expect(await first).toBe(true);
+    // An interval gives the next batch a reason to go out: a loss with nothing to say it on would wait for it.
+    s.enqueue(interval(2));
+    const second = s.flush();
+    await requested(2);
+    expect(declared(bodies[1])?.droppedExceptions).toBe(5);
+    answer(202);
+    expect(await second).toBe(true);
+  });
+
+  it("the landing takes off what the batch declared and only that, so the next says only what is new", async () => {
+    const { s, bodies, requested, answer } = held();
+    // Two over the cap before the flight, one more during it: the batch declares two, and the third is new.
+    for (let i = 1; i <= 8; i += 1) s.enqueue(interval(i));
+    const first = s.flush();
+    await requested(1);
+    s.enqueue(interval(9));
+    expect(await s.flush()).toBe(false);
+    answer(202);
+    expect(await first).toBe(true);
+    const second = s.flush();
+    await requested(2);
+    expect(declared(bodies[0])?.droppedBatches).toBe(2);
+    expect(declared(bodies[1])?.droppedBatches).toBe(1);
+    answer(202);
+    expect(await second).toBe(true);
+    // Said once: the one after says nothing of what was said.
+    s.enqueue(interval(10));
+    const third = s.flush();
+    await requested(3);
+    expect(declared(bodies[2])?.droppedBatches).toBeUndefined();
+    answer(202);
+    expect(await third).toBe(true);
   });
 });
 

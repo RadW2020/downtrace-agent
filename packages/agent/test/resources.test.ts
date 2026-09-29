@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import type { Interval } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
+import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
 import { CoarseRegister } from "../src/coarse.ts";
 import { recordCall } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
@@ -240,4 +241,64 @@ describe("what the agent adds about itself", () => {
     // And the memory it says it holds is what it holds: the bloated number, not a budget.
     expect(r?.bufferBytes).toBeGreaterThan(3 * 1024 * 1024);
   });
+
+  // gh-724. An internal error was given for said the moment the batch was built, so a batch that failed or
+  // was refused lost it: the counter died with its batch, the lie downwards. It is said when the batch lands.
+  it.each([500, 400])(
+    "says its internal errors with the next batch that lands after one that %i, and no more",
+    async (status) => {
+      const responses = [status, 202, 202];
+      const bodies: string[] = [];
+      const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        return new Response(null, { status: responses.shift() ?? 202 });
+      }) as unknown as typeof fetch;
+      const real = new IntervalAggregator({ now: () => 1_000 });
+      let once = true;
+      // Records and then breaks once: a request that still lands, at the cost of one internal error.
+      const faulty: Recorder = {
+        record: (method, route, statusCode, ms, work) => {
+          real.record(method, route, statusCode, ms, work);
+          if (once) {
+            once = false;
+            throw new Error("injected");
+          }
+        },
+        rotate: () => real.rotate(),
+      };
+      const agent = createAgent(
+        testConfig("http://cloud.invalid", {
+          environment: "production",
+          version: "v1",
+          intervalMs: 60_000,
+          instrument: new Set(),
+        }),
+        { log: quiet, fetchImpl, recorder: faulty },
+      );
+      agent.start();
+      try {
+        const request = { method: "GET", url: "/products" };
+        channel("http.server.request.start").publish({ request });
+        channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+        // An exception outside a request: content a batch the cloud refuses keeps, so the 400 half has a next one.
+        agent.report({ error: new Error("outside"), kind: "explicit" });
+        // The first batch does not land: what it says about its internal error is not yet said.
+        expect(await agent.flushNow()).toBe(false);
+        // The next one lands: the internal error rides it.
+        expect(await agent.flushNow()).toBe(true);
+        // A request with the recorder whole, for the batch that says it no more.
+        const again = { method: "GET", url: "/products" };
+        channel("http.server.request.start").publish({ request: again });
+        channel("http.server.response.finish").publish({ request: again, response: { statusCode: 200 } });
+        expect(await agent.flushNow()).toBe(true);
+      } finally {
+        await agent.stop();
+      }
+      const internal = (i: number): number | string | undefined => resourcesOf(bodies[i] ?? "")?.internalErrors;
+      expect(agent.stats.internalErrors).toBe(1);
+      expect(internal(0)).toBe(1);
+      expect(internal(1)).toBe(1);
+      expect(internal(2)).toBeUndefined();
+    },
+  );
 });
