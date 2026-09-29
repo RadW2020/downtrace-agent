@@ -54,6 +54,20 @@ export interface CaptureCoverage {
    * Requests that ran more operations than the register keeps per request. Their count is real and their list is not complete.
    */
   truncated: number;
+  shed?: Shed;
+}
+/**
+ * The time inside [startedAt, endedAt] when the instrumentation was not writing the fine detail — neither the register's ring nor the reserve — because it was shedding it. Present when some part of the window was shed, absent when there was no shedding, when the shedding came from configuration (`DOWNTRACE_SHED`, the benchmark) and so the instrumentation never decided it, or when the instrumentation predates the field: a sender older than the field sends nothing, and the cloud stores the absence as such (ADR 0008). The capture is still taken, not refused: the window can end before the shedding does, the coarse register keeps measuring, and the protocol has no way for an instance to refuse an order — saying it in the evidence is what CAP-01 asks for.
+ */
+export interface Shed {
+  /**
+   * How long the shedding lasted, in whole milliseconds, rounded up: one millisecond of shedding is still shedding, and the field says so rather than rounding it into silence.
+   */
+  ms: number;
+  /**
+   * The last reason in force inside the window, the same enum as `agent.resources.shedReason` in the batch: why it gave ground. One value and not a list: a window that shed for two reasons is read as the one in force when it ended, which is the one still changing what arrives.
+   */
+  reason: "latency" | "memory";
 }
 export interface CapturedRequest {
   method: string;

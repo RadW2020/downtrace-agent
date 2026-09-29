@@ -144,6 +144,62 @@ describe("the capture evidence schema", () => {
     expect(validate(doc)).toBe(false);
   });
 
+  /**
+   * gh-782: the time inside the window the fine detail was not being written, and why. Optional — a sender
+   * older than the field, or a shedding decided by configuration, sends none — and an enum for the reason,
+   * because a free string would let a sender write a reason nobody can compare.
+   */
+  it("carries the shed as an optional declaration with an enum reason", () => {
+    const coverage = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as {
+        $defs: {
+          Coverage: { required: string[]; properties: { shed?: unknown } };
+          Shed: {
+            required: string[];
+            properties: { ms: { type: string; minimum: number }; reason: { type: string; enum: string[] } };
+          };
+        };
+      }
+    ).$defs;
+    // Optional in the coverage: absence is «did not declare it», which the cloud stores as such (ADR 0008).
+    expect(coverage.Coverage.required).not.toContain("shed");
+    expect(coverage.Coverage.properties.shed).toEqual({ $ref: "#/$defs/Shed" });
+    // Both halves required when it is present, and `ms` at one: a shedding shorter than a millisecond still
+    // happened, and the field says so rather than rounding it into silence.
+    expect([...coverage.Shed.required].sort()).toEqual(["ms", "reason"]);
+    expect(coverage.Shed.properties.ms.type).toBe("integer");
+    expect(coverage.Shed.properties.ms.minimum).toBe(1);
+  });
+
+  it("borrows the shed reason from the batch's resources, and only from it", () => {
+    const shedReason = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as { $defs: { Shed: { properties: { reason: { enum: string[] } } } } }
+    ).$defs.Shed.properties.reason.enum;
+    const resources = (
+      AGGREGATES_SCHEMA_V0 as { $defs: { AgentResources: { properties: { shedReason: { enum: string[] } } } } }
+    ).$defs.AgentResources.properties.shedReason.enum;
+    // One fact, one place: the evidence borrows the batch's enum, and `make gen` refuses a copy that drifts.
+    expect(shedReason).toEqual(resources);
+    expect(shedReason).toEqual(["latency", "memory"]);
+  });
+
+  it("accepts the shed and refuses the half-written sheddings", async () => {
+    const valid = (await load("valid")).find(([n]) => n === "with-shed.json");
+    expect(valid).toBeDefined();
+    expect(validate(valid?.[1])).toBe(true);
+
+    const invalid = await load("invalid");
+    const zeroMs = invalid.find(([n]) => n === "shed-with-zero-ms.json");
+    expect(zeroMs).toBeDefined();
+    expect(validate(zeroMs?.[1])).toBe(false);
+    const unknownReason = invalid.find(([n]) => n === "shed-with-unknown-reason.json");
+    expect(unknownReason).toBeDefined();
+    expect(validate(unknownReason?.[1])).toBe(false);
+    const extraField = invalid.find(([n]) => n === "shed-with-an-extra-field.json");
+    expect(extraField).toBeDefined();
+    expect(validate(extraField?.[1])).toBe(false);
+  });
+
   it("speaks exactly the versions the batch does", () => {
     // One fact, one place: the enum lives in the batch schema and `make gen` refuses a copy that has drifted.
     const batch = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;
