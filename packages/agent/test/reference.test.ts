@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FINGERPRINT_LABEL_MAX_LENGTH, labelBytes } from "../src/labels.ts";
 import {
+  DEFAULT_REFERENCE_DROPPED,
   DEFAULT_REFERENCE_FINGERPRINT_LABELS,
   DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE,
   DEFAULT_REFERENCE_ROUTES,
@@ -26,6 +27,9 @@ function traffic(r: ReferenceRegister, route: string, durations: number[]): void
     r.consider("GET", route, 200, 1_000 + i, ms, noOperations);
   }
 }
+
+/** A route template at `MAX_ROUTE_LENGTH`, apart for each `i`: with the longest method, the longest label the table may hold. */
+const longestRoute = (i: number) => `/${i}${"r".repeat(MAX_ROUTE_LENGTH - String(i).length - 1)}`;
 
 describe("the reference samples", () => {
   it("keeps a bounded number per endpoint and tells the population it drew from", () => {
@@ -71,12 +75,15 @@ describe("the reference samples", () => {
     const r = new ReferenceRegister({ routes: 2, samplesPerRoute: 1 });
     traffic(r, "/a", [1, 2, 3]);
     traffic(r, "/b", [4]);
-    traffic(r, "/c", [5]);
+    // Two requests of the endpoint without room: the number it makes is about endpoints, not requests
+    // (gh-775), so the case a single request could not tell is told here.
+    traffic(r, "/c", [5, 6]);
 
     const routes = r.snapshot().samples.map((s) => s.route);
     expect(routes.sort()).toEqual(["/a", "/b"]);
     // The third endpoint is not kept, and the register says how many it had to leave out rather than
-    // letting the absence pass for «that endpoint had no traffic» (invariant 14).
+    // letting the absence pass for «that endpoint had no traffic» (invariant 14) — once per endpoint,
+    // no matter how many requests it refused (gh-775).
     expect(r.snapshot().routesDropped).toBe(1);
   });
 
@@ -260,9 +267,6 @@ describe("the route table of the reference", () => {
   // `REFERENCE_MAX_BYTES` while the tests held the line. The arithmetic counts everything the register
   // keeps, or the budget is not one (ADR 0067).
 
-  /** A route template at `MAX_ROUTE_LENGTH`, apart for each `i`: with the longest method, the longest label the table may hold. */
-  const longestRoute = (i: number) => `/${i}${"r".repeat(MAX_ROUTE_LENGTH - String(i).length - 1)}`;
-
   it("reserves its worst case, computed from the constants", () => {
     const r = new ReferenceRegister();
     // What the register holds before traffic names anything — the arrays, preallocated, and the sentinel
@@ -298,5 +302,54 @@ describe("the route table of the reference", () => {
     // and the loss is said, not silent (invariant 14).
     expect(r.bytes()).toBe(at);
     expect(r.snapshot().routesDropped).toBe(1);
+  });
+});
+
+describe("the dropped table of the reference", () => {
+  // gh-775. The register counted the requests it refused, so one endpoint with no room and a thousand
+  // requests published as a thousand endpoints without samples, while the schema of the evidence said the
+  // number was endpoints. Now it counts endpoints, the way the coarse register counts its dropped routes:
+  // once each, remembered by a 32-bit summary of the label — no text (invariant 5) — in a table
+  // preallocated to `DEFAULT_REFERENCE_DROPPED`, the same 256 as the coarse register's `DEFAULT_DROPPED`.
+  // When the table is full, or two endpoints share a summary, the number stops and is a lower bound
+  // (invariant 14 says the loss is spoken of; invariant 3 says the memory does not grow).
+
+  it("counts an endpoint it had no room for once, no matter how many requests it gets", () => {
+    const r = new ReferenceRegister({ routes: 2, samplesPerRoute: 1 });
+    traffic(r, "/a", [1]);
+    traffic(r, "/b", [2]);
+    // A third endpoint with a thousand requests: one endpoint without room, not a thousand (gh-775).
+    for (let i = 0; i < 1_000; i += 1) r.consider("GET", "/c", 200, 1_000 + i, 5, noOperations);
+    expect(r.snapshot().routesDropped).toBe(1);
+    // A fourth endpoint without room, with two requests: the next one, and only the next one.
+    traffic(r, "/d", [7, 8]);
+    expect(r.snapshot().routesDropped).toBe(2);
+  });
+
+  it("stops counting when the table of summaries is full, and keeps its memory", () => {
+    const r = new ReferenceRegister({ routes: 2, samplesPerRoute: 1 });
+    traffic(r, "/a", [1]);
+    traffic(r, "/b", [2]);
+    for (let i = 0; i < DEFAULT_REFERENCE_DROPPED; i += 1) r.consider("GET", `/d${i}`, 200, 1_000 + i, 5, noOperations);
+    expect(r.snapshot().routesDropped).toBe(DEFAULT_REFERENCE_DROPPED);
+    const at = r.bytes();
+    // Past the cap the traffic costs nothing — a register that still grew here was the bug (invariant 3) —
+    // and the count stays where it is: a lower bound, not a count (invariant 14).
+    for (let i = DEFAULT_REFERENCE_DROPPED; i < DEFAULT_REFERENCE_DROPPED + 100; i += 1)
+      r.consider("GET", `/d${i}`, 200, 2_000 + i, 5, noOperations);
+    expect(r.snapshot().routesDropped).toBe(DEFAULT_REFERENCE_DROPPED);
+    expect(r.bytes()).toBe(at);
+  });
+
+  it("holds its memory budget with the dropped table at its cap", () => {
+    const r = new ReferenceRegister({ random: () => 0 });
+    for (let i = 0; i < DEFAULT_REFERENCE_ROUTES; i += 1)
+      r.consider("OPTIONS", longestRoute(i), 200, 1_000 + i, 5, noOperations);
+    // Every slot of the dropped table taken, with the longest label it may hold in the route table beside
+    // it: the worst case the register may hold, with the table that gh-775 put in the count at its cap.
+    for (let i = 0; i < DEFAULT_REFERENCE_DROPPED; i += 1)
+      r.consider("OPTIONS", longestRoute(DEFAULT_REFERENCE_ROUTES + i), 200, 2_000 + i, 5, noOperations);
+    expect(r.snapshot().routesDropped).toBe(DEFAULT_REFERENCE_DROPPED);
+    expect(r.bytes()).toBeLessThanOrEqual(REFERENCE_MAX_BYTES);
   });
 });

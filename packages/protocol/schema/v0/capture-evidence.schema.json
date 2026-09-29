@@ -188,7 +188,7 @@
         "routesDropped": {
           "type": "integer",
           "minimum": 0,
-          "description": "Endpoints seen that the register had no room for. Counted rather than silently absent: an endpoint with no samples is not an endpoint with no traffic (invariant 14)."
+          "description": "Routes the register had no row for, folded into one shared row, counted once each. At the register's cap for how many it may remember it is a lower bound: a bounded memory does not count distinct names past its bound, and the volume of what was folded is what the shared row keeps."
         },
         "renewalPaused": {
           "type": "boolean",

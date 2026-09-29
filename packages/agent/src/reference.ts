@@ -23,6 +23,12 @@ import { MAX_ROUTE_LABEL_LENGTH, OTHER_ROUTE } from "./routes.ts";
 /** How many endpoints it keeps samples for. */
 export const DEFAULT_REFERENCE_ROUTES = 16;
 
+/**
+ * How many endpoints whose labels it keeps a 32-bit summary of when the route table has no room: the same
+ * 256 as the coarse register's `DEFAULT_DROPPED`, which this counts like it does (gh-775).
+ */
+export const DEFAULT_REFERENCE_DROPPED = 256;
+
 /** How many samples per endpoint. «Un pequeño número acotado». */
 export const DEFAULT_SAMPLES_PER_ROUTE = 3;
 
@@ -51,6 +57,18 @@ export const DEFAULT_REFERENCE_FINGERPRINT_LABELS = 128;
 
 /** How the samples were chosen. It travels with them; there is no unlabelled selection. */
 export const UNIFORM_RESERVOIR = "uniform-reservoir";
+
+/**
+ * A 32-bit FNV-1a of a label, for the dropped table: it says which endpoint a summary is of without the
+ * text (invariant 5), and it is what a repeat is recognised by. Two different labels can share one, and a
+ * label can hash to `0`, which marks an empty slot: in either case the count stops counting it and stays
+ * a lower bound (gh-775).
+ */
+function droppedDigest(label: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < label.length; i += 1) h = Math.imul(h ^ label.charCodeAt(i), 0x01000193) >>> 0;
+  return h;
+}
 
 /** Fields of one sample row. */
 const S_STARTED_AT = 0;
@@ -86,7 +104,10 @@ export interface ReferenceSnapshot {
   selection: typeof UNIFORM_RESERVOIR;
   /** How many requests they were drawn from. */
   population: number;
-  /** Endpoints seen that this register had no room for. Counted rather than silently absent. */
+  /**
+   * Endpoints seen that this register had no room for, counted once each: a lower bound once its table of
+   * summaries is full, or two of them share a summary. Counted rather than silently absent (gh-775).
+   */
   routesDropped: number;
   /**
    * How many times an operation asked for a fingerprint the table had no room for and kept the sentinel
@@ -132,6 +153,11 @@ export class ReferenceRegister {
   private paused = false;
   private everPaused = false;
   private dropped = 0;
+  /**
+   * The endpoints the route table had no room for, as a 32-bit summary of their labels — no text
+   * (invariant 5), preallocated, so the table and its arithmetic are fixed from the start (gh-775).
+   */
+  private readonly droppedSummaries = new Uint32Array(DEFAULT_REFERENCE_DROPPED);
   private labelsFolded = 0;
 
   constructor(options: ReferenceOptions = {}) {
@@ -183,7 +209,7 @@ export class ReferenceRegister {
     let index = this.routeIndex.get(label);
     if (index === undefined) {
       if (this.routes.length >= this.routeCapacity) {
-        this.dropped += 1;
+        this.noteDropped(label);
         return;
       }
       index = this.routes.length;
@@ -207,6 +233,26 @@ export class ReferenceRegister {
   }
 
   /**
+   * One request for an endpoint the route table has no room for. Counted once per endpoint, not once per
+   * request, the way the coarse register counts its dropped routes (gh-775): the number is how many
+   * endpoints are missing, not how many requests were refused. The table holds a 32-bit summary of each
+   * dropped label so a repeat is recognised; when it is full, or two endpoints share a summary, the count
+   * stops and is a lower bound (invariant 3 and 14).
+   */
+  private noteDropped(label: string): void {
+    const digest = droppedDigest(label);
+    for (let i = 0; i < this.droppedSummaries.length; i += 1) if ((this.droppedSummaries[i] ?? 0) === digest) return;
+    for (let i = 0; i < this.droppedSummaries.length; i += 1) {
+      if ((this.droppedSummaries[i] ?? 0) === 0) {
+        this.droppedSummaries[i] = digest;
+        this.dropped += 1;
+        return;
+      }
+    }
+    // No empty slot left: the table is full and the count is a lower bound, not a count.
+  }
+
+  /**
    * What the route table holds, by the same arithmetic the reserve uses: each label as UTF-16 plus its
    * bookkeeping (labels.ts). It is not a `LabelTable`, because what does not fit is not folded into a
    * sentinel but dropped — the request is counted in `routesDropped` — and a reference sample that cannot
@@ -220,10 +266,10 @@ export class ReferenceRegister {
   }
 
   /**
-   * What this register holds, in bytes: the arrays, the route table, and the fingerprint table the
-   * operation slots point at. Every table is counted by the same arithmetic the reserve uses, so a budget
-   * that leaves one out is not an option — that blindness is how gh-765 grew, and gh-805 and gh-859 are the
-   * same growth that was still left (ADR 0067).
+   * What this register holds, in bytes: the arrays, the route table, the dropped table, and the fingerprint
+   * table the operation slots point at. Every table is counted by the same arithmetic the reserve uses, so a
+   * budget that leaves one out is not an option — that blindness is how gh-765 grew, and gh-805, gh-859 and
+   * gh-775 are the same growth that was still left (ADR 0067).
    */
   bytes(): number {
     return (
@@ -232,15 +278,17 @@ export class ReferenceRegister {
       this.counts.byteLength +
       this.seen.byteLength +
       this.routeTableBytes() +
+      this.droppedSummaries.byteLength +
       this.fingerprintLabels.bytes
     );
   }
 
   /**
    * What this register may hold, in bytes, at its worst: the arrays, the route table at `routeCapacity`
-   * with every label at its longest, and the fingerprint table at its cap with every fingerprint at its
-   * longest. The arrays are never freed and the tables never shrink, so the worst case is what the register
-   * really holds once it is full — a number, not a promise (ADR 0067, gh-805, gh-859).
+   * with every label at its longest, the dropped table, preallocated, and the fingerprint table at its cap
+   * with every fingerprint at its longest. The arrays are never freed and the tables never shrink, so the
+   * worst case is what the register really holds once it is full — a number, not a promise (ADR 0067,
+   * gh-805, gh-859, gh-775).
    */
   reservedBytes(): number {
     return (
@@ -249,6 +297,7 @@ export class ReferenceRegister {
       this.counts.byteLength +
       this.seen.byteLength +
       this.routeCapacity * labelBytes(MAX_ROUTE_LABEL_LENGTH) +
+      this.droppedSummaries.byteLength +
       this.fingerprintLabels.worstBytes(FINGERPRINT_LABEL_MAX_LENGTH)
     );
   }
