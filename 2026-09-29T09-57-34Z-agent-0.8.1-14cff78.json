@@ -1,0 +1,1434 @@
+{
+  "generatedAt": "2026-09-29T09:57:34.049Z",
+  "node": "v24.21.0",
+  "platform": "linux-arm64",
+  "host": {
+    "cores": 4,
+    "memoryMb": 15947,
+    "cpu": null
+  },
+  "subject": {
+    "sourceCommit": "14cff78954fe2a59fc94e245eb1cea52ef4eb748",
+    "agentPath": "packages/agent/src/register.ts",
+    "version": "0.8.1",
+    "commit": "cf54701f4b3d3e1a1702f44ce4cba5fbac54c127",
+    "dirty": false,
+    "source": "working-tree"
+  },
+  "config": {
+    "rounds": 9,
+    "warmupCleanSec": 3,
+    "warmupMaxSec": 30,
+    "measureSec": 60,
+    "rps": 200,
+    "seed": 42,
+    "agentPath": "/home/runner/work/downtrace-agent/downtrace-agent/packages/agent/src/register.ts"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.02,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.41,
+        "overall": {
+          "p50": 0.78,
+          "p95": 9.56,
+          "p99": 11.58,
+          "max": 56.07
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.76,
+            "p95": 1.6,
+            "p99": 2.12,
+            "max": 17.98,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.73,
+            "p95": 1.59,
+            "p99": 2.26,
+            "max": 13.88,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.57,
+            "p95": 1.44,
+            "p99": 1.98,
+            "max": 16.87,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.54,
+            "p95": 12.42,
+            "p99": 17.39,
+            "max": 56.07,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.421844706492003,
+        "rssMaxMb": 256.39453125,
+        "elu": 0.1536138091402776
+      },
+      "poolWait": {
+        "totalMs": 25.29647900006148,
+        "maxMs": 0.10895299999992858,
+        "maxAt": 1790674715940
+      },
+      "otherCpuPct": 14.994590444312298,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 1,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.82,
+        "overall": {
+          "p50": 0.76,
+          "p95": 9.82,
+          "p99": 11.65,
+          "max": 23.6
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.75,
+            "p95": 1.66,
+            "p99": 2.41,
+            "max": 16.19,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.69,
+            "p95": 1.56,
+            "p99": 2.29,
+            "max": 11.3,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.59,
+            "p95": 1.43,
+            "p99": 2.01,
+            "max": 15.55,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.78,
+            "p95": 12.29,
+            "p99": 14.71,
+            "max": 23.6,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.463492340197277,
+        "rssMaxMb": 261.921875,
+        "elu": 0.16974946710535452
+      },
+      "poolWait": {
+        "totalMs": 32.488979999954154,
+        "maxMs": 0.09739400000034948,
+        "maxAt": 1790674800162
+      },
+      "otherCpuPct": 14.090857107030544,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.02475385714335841
+      }
+    },
+    {
+      "round": 2,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.89,
+        "overall": {
+          "p50": 0.74,
+          "p95": 9.49,
+          "p99": 11.62,
+          "max": 45.92
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.72,
+            "p95": 1.74,
+            "p99": 2.28,
+            "max": 17.86,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.66,
+            "p95": 1.69,
+            "p99": 2.19,
+            "max": 10.92,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.52,
+            "p95": 1.6,
+            "p99": 2.01,
+            "max": 6.42,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.47,
+            "p95": 12.46,
+            "p99": 19.26,
+            "max": 45.92,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.372130366023985,
+        "rssMaxMb": 249.19140625,
+        "elu": 0.15292306550650406
+      },
+      "poolWait": {
+        "totalMs": 25.30996099991853,
+        "maxMs": 0.09714600000006612,
+        "maxAt": 1790674863512
+      },
+      "otherCpuPct": 14.702022741507346,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 2,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.9,
+        "overall": {
+          "p50": 0.8,
+          "p95": 9.99,
+          "p99": 11.82,
+          "max": 27.35
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.78,
+            "p95": 1.79,
+            "p99": 2.21,
+            "max": 11.19,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.74,
+            "p95": 1.74,
+            "p99": 2.1,
+            "max": 9.86,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.57,
+            "p95": 1.57,
+            "p99": 1.93,
+            "max": 13.48,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.97,
+            "p95": 12.56,
+            "p99": 15.99,
+            "max": 27.35,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.857925072121184,
+        "rssMaxMb": 261.515625,
+        "elu": 0.17286400249465655
+      },
+      "poolWait": {
+        "totalMs": 33.476635000085935,
+        "maxMs": 0.10227300000042305,
+        "maxAt": 1790674926887
+      },
+      "otherCpuPct": 14.896805753077722,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.027842857144215877
+      }
+    },
+    {
+      "round": 3,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59996.03,
+        "overall": {
+          "p50": 0.66,
+          "p95": 9.4,
+          "p99": 11.09,
+          "max": 27.43
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.63,
+            "p95": 1.59,
+            "p99": 2.17,
+            "max": 9.97,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.6,
+            "p95": 1.5,
+            "p99": 2.07,
+            "max": 11.63,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.48,
+            "p95": 1.47,
+            "p99": 1.98,
+            "max": 10.71,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.36,
+            "p95": 11.66,
+            "p99": 14.18,
+            "max": 27.43,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 16.605201339655867,
+        "rssMaxMb": 236.82421875,
+        "elu": 0.14538643730474826
+      },
+      "poolWait": {
+        "totalMs": 23.554506000110905,
+        "maxMs": 0.11238400000002002,
+        "maxAt": 1790675022715
+      },
+      "otherCpuPct": 14.322289228622218,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 3,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59997.29,
+        "overall": {
+          "p50": 0.8,
+          "p95": 10.18,
+          "p99": 11.95,
+          "max": 23.88
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.77,
+            "p95": 1.64,
+            "p99": 2.17,
+            "max": 8.62,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.73,
+            "p95": 1.61,
+            "p99": 2.26,
+            "max": 9.68,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.61,
+            "p95": 1.58,
+            "p99": 2.04,
+            "max": 9.88,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 10.17,
+            "p95": 12.57,
+            "p99": 16.04,
+            "max": 23.88,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.725682711837198,
+        "rssMaxMb": 267.6484375,
+        "elu": 0.1720910461013044
+      },
+      "poolWait": {
+        "totalMs": 33.0179150000954,
+        "maxMs": 0.09467399999994086,
+        "maxAt": 1790675053612
+      },
+      "otherCpuPct": 14.849272937347642,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.02537671428581234
+      }
+    },
+    {
+      "round": 4,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.02,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59994.55,
+        "overall": {
+          "p50": 0.77,
+          "p95": 9.68,
+          "p99": 11.55,
+          "max": 24.56
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.74,
+            "p95": 1.73,
+            "p99": 2.39,
+            "max": 9.77,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.7,
+            "p95": 1.65,
+            "p99": 2.22,
+            "max": 8.06,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.58,
+            "p95": 1.61,
+            "p99": 2.32,
+            "max": 15.78,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.66,
+            "p95": 12.18,
+            "p99": 15.16,
+            "max": 24.56,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.332394205643435,
+        "rssMaxMb": 244.9921875,
+        "elu": 0.1529185817162857
+      },
+      "poolWait": {
+        "totalMs": 24.140026000020498,
+        "maxMs": 0.08545900000171969,
+        "maxAt": 1790675116970
+      },
+      "otherCpuPct": 14.735036634148926,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 4,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59998.62,
+        "overall": {
+          "p50": 0.82,
+          "p95": 10.4,
+          "p99": 12.35,
+          "max": 26.64
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.79,
+            "p95": 1.8,
+            "p99": 2.11,
+            "max": 16.76,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.75,
+            "p95": 1.78,
+            "p99": 2.17,
+            "max": 11.15,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.57,
+            "p95": 1.58,
+            "p99": 1.99,
+            "max": 9.27,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 10.38,
+            "p95": 12.96,
+            "p99": 16.16,
+            "max": 26.64,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 20.220396933565425,
+        "rssMaxMb": 271.91796875,
+        "elu": 0.17696529556352278
+      },
+      "poolWait": {
+        "totalMs": 35.11797799993019,
+        "maxMs": 0.10593700000026729,
+        "maxAt": 1790675180339
+      },
+      "otherCpuPct": 14.967041424546856,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.029270285715028876
+      }
+    },
+    {
+      "round": 5,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.5,
+        "overall": {
+          "p50": 0.68,
+          "p95": 9.69,
+          "p99": 11.55,
+          "max": 36.12
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.64,
+            "p95": 1.82,
+            "p99": 2.09,
+            "max": 13.48,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.61,
+            "p95": 1.77,
+            "p99": 2.06,
+            "max": 10.42,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.49,
+            "p95": 1.64,
+            "p99": 1.91,
+            "max": 10.11,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.64,
+            "p95": 12.27,
+            "p99": 16.65,
+            "max": 36.12,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.351478228356832,
+        "rssMaxMb": 247.71484375,
+        "elu": 0.15299472958449611
+      },
+      "poolWait": {
+        "totalMs": 25.160623000075248,
+        "maxMs": 0.10353799999938929,
+        "maxAt": 1790675225036
+      },
+      "otherCpuPct": 15.42170516460633,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 5,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.88,
+        "overall": {
+          "p50": 0.75,
+          "p95": 10.06,
+          "p99": 12.15,
+          "max": 24.57
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.74,
+            "p95": 1.84,
+            "p99": 2.26,
+            "max": 8.27,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.7,
+            "p95": 1.78,
+            "p99": 2.18,
+            "max": 12.34,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.53,
+            "p95": 1.69,
+            "p99": 2.02,
+            "max": 7.68,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 10.01,
+            "p95": 13.01,
+            "p99": 15.65,
+            "max": 24.57,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 20.03498487250403,
+        "rssMaxMb": 257.45703125,
+        "elu": 0.17522885711555455
+      },
+      "poolWait": {
+        "totalMs": 34.39968400008729,
+        "maxMs": 0.10312899999917136,
+        "maxAt": 1790675307095
+      },
+      "otherCpuPct": 14.684506025229474,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.030145428569864765
+      }
+    },
+    {
+      "round": 6,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.9,
+        "overall": {
+          "p50": 0.7,
+          "p95": 9.48,
+          "p99": 11.24,
+          "max": 24.3
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.68,
+            "p95": 1.64,
+            "p99": 2.3,
+            "max": 14.4,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.62,
+            "p95": 1.63,
+            "p99": 2.19,
+            "max": 10.94,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.52,
+            "p95": 1.44,
+            "p99": 1.95,
+            "max": 4.76,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.44,
+            "p95": 11.93,
+            "p99": 14.24,
+            "max": 24.3,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.159144759690005,
+        "rssMaxMb": 249.03515625,
+        "elu": 0.15102643338410604
+      },
+      "poolWait": {
+        "totalMs": 24.51642199998878,
+        "maxMs": 0.06533199999830686,
+        "maxAt": 1790675370456
+      },
+      "otherCpuPct": 14.251920310413901,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 6,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59996.09,
+        "overall": {
+          "p50": 0.78,
+          "p95": 9.9,
+          "p99": 11.69,
+          "max": 23.1
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.75,
+            "p95": 1.62,
+            "p99": 2.24,
+            "max": 10.48,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.71,
+            "p95": 1.6,
+            "p99": 2.22,
+            "max": 11.36,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.59,
+            "p95": 1.46,
+            "p99": 2.11,
+            "max": 9.51,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.89,
+            "p95": 12.45,
+            "p99": 15.83,
+            "max": 23.1,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.492619016125527,
+        "rssMaxMb": 258.41015625,
+        "elu": 0.17004056222182726
+      },
+      "poolWait": {
+        "totalMs": 32.87434599985272,
+        "maxMs": 0.1046810000007099,
+        "maxAt": 1790675441197
+      },
+      "otherCpuPct": 14.347513070256422,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15247,
+        "rejected": 0,
+        "hookMsPerRequest": 0.022827142856580655
+      }
+    },
+    {
+      "round": 7,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.79,
+        "overall": {
+          "p50": 0.7,
+          "p95": 9.46,
+          "p99": 11.37,
+          "max": 22.39
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.67,
+            "p95": 1.7,
+            "p99": 2.18,
+            "max": 11.18,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.65,
+            "p95": 1.69,
+            "p99": 2.22,
+            "max": 14.18,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.53,
+            "p95": 1.57,
+            "p99": 1.99,
+            "max": 7.29,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.43,
+            "p95": 11.83,
+            "p99": 14.42,
+            "max": 22.39,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 17.321990848590204,
+        "rssMaxMb": 243.7421875,
+        "elu": 0.15288938116593906
+      },
+      "poolWait": {
+        "totalMs": 24.647052999935113,
+        "maxMs": 0.08969000000070082,
+        "maxAt": 1790675491316
+      },
+      "otherCpuPct": 14.303850857417395,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 7,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.59,
+        "overall": {
+          "p50": 0.7,
+          "p95": 10.1,
+          "p99": 11.93,
+          "max": 57.14
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.65,
+            "p95": 1.78,
+            "p99": 2.14,
+            "max": 11.94,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.63,
+            "p95": 1.75,
+            "p99": 1.98,
+            "max": 9.5,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.47,
+            "p95": 1.63,
+            "p99": 1.94,
+            "max": 15.08,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 10.05,
+            "p95": 12.93,
+            "p99": 21.25,
+            "max": 57.14,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.71285259812067,
+        "rssMaxMb": 260.2734375,
+        "elu": 0.17246541299351434
+      },
+      "poolWait": {
+        "totalMs": 38.971943000035935,
+        "maxMs": 5.990762999999788,
+        "maxAt": 1790675548690
+      },
+      "otherCpuPct": 14.370466261702681,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.023075142857643578
+      }
+    },
+    {
+      "round": 8,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.02,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.2,
+        "overall": {
+          "p50": 0.68,
+          "p95": 9.33,
+          "p99": 11.02,
+          "max": 20.71
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.63,
+            "p95": 1.68,
+            "p99": 1.89,
+            "max": 10.71,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.58,
+            "p95": 1.64,
+            "p99": 1.84,
+            "max": 10.34,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.41,
+            "p95": 1.55,
+            "p99": 1.78,
+            "max": 10.24,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.31,
+            "p95": 11.8,
+            "p99": 16.22,
+            "max": 20.71,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 16.888747246134763,
+        "rssMaxMb": 235.33203125,
+        "elu": 0.14805357272011457
+      },
+      "poolWait": {
+        "totalMs": 23.54658500009964,
+        "maxMs": 0.060035999998945044,
+        "maxAt": 1790675631271
+      },
+      "otherCpuPct": 13.988407866137393,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 8,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59995.88,
+        "overall": {
+          "p50": 0.71,
+          "p95": 9.77,
+          "p99": 11.7,
+          "max": 58.36
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.69,
+            "p95": 1.77,
+            "p99": 2.06,
+            "max": 14.7,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.61,
+            "p95": 1.71,
+            "p99": 2.05,
+            "max": 12.49,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.47,
+            "p95": 1.57,
+            "p99": 1.83,
+            "max": 11.2,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.67,
+            "p95": 12.44,
+            "p99": 21.99,
+            "max": 58.36,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.448657076099163,
+        "rssMaxMb": 267.34375,
+        "elu": 0.16915448006564637
+      },
+      "poolWait": {
+        "totalMs": 32.49432199999728,
+        "maxMs": 0.12186400000064168,
+        "maxAt": 1790675686920
+      },
+      "otherCpuPct": 14.299917454937145,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.023146142856213765
+      }
+    },
+    {
+      "round": 9,
+      "variant": "baseline",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.01,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59996.46,
+        "overall": {
+          "p50": 0.77,
+          "p95": 9.25,
+          "p99": 10.96,
+          "max": 21.8
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.72,
+            "p95": 1.62,
+            "p99": 2.05,
+            "max": 7.7,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.67,
+            "p95": 1.54,
+            "p99": 2.06,
+            "max": 8.35,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.59,
+            "p95": 1.43,
+            "p99": 1.96,
+            "max": 17.81,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.22,
+            "p95": 11.69,
+            "p99": 14.66,
+            "max": 21.8,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 16.699780671162728,
+        "rssMaxMb": 246.8046875,
+        "elu": 0.1465997962577136
+      },
+      "poolWait": {
+        "totalMs": 24.20687300014015,
+        "maxMs": 0.11356099999829894,
+        "maxAt": 1790675750718
+      },
+      "otherCpuPct": 14.045801924689307,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0
+    },
+    {
+      "round": 9,
+      "variant": "agent",
+      "warmup": {
+        "seconds": 3,
+        "clean": true,
+        "lastErrors": 0
+      },
+      "load": {
+        "targetRps": 200,
+        "achievedRps": 200.02,
+        "requested": 12000,
+        "completed": 12000,
+        "errors": 0,
+        "errorStatuses": {},
+        "elapsedMs": 59994.75,
+        "overall": {
+          "p50": 0.77,
+          "p95": 10.02,
+          "p99": 11.91,
+          "max": 23.55
+        },
+        "byEndpoint": {
+          "GET /products": {
+            "p50": 0.74,
+            "p95": 1.79,
+            "p99": 2.15,
+            "max": 11.38,
+            "count": 4764,
+            "errors": 0
+          },
+          "GET /products/:id": {
+            "p50": 0.64,
+            "p95": 1.75,
+            "p99": 2.22,
+            "max": 9.09,
+            "count": 3613,
+            "errors": 0
+          },
+          "GET /me": {
+            "p50": 0.53,
+            "p95": 1.54,
+            "p99": 1.85,
+            "max": 7.16,
+            "count": 2402,
+            "errors": 0
+          },
+          "POST /checkout": {
+            "p50": 9.99,
+            "p95": 12.86,
+            "p99": 15.62,
+            "max": 23.55,
+            "count": 1221,
+            "errors": 0
+          }
+        }
+      },
+      "usage": {
+        "cpuPct": 19.9660848363821,
+        "rssMaxMb": 268.09375,
+        "elu": 0.17419914579682846
+      },
+      "poolWait": {
+        "totalMs": 33.87535600001229,
+        "maxMs": 0.10840800000005402,
+        "maxAt": 1790675814096
+      },
+      "otherCpuPct": 14.838386778791737,
+      "checkpointWriteMs": 0,
+      "checkpointCount": 0,
+      "sink": {
+        "batches": 7,
+        "intervals": 7,
+        "endpoints": 54,
+        "requests": 15246,
+        "rejected": 0,
+        "hookMsPerRequest": 0.028227857141246204
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "metric": "p99Ms",
+      "unit": "ms",
+      "method": "pooled-p99",
+      "samples": 108000,
+      "baselineMedian": 11.347,
+      "agentMedian": 11.915,
+      "delta": 0.568,
+      "excess": -0.432,
+      "noise": 0.284,
+      "noiseSource": "round-drift",
+      "budget": 1,
+      "status": "ok",
+      "resolved": true,
+      "roundDeltas": [
+        0.284,
+        0.455,
+        0.583,
+        0.978,
+        0.78,
+        0.325,
+        0.564,
+        0.326,
+        0.546
+      ]
+    },
+    {
+      "metric": "cpuPct",
+      "unit": "pp",
+      "method": "median-of-rounds",
+      "baselineMedian": 17.322,
+      "agentMedian": 19.726,
+      "delta": 2.404,
+      "excess": -0.596,
+      "noise": 0.342,
+      "budget": 3,
+      "status": "ok",
+      "resolved": true
+    },
+    {
+      "metric": "rssMb",
+      "unit": "MiB",
+      "method": "median-of-rounds",
+      "baselineMedian": 246.805,
+      "agentMedian": 261.922,
+      "delta": 15.117,
+      "excess": -48.883,
+      "noise": 7.018,
+      "budget": 64,
+      "status": "ok",
+      "resolved": true
+    }
+  ],
+  "verdict": "pass"
+}
