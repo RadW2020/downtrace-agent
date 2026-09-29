@@ -10,12 +10,31 @@ import {
 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
+import { IntervalAggregator } from "../src/aggregator.ts";
+import { type DependencyWork, dependencyKey, type OperationWork } from "../src/context.ts";
 import type { CountedException } from "../src/exceptions.ts";
 import type { Logger } from "../src/log.ts";
+import { ProfileAggregator } from "../src/profile.ts";
 import { DEFAULT_MAX_QUEUED, type PendingCapture, Sender } from "../src/transport.ts";
 
 const interval = (start: number): Interval => ({ start, durationMs: 10_000, endpoints: [] });
 const quiet: Logger = { warn: () => {}, debug: () => {} };
+
+/** Narrows an optional value in tests, failing loudly instead of asserting with `!`. */
+function must<T>(value: T | undefined | null, what: string): T {
+  if (value === undefined || value === null) throw new Error(`missing ${what}`);
+  return value;
+}
+
+/** A validator for whole batches, the way the cloud's would run. */
+function batchValidator() {
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  ajv.addKeyword("x-latency-boundaries-ms");
+  ajv.addKeyword("x-calls-per-request-boundaries");
+  ajv.addKeyword("x-ingest-path");
+  ajv.addKeyword("x-since");
+  return ajv.compile(AGGREGATES_SCHEMA_V0);
+}
 
 /** The answers the cloud publishes, read from the protocol's own fixtures instead of retyped here. */
 const RESPONSES = fileURLToPath(new URL("../../protocol/schema/v0/fixtures/response/valid/", import.meta.url));
@@ -513,55 +532,205 @@ describe("the capture orders that come back in the answer", () => {
   });
 });
 
+/** One array the schema caps with `maxItems`: where it is declared, and its cap. */
+interface CappedArray {
+  path: string;
+  max: number;
+}
+
+/**
+ * Every array the schema caps with `maxItems`, at any depth: the root's properties and `$defs`, following
+ * `$ref` and `items`. The fixed-length arrays are skipped — where `minItems` equals `maxItems` the length is
+ * part of the shape, not a cap: a histogram is always 35 buckets, and no amount of traffic makes it 34.
+ */
+function cappedArrays(schema: unknown): CappedArray[] {
+  const out: CappedArray[] = [];
+  const root = schema as { properties?: Record<string, unknown>; $defs?: Record<string, unknown> };
+  const seen = new Set<object>();
+  const visit = (node: unknown, path: string): void => {
+    if (node === null || typeof node !== "object" || seen.has(node)) return;
+    seen.add(node);
+    const n = node as {
+      $ref?: unknown;
+      type?: unknown;
+      maxItems?: unknown;
+      minItems?: unknown;
+      items?: unknown;
+      properties?: Record<string, unknown>;
+    };
+    if (typeof n.$ref === "string") {
+      const name = n.$ref.replace(/^#\//, "");
+      visit(root.$defs?.[name], `$defs.${name}`);
+      return;
+    }
+    const fixedLength = n.type === "array" && typeof n.minItems === "number" && n.minItems === n.maxItems;
+    if (n.type === "array" && typeof n.maxItems === "number" && !fixedLength) out.push({ path, max: n.maxItems });
+    for (const [k, v] of Object.entries(n.properties ?? {})) visit(v, `${path}.${k}`);
+    if (n.items !== undefined) visit(n.items, `${path}[]`);
+  };
+  for (const [k, v] of Object.entries(root.properties ?? {})) visit(v, `$.${k}`);
+  for (const [k, v] of Object.entries(root.$defs ?? {})) visit(v, `$defs.${k}`);
+  return out;
+}
+
+/**
+ * The guard, as a question: how have the caps and the ways to overfill them drifted apart? Two ways — a
+ * capped array nothing here can fill past its `maxItems`, which is the next gh-776, and a way to overfill an
+ * array the schema does not cap, which is a list outliving its reason.
+ */
+function guardMismatches(capped: CappedArray[], fillers: Record<string, unknown>): string[] {
+  const missing = capped
+    .filter((c) => fillers[c.path] === undefined)
+    .map((c) => `${c.path}: maxItems ${c.max}, no way to overfill it here`);
+  const orphaned = Object.keys(fillers)
+    .filter((p) => !capped.some((c) => c.path === p))
+    .map((p) => `${p}: no capped array the schema declares`);
+  return [...missing, ...orphaned];
+}
+
 /**
  * Every array a batch carries has a `maxItems` in the schema, and a batch past one is refused with a `400`, which
- * the sender drops whole (ADR 0035). So each queue behind one of those arrays has to stop at that number, and not
- * one before it.
+ * the sender drops whole (ADR 0035). So each producer behind one of those arrays has to stop at that number, and
+ * not one before it.
  *
- * Three of them had no test at all, and taking any of the three caps out left every test green. With the
+ * Three of the top-level ones had no test at all, and taking any of the caps out left every test green. With the
  * exceptions' gone, more than 32 signatures made every batch one the cloud refuses — and the `400` branch drops
- * each round's intervals and keeps the exceptions, so the next batch was refused the same way (gh-650).
+ * each round's intervals and keeps the exceptions, so the next batch was refused the same way (gh-650). The nested
+ * ones hid the same way: an endpoint's dependencies had no cap at all in the aggregator, and 65 destinations
+ * refused the batch of every route (gh-776).
  *
- * The numbers are the schema's, read from it and not copied. So is the list: a capped array the contract gains
- * without a way to overfill it here fails the first test, which is what a list written by hand cannot do.
+ * The numbers are the schema's, read from it and not copied. So is the list, walked at any depth: a capped array
+ * the contract gains, anywhere, without a way to overfill it here fails the first test, which is what a list
+ * written by hand cannot do.
  */
 describe("Sender, bounded on every array a batch carries", () => {
-  const properties: Record<string, Record<string, unknown>> = AGGREGATES_SCHEMA_V0.properties;
-  const capped = Object.entries(properties).flatMap(([field, p]) =>
-    p.type === "array" && typeof p.maxItems === "number" ? [{ field, max: p.maxItems }] : [],
-  );
+  const capped = cappedArrays(AGGREGATES_SCHEMA_V0);
 
   const exception = (i: number): CountedException => ({ kind: "uncaught", hash: `h${i}`, text: "", count: 1 });
   const report = (i: number): CaptureProgress => ({ id: `cap-${i}`, startedAt: 1 });
   // The contract names one signal today and the queue keeps one ask per signal, so going past a cap of four takes
   // names it does not have. What this checks is the cap, which is there for the day it names a second.
   const ask = (i: number): LocalTrigger => ({ signal: `signal-${i}` as LocalTrigger["signal"], observedAt: 1 });
-
-  /** One field of the batch as the cloud would receive it, without casting through an optional chain. */
-  const carried = (call: { body: unknown } | undefined, field: string): unknown =>
-    ((call?.body ?? {}) as Record<string, unknown>)[field];
-
-  /** How to hand each queue `n` distinct entries. */
-  const overfill: Record<string, (s: Sender, n: number) => void> = {
-    intervals: (s, n) => {
-      for (let i = 0; i < n; i++) s.enqueue(interval(i));
-    },
-    exceptions: (s, n) =>
-      s.enqueueExceptions({ exceptions: Array.from({ length: n }, (_, i) => exception(i)), dropped: 0 }),
-    captures: (s, n) => s.enqueueCaptures(Array.from({ length: n }, (_, i) => report(i))),
-    triggers: (s, n) => s.enqueueTriggers(Array.from({ length: n }, (_, i) => ask(i))),
-  };
-
-  it("has a way to overfill every capped array the schema declares, and no other", () => {
-    expect(capped.map((c) => c.field).sort()).toEqual(Object.keys(overfill).sort());
+  const httpWork = (target: string): Map<string, DependencyWork> =>
+    new Map([
+      [dependencyKey("http", target), { kind: "http", target, calls: 1, ms: 1, maxMs: 1, errors: 0, waitMs: 0 }],
+    ]);
+  const operation = (i: number): OperationWork => ({
+    kind: "query",
+    hash: `h${i}`,
+    text: `SELECT ${i}`,
+    count: 1,
+    totalMs: 1,
+    errors: 0,
   });
 
-  for (const { field, max } of capped) {
-    it(`carries ${max} ${field}, the schema's maxItems, however many it was handed`, async () => {
+  /** An interval whose single route is filled by `fill`, the way the aggregator fills it. */
+  const filledInterval = (fill: (agg: IntervalAggregator) => void): Interval => {
+    const agg = new IntervalAggregator({ now: () => 1_000 });
+    fill(agg);
+    return must(agg.rotate(), "filled interval");
+  };
+  /** A profile whose endpoints are filled by `fill`, the way the profile aggregator fills them. */
+  const filledProfile = (fill: (p: ProfileAggregator) => void): Profile => {
+    const p = new ProfileAggregator({ now: () => 1_000 });
+    fill(p);
+    return must(p.drain(), "filled profile");
+  };
+
+  /** How to hand each producer `n` distinct entries, per capped array the schema declares. */
+  const overfill: Record<string, (s: Sender, n: number) => void> = {
+    "$.intervals": (s, n) => {
+      for (let i = 0; i < n; i++) s.enqueue(interval(i));
+    },
+    "$.captures": (s, n) => s.enqueueCaptures(Array.from({ length: n }, (_, i) => report(i))),
+    "$.exceptions": (s, n) =>
+      s.enqueueExceptions({ exceptions: Array.from({ length: n }, (_, i) => exception(i)), dropped: 0 }),
+    "$.triggers": (s, n) => s.enqueueTriggers(Array.from({ length: n }, (_, i) => ask(i))),
+    "$defs.Interval.endpoints": (s, n) =>
+      s.enqueue(
+        filledInterval((agg) => {
+          for (let i = 0; i < n; i++) agg.record("GET", `/many/${i}`, 200, 1);
+        }),
+      ),
+    "$defs.Endpoint.dependencies": (s, n) =>
+      s.enqueue(
+        filledInterval((agg) => {
+          for (let i = 0; i < n; i++) agg.record("GET", "/webhooks", 200, 1, httpWork(`hook${i}.example`));
+        }),
+      ),
+    "$defs.Profile.endpoints": (s, n) =>
+      s.enqueueProfile(
+        filledProfile((p) => {
+          for (let i = 0; i < n; i++) p.record("GET", `/many/${i}`, []);
+        }),
+      ),
+    "$defs.ProfileEndpoint.operations": (s, n) =>
+      s.enqueueProfile(
+        filledProfile((p) => {
+          p.record(
+            "GET",
+            "/many",
+            Array.from({ length: n }, (_, i) => operation(i)),
+          );
+        }),
+      ),
+  };
+
+  /** One array of the batch as the cloud would receive it, without casting through an optional chain. */
+  const dig = (path: string, body: unknown): unknown => {
+    if (path.startsWith("$.")) return ((body ?? {}) as Record<string, unknown>)[path.slice(2)];
+    switch (path) {
+      case "$defs.Interval.endpoints":
+        return (body as { intervals?: { endpoints?: unknown }[] })?.intervals?.[0]?.endpoints;
+      case "$defs.Endpoint.dependencies":
+        return (body as { intervals?: { endpoints?: { dependencies?: unknown }[] }[] })?.intervals?.[0]?.endpoints?.[0]
+          ?.dependencies;
+      case "$defs.Profile.endpoints":
+        return (body as { profile?: { endpoints?: unknown } })?.profile?.endpoints;
+      case "$defs.ProfileEndpoint.operations":
+        return (body as { profile?: { endpoints?: { operations?: unknown }[] } })?.profile?.endpoints?.[0]?.operations;
+      default:
+        return undefined;
+    }
+  };
+
+  it("has a way to overfill every capped array the schema declares, at any depth, and no other", () => {
+    expect(guardMismatches(capped, overfill)).toEqual([]);
+  });
+
+  it("fails when the schema gains a capped array without a way to overfill it", () => {
+    // Run on a copy: the real schema stays the source, and the guard's failure is what a new cap has to earn.
+    const widened = structuredClone(AGGREGATES_SCHEMA_V0) as { properties: Record<string, unknown> };
+    widened.properties.fences = { type: "array", maxItems: 8, items: { type: "string" } };
+    expect(guardMismatches(cappedArrays(widened), overfill)).toEqual([
+      "$.fences: maxItems 8, no way to overfill it here",
+    ]);
+  });
+
+  it("fails when a way to overfill points at nothing the schema caps", () => {
+    const orphaned = { ...overfill, "$.fences": overfill["$.intervals"] };
+    expect(guardMismatches(capped, orphaned)).toEqual(["$.fences: no capped array the schema declares"]);
+  });
+
+  for (const { path, max } of capped.filter((c) => c.path.startsWith("$."))) {
+    it(`carries ${max} ${path.slice(2)}, the schema's maxItems, however many it was handed`, async () => {
       const { s, calls } = sender([202]);
-      overfill[field]?.(s, max + 3);
+      overfill[path]?.(s, max + 3);
       expect(await s.flush()).toBe(true);
-      expect(carried(calls[0], field)).toHaveLength(max);
+      expect(dig(path, calls[0]?.body)).toHaveLength(max);
+    });
+  }
+
+  for (const { path, max } of capped.filter((c) => !c.path.startsWith("$."))) {
+    it(`keeps ${path.slice("$defs.".length)} within its maxItems of ${max} however many it was handed`, async () => {
+      const { s, calls } = sender([202]);
+      overfill[path]?.(s, max + 3);
+      expect(await s.flush()).toBe(true);
+      const validate = batchValidator();
+      const carried = dig(path, calls[0]?.body);
+      expect(Array.isArray(carried), path).toBe(true);
+      expect((carried as unknown[]).length, path).toBeLessThanOrEqual(max);
+      expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
     });
   }
 
@@ -580,7 +749,7 @@ describe("Sender, bounded on every array a batch carries", () => {
     // Three more, that do not fit while the first 32 are still waiting.
     s.enqueueExceptions({ exceptions: Array.from({ length: 3 }, (_, i) => exception(100 + i)), dropped: 0 });
     expect(await s.flush()).toBe(true);
-    expect(carried(calls[1], "exceptions")).toHaveLength(32);
+    expect(dig("$.exceptions", calls[1]?.body)).toHaveLength(32);
     expect(resources(calls[1])?.droppedExceptions).toBe(3);
     // The batch landed, so the next says nothing: a counter that repeated itself would read as loss that keeps
     // happening (gh-243).
@@ -591,7 +760,13 @@ describe("Sender, bounded on every array a batch carries", () => {
 
   it("sends a batch the schema accepts with every one of those queues past its cap", async () => {
     const { s, calls } = sender([202]);
-    for (const { field, max } of capped) if (field !== "triggers") overfill[field]?.(s, max + 3);
+    // The nested fillers first: the batch carries the oldest intervals and the first profile, and the nested
+    // caps are the ones on those arrays. Two profiles would ride apart, so the profile side overfills the
+    // operations, the tighter of the two.
+    for (const { path, max } of capped)
+      if (path.startsWith("$defs.") && path !== "$defs.Profile.endpoints") overfill[path]?.(s, max + 3);
+    for (const { path, max } of capped)
+      if (path.startsWith("$.") && path !== "$.triggers") overfill[path]?.(s, max + 3);
     // The made-up signals above cannot be valid. Every signal the contract does name, asked for twice, is.
     const signals = AGGREGATES_SCHEMA_V0.$defs.LocalTrigger.properties.signal.enum;
     // `as` because the JSON module types the enum as `string[]`; the values are the schema's own.
@@ -599,14 +774,9 @@ describe("Sender, bounded on every array a batch carries", () => {
       [...signals, ...signals].map((signal) => ({ signal: signal as LocalTrigger["signal"], observedAt: 1 })),
     );
     expect(await s.flush()).toBe(true);
-    const ajv = new Ajv2020({ allErrors: true, strict: true });
-    ajv.addKeyword("x-latency-boundaries-ms");
-    ajv.addKeyword("x-calls-per-request-boundaries");
-    ajv.addKeyword("x-ingest-path");
-    ajv.addKeyword("x-since");
-    const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
+    const validate = batchValidator();
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
-    expect(carried(calls[0], "triggers")).toHaveLength(signals.length);
+    expect(dig("$.triggers", calls[0]?.body)).toHaveLength(signals.length);
   });
 });
 
@@ -746,5 +916,29 @@ describe("Sender, delivering what the process threw", () => {
     ajv.addKeyword("x-since");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(last), JSON.stringify(validate.errors)).toBe(true);
+  });
+});
+
+// gh-776. A route that talks to more distinct destinations than the schema's `maxItems` used to build a batch
+// the cloud refuses with a 400, and a refused batch is dropped whole (ADR 0035): the interval of every route
+// was lost, not only the one that went past the cap. The batch must validate whatever the route talks to.
+describe("Sender, when a route calls more dependencies than the schema allows", () => {
+  const validate = batchValidator();
+
+  it("a route that calls 65 distinct destinations sends a batch the schema accepts", async () => {
+    const { s, calls } = sender([202]);
+    const agg = new IntervalAggregator({ now: () => 1_000 });
+    for (let i = 0; i < 65; i++) {
+      const work = new Map([
+        [
+          dependencyKey("http", `hook${i}.example`),
+          { kind: "http" as const, target: `hook${i}.example`, calls: 1, ms: 2, maxMs: 2, errors: 0, waitMs: 0 },
+        ],
+      ]);
+      agg.record("POST", "/webhooks", 200, 1, work);
+    }
+    s.enqueue(must(agg.rotate(), "interval"));
+    expect(await s.flush()).toBe(true);
+    expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
 });

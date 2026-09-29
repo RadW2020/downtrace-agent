@@ -88,6 +88,27 @@ export const CALLS_PER_REQUEST_BUCKETS_V0 = ${queryBoundaries.length + 1};
 `,
 );
 
+// An endpoint's dependencies are capped by the schema, and the kinds are what the fold may still take one
+// (other) row for each: both values are read here, and the agent subtracts, so neither is copied.
+const endpointProps = defs.Endpoint?.properties as Record<string, unknown> | undefined;
+const depsDef = endpointProps?.dependencies as { maxItems?: unknown } | undefined;
+const depsCap = depsDef?.maxItems;
+if (typeof depsCap !== "number") throw new Error("schema: Endpoint.properties.dependencies.maxItems missing");
+const dependencyProps = defs.Dependency?.properties as Record<string, { enum?: unknown } | undefined> | undefined;
+const depKinds = dependencyProps?.kind?.enum;
+if (!Array.isArray(depKinds) || depKinds.length === 0)
+  throw new Error("schema: Dependency.properties.kind.enum missing");
+await writeFile(
+  `${outDir}caps.ts`,
+  `${header}
+/** The most dependencies one endpoint may carry in a batch. */
+export const DEPENDENCIES_MAX_ITEMS_V0 = ${depsCap};
+
+/** The dependency kinds the schema names, in the order it names them. */
+export const DEPENDENCY_KINDS_V0 = [${(depKinds as unknown[]).map((k) => JSON.stringify(k)).join(", ")}] as const;
+`,
+);
+
 const ingestPath = schema["x-ingest-path"];
 if (typeof ingestPath !== "string" || !ingestPath.startsWith("/")) {
   throw new Error("schema: x-ingest-path missing or invalid");
@@ -114,5 +135,5 @@ export function captureEvidencePath(id: string): string {
 
 console.log(
   `generated aggregates.ts, ingest-response.ts, capture-evidence.ts, versions.ts (protocol ${current}), ` +
-    `boundaries.ts (${boundaries.length + 1} buckets) and paths.ts`,
+    `boundaries.ts (${boundaries.length + 1} buckets), caps.ts and paths.ts`,
 );

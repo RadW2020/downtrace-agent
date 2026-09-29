@@ -410,6 +410,12 @@ Every dependency carries a **target** saying which instance of its kind it is, t
 outgoing HTTP, host and port for Postgres and Redis. A read replica and a primary are two dependencies, not one.
 MySQL will appear the same way when it is added.
 
+The first 60 distinct destinations a route talks to in an interval keep their target; past that, the rest fold into
+one row of their own kind with target `(other)`. The folded destinations' calls, time and errors are in that row —
+summed per request, so a request that talked to three of them counts once — and nothing of them is dropped. The cap
+is there because a batch the schema refuses is dropped whole, and it would be the interval of every route, not only
+the one that went past.
+
 The instrumentation loads before your application (`node --import`), so it wraps the driver before you import it and you write
 no code. The wrapper passes arguments, results and errors through untouched, and a failure inside it runs your query
 anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
@@ -529,6 +535,7 @@ you would give an application log.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
+- At most 60 distinct dependencies per route per interval; the rest fold into one `(other)` row of their kind that keeps their calls, time and errors, so the batch never outgrows the schema's 64 and a busy route cannot sink the interval of every route.
 - At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.
 - Query texts are normalised once per distinct text and cached, so repeating the same query costs a map lookup, not a re-parse.
 - Measured overhead budget: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB. Measured after every merge that can move it, on a machine with nothing else on it, and by hand with `make bench`; never as a gate before a merge.

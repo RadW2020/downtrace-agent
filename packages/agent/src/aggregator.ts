@@ -1,6 +1,8 @@
 import {
   CALLS_PER_REQUEST_BUCKETS_V0,
   callsPerRequestBucket,
+  DEPENDENCIES_MAX_ITEMS_V0,
+  DEPENDENCY_KINDS_V0,
   type Dependency,
   type Endpoint,
   type Interval,
@@ -8,8 +10,19 @@ import {
   type LatencyHistogram,
   latencyBucket,
 } from "@downtrace/protocol";
-import type { DependencyKind, DependencyWork } from "./context.ts";
+import { type DependencyKind, type DependencyWork, dependencyKey } from "./context.ts";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
+
+/** The target the dependencies past the per-route cap fold into, one row of their own kind (gh-776). */
+export const OTHER_DEPENDENCY_TARGET = "(other)";
+
+/**
+ * How many distinct dependencies keep their own row per route and interval: the schema's `maxItems` for
+ * `dependencies` minus the kinds it names, which is how many `(other)` rows, one per kind, may still fit
+ * beside them. Both values are the schema's, generated into the protocol (gh-776): a list that outgrew the
+ * cap made the cloud refuse the batch, and a refused batch is dropped whole, every route's interval with it.
+ */
+export const MAX_KEPT_DEPENDENCIES = DEPENDENCIES_MAX_ITEMS_V0 - DEPENDENCY_KINDS_V0.length;
 
 /** Per-route accumulator with preallocated histogram buckets. */
 interface EndpointAcc {
@@ -24,8 +37,13 @@ interface EndpointAcc {
   counts: Uint32Array;
   sum: number;
   max: number;
-  /** One accumulator per dependency this route touched; only allocated when a call was actually observed. */
+  /**
+   * One accumulator per dependency this route touched, up to `MAX_KEPT_DEPENDENCIES`, plus the `(other)` row
+   * of each kind past the cap; only allocated when a call was actually observed.
+   */
   deps: Map<string, DependencyAcc> | undefined;
+  /** How many of those rows are kept dependencies, as opposed to `(other)` rows: the cap is counted on them. */
+  keptDeps: number;
 }
 
 interface DependencyAcc {
@@ -113,6 +131,7 @@ export class IntervalAggregator implements Recorder {
           sum: 0,
           max: 0,
           deps: undefined,
+          keptDeps: 0,
         };
         this.endpoints.set(key, acc);
       }
@@ -132,26 +151,40 @@ export class IntervalAggregator implements Recorder {
     if (work) {
       // Only requests served while a driver was instrumented carry work; the field stays absent otherwise.
       acc.deps ??= new Map();
+      // What falls into a kind's `(other)` row this request, summed by kind before the calls-per-request
+      // bucket is counted: a request that talks to three folded targets of a kind is one request with their
+      // calls added, not three (gh-776).
+      let folded: Map<DependencyKind, DependencyWork> | undefined;
       for (const [key, w] of work) {
-        let dep = acc.deps.get(key);
-        if (!dep) {
-          dep = {
-            kind: w.kind,
-            target: w.target,
-            counts: new Uint32Array(CALLS_PER_REQUEST_BUCKETS_V0),
-            sum: 0,
-            max: 0,
-            errors: 0,
-            wait: 0,
-          };
-          acc.deps.set(key, dep);
+        const dep = acc.deps.get(key);
+        if (dep !== undefined) {
+          addWork(dep, w);
+          continue;
         }
-        const callBucket = callsPerRequestBucket(w.calls);
-        dep.counts[callBucket] = (dep.counts[callBucket] ?? 0) + 1;
-        dep.sum += w.ms;
-        if (w.maxMs > dep.max) dep.max = w.maxMs;
-        dep.errors += w.errors;
-        dep.wait += w.waitMs;
+        if (acc.keptDeps < MAX_KEPT_DEPENDENCIES) {
+          const kept = newDependency(w.kind, w.target);
+          acc.deps.set(key, kept);
+          acc.keptDeps += 1;
+          addWork(kept, w);
+        } else {
+          // Past the cap, a destination never gets a row of its own: it folds into its kind's `(other)` row.
+          // Nothing remembers which destinations folded — once the cap is reached, every destination that
+          // has no row folds, which is the same decision made twice.
+          folded ??= new Map();
+          const f = folded.get(w.kind);
+          if (f === undefined) folded.set(w.kind, { ...w });
+          else {
+            f.calls += w.calls;
+            f.ms += w.ms;
+            if (w.maxMs > f.maxMs) f.maxMs = w.maxMs;
+            f.errors += w.errors;
+            f.waitMs += w.waitMs;
+          }
+        }
+      }
+      for (const [kind, w] of folded ?? []) {
+        const other = otherRowOf(acc.deps, kind);
+        addWork(other, w);
       }
     }
   }
@@ -205,6 +238,39 @@ export class IntervalAggregator implements Recorder {
   }
 }
 
+function newDependency(kind: DependencyKind, target: string): DependencyAcc {
+  return {
+    kind,
+    target,
+    counts: new Uint32Array(CALLS_PER_REQUEST_BUCKETS_V0),
+    sum: 0,
+    max: 0,
+    errors: 0,
+    wait: 0,
+  };
+}
+
+/** The `(other)` row of one kind, created on first fold: it is a row like any other, only its target is the bucket. */
+function otherRowOf(deps: Map<string, DependencyAcc>, kind: DependencyKind): DependencyAcc {
+  const key = dependencyKey(kind, OTHER_DEPENDENCY_TARGET);
+  let row = deps.get(key);
+  if (row === undefined) {
+    row = newDependency(kind, OTHER_DEPENDENCY_TARGET);
+    deps.set(key, row);
+  }
+  return row;
+}
+
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
+}
+
+/** What one request's work adds to one dependency's accumulator. */
+function addWork(dep: DependencyAcc, w: DependencyWork): void {
+  const callBucket = callsPerRequestBucket(w.calls);
+  dep.counts[callBucket] = (dep.counts[callBucket] ?? 0) + 1;
+  dep.sum += w.ms;
+  if (w.maxMs > dep.max) dep.max = w.maxMs;
+  dep.errors += w.errors;
+  dep.wait += w.waitMs;
 }
