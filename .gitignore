@@ -9,6 +9,9 @@ coverage/
 cloud/bin/
 bench-report.json
 coexistence-report.json
+instruments-report.json
+profile-report.json
+*.cpuprofile
 .demo/
 .secrets/
 *.swp
