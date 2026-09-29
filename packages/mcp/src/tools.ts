@@ -184,19 +184,38 @@ export const tools: Tool[] = [
   },
   {
     name: "read_history",
-    description: "What a project looked like further back than the fine-grained data goes, hour by hour.",
+    description:
+      "What a project looked like further back than the fine-grained data goes, hour by hour. " +
+      "`baselineFrom` and `baselineTo`, both or neither, are the other window the history page compares " +
+      "against: with them the answer adds `baseline`, the window as asked for with whether the series covers " +
+      "it, and `comparison`, one row per endpoint and metric with before, after, the change and whether it " +
+      "got worse — the same table the page shows. One of the two alone is refused with the reason the page " +
+      "gives for the same selection, and a side with nothing in the series comes back as `comparison: []` " +
+      "with `limits` naming the side.",
     inputSchema: {
       type: "object",
       properties: {
         project,
         from: { type: "string", description: "RFC 3339 instant." },
         to: { type: "string", description: "RFC 3339 instant." },
+        baselineFrom: {
+          type: "string",
+          description:
+            "RFC 3339 instant: the start of the other window, the one to compare against. Goes with " +
+            "`baselineTo`, both or neither.",
+        },
+        baselineTo: {
+          type: "string",
+          description:
+            "RFC 3339 instant: the end of the other window, the one to compare against. Goes with " +
+            "`baselineFrom`, both or neither.",
+        },
       },
       required: ["project", "from", "to"],
     },
     method: "GET",
     path: "/api/p/{slug}/history",
-    query: ["from", "to"],
+    query: ["from", "to", "baselineFrom", "baselineTo"],
   },
   {
     name: "list_errors",

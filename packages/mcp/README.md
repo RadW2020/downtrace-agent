@@ -46,7 +46,7 @@ Named after the capability, not the route: an agent looks for "verify the recove
 | `read_report` | **start here**: facts, hypotheses with their state, recommendations tied to the hypothesis they rest on, and what it cannot say |
 | `compare_windows` | the differences ordered by how much they explain |
 | `verify_recovery` | did what I changed work |
-| `read_history` | further back than the fine-grained data goes |
+| `read_history` | further back than the fine-grained data goes; with `baselineFrom` and `baselineTo` (both or neither), the comparison of the two windows the history page shows, with `baseline` and `comparison` |
 | `list_captures`, `read_capture`, `request_capture` | ask for detail on a route or a dependency |
 | `close_finding`, `accept_reference`, `assess_hypothesis`, `give_feedback` | decide |
 | `annotate_finding`, `record_regression`, `list_regressions` | what you know and Downtrace could not measure |

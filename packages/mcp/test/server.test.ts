@@ -132,6 +132,44 @@ describe("calling a tool", () => {
     expect(only(calls, 0).headers.authorization).toBe("Bearer tok");
   });
 
+  /**
+   * gh-812, invariant 13: the comparison the history page shows is the same comparison the resource
+   * publishes, and the tool carries the two windows that select it.
+   */
+  it("passes the baseline windows of read_history in the query string, beside from and to", async () => {
+    const tool = toolNamed("read_history");
+    expect(tool?.inputSchema.properties.baselineFrom?.type).toBe("string");
+    expect(tool?.inputSchema.properties.baselineTo?.type).toBe("string");
+    // Optional, beside the three the read has always required.
+    expect(tool?.inputSchema.required).toEqual(["project", "from", "to"]);
+
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", {
+      name: "read_history",
+      arguments: {
+        project: "tienda",
+        from: "2026-08-25T00:00:00Z",
+        to: "2026-09-01T00:00:00Z",
+        baselineFrom: "2026-08-18T00:00:00Z",
+        baselineTo: "2026-08-25T00:00:00Z",
+      },
+    });
+    expect(only(calls, 0).url).toBe(
+      "https://cloud.test/api/p/tienda/history?from=2026-08-25T00%3A00%3A00Z&to=2026-09-01T00%3A00%3A00Z" +
+        "&baselineFrom=2026-08-18T00%3A00%3A00Z&baselineTo=2026-08-25T00%3A00%3A00Z",
+    );
+
+    // And without them the read is the one-window read it has always been: the cloud is what decides the
+    // two-or-neither rule, and the server is a client of it.
+    await s.handle("tools/call", {
+      name: "read_history",
+      arguments: { project: "tienda", from: "2026-08-25T00:00:00Z", to: "2026-09-01T00:00:00Z" },
+    });
+    expect(only(calls, 1).url).toBe(
+      "https://cloud.test/api/p/tienda/history?from=2026-08-25T00%3A00%3A00Z&to=2026-09-01T00%3A00%3A00Z",
+    );
+  });
+
   it("puts what belongs in the query string there and the rest in the body", async () => {
     const { s, calls } = server([{}, {}]);
     await s.handle("tools/call", {
