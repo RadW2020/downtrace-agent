@@ -15,9 +15,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Agent, createAgent } from "../src/agent.ts";
 import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
 import type { AgentConfig, Instrument } from "../src/config.ts";
-import { currentContext, recordOperationIn } from "../src/context.ts";
+import { currentContext, recordCall, recordOperationIn } from "../src/context.ts";
 import { FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
+import { PrearmRegister } from "../src/prearm.ts";
 import { RuntimeSampler } from "../src/runtime.ts";
 import { testConfig } from "./support/agent-config.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -460,6 +461,79 @@ describe("agent v0 (integration)", () => {
     // to 1970 and makes every comparison between instances nonsense (gh-399).
     const dated = Date.parse(body.requests[0]?.startedAt ?? "");
     expect(Math.abs(dated - startedRoughly)).toBeLessThan(60_000);
+  });
+
+  // gh-861, the half of the cut wire of gh-498 that was still cut. The reserve was read for a capture of a
+  // named route, and a capture of a dependency has no route: the one production call asked the reserve for
+  // the footprint's method and an empty route, no arm answers that label, and the dependency capture went out
+  // with whatever the global ring still held — which, under the traffic of every other route, is nothing
+  // (ADR 0122). The armed route paid for the reserve; nobody read it.
+  it("hands a capture of a dependency what the armed route's reserve kept", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { path: string; body: unknown }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith(AGGREGATES_PATH)) {
+        // Asked once: the cloud repeats an order until it sees the start, and one is enough here.
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-postgres",
+                windowSeconds: 0.05,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                kind: "postgres",
+                target: "db:5432",
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const clock = testClock();
+    const prearm = new PrearmRegister();
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["http"]) }), {
+      log: quiet,
+      fetchImpl,
+      now: clock.now,
+      // A ring of eight: the traffic below wraps it, which is how the ring loses the armed route's detail.
+      fine: new FineRegister({ requests: 8 }),
+      prearm,
+    });
+    cleanups.push(() => agent.stop());
+    // Armed before the request, which is the only order in which a reserve can hold anything.
+    prearm.arm("GET /cart", clock.now() - 1_000, 60_000);
+    agent.start();
+
+    const cart = { method: "GET", url: "/cart" };
+    channel(REQUEST_START).publish({ request: cart });
+    recordCall("postgres", "db:5432", 3, false);
+    channel(RESPONSE_FINISH).publish({ request: cart, response: { statusCode: 200 } });
+    // Traffic from routes nobody armed, enough to wrap the small ring and take the cart row with it.
+    for (let i = 0; i < 20; i++) {
+      const other = { method: "GET", url: `/items/${i}` };
+      channel(REQUEST_START).publish({ request: other });
+      channel(RESPONSE_FINISH).publish({ request: other, response: { statusCode: 200 } });
+    }
+    clock.here();
+    // The first batch goes out and comes back with the order to watch postgres.
+    expect(await agent.flushNow()).toBe(true);
+    clock.advance(60);
+    // The window closed: the evidence goes out, and the cart request is in it — though the ring lost it.
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    expect(evidence[0]?.path).toContain("/v0/captures/cap-postgres/evidence");
+    const body = evidence[0]?.body as { requests: { method: string; route: string }[] };
+    // The request the ring no longer holds, brought by the reserve of the route that was armed.
+    expect(body.requests.map((r) => ({ method: r.method, route: r.route }))).toEqual([
+      { method: "GET", route: "/cart" },
+    ]);
   });
 
   // `product.md:122`: «A capture is the moment when the instrumentation freezes the contents of the black box

@@ -46,6 +46,41 @@ describe("the prearm reserve", () => {
     expect(r.requestsFor("GET /cart", 6_500).length).toBe(0);
   });
 
+  // The reading a capture without a route makes: every route armed right now, with its own window and its
+  // own rows (gh-861). An arm that ran out is not armed, and its window ends with it.
+  it("reports the reserves of the routes armed right now, and only those", () => {
+    const r = new PrearmRegister({ routes: 2, requestsPerRoute: 4 });
+    r.arm("GET /cart", 1_000, 60_000);
+    r.arm("POST /orders", 2_000, 60_000);
+    r.observe(request("/cart", 1_100));
+
+    expect(r.armedReserves(3_000)).toEqual([
+      {
+        method: "GET",
+        route: "/cart",
+        armedAt: 1_000,
+        requests: [
+          {
+            method: "GET",
+            route: "/cart",
+            status: 200,
+            startedAt: 1_100,
+            durationMs: 10,
+            operations: [{ hash: "a", startMs: 1, endMs: 2 }],
+            dependencies: [],
+            truncated: false,
+            detailLost: false,
+          },
+        ],
+      },
+      { method: "POST", route: "/orders", armedAt: 2_000, requests: [] },
+    ]);
+    // The arm of /cart expired, the one of /orders has not: the window of the first is gone, and the second
+    // keeps reading.
+    expect(r.armedReserves(61_001).map((p) => p.route)).toEqual(["/orders"]);
+    expect(r.armedReserves(121_001)).toEqual([]);
+  });
+
   // Refusing in silence is the failure invariant 14 is about: a route that was not armed has to be counted.
   it("counts the routes it could not arm instead of dropping them quietly", () => {
     const r = new PrearmRegister({ routes: 1 });
@@ -124,6 +159,48 @@ describe("the label tables of the reserve", () => {
     expect(r.labelsFolded).toBe(1);
   });
 
+  // The row holds four dependency labels, and a capture of a dependency is what reads them (gh-861). A row
+  // that touched a fifth cannot be shown not to have used it, so the list that did not fit is marked rather
+  // than dropped in silence — the same mark the fine register keeps, and the one the matcher of a capture
+  // matches against whatever dependency it is about (invariant 14).
+  it("marks a row whose dependency list did not fit, and hands the mark to the capture", () => {
+    const r = new PrearmRegister({ routes: 1, requestsPerRoute: 4 });
+    r.arm("GET /cart", 1_000, 60_000);
+    r.observe({
+      method: "GET",
+      route: "/cart",
+      status: 200,
+      startedAt: 1_100,
+      durationMs: 10,
+      operations: [],
+      dependencies: [
+        dependencyKey("postgres", "db-0:5432"),
+        dependencyKey("redis", "cache-0:6379"),
+        dependencyKey("http", "service-0:443"),
+        dependencyKey("pgbouncer", "pool-0:6432"),
+        dependencyKey("mysql", "db-1:3306"),
+      ],
+    });
+
+    const rows = r.requestsFor("GET /cart", 1_200);
+    expect(rows[0]?.dependencies).toHaveLength(4);
+    expect(rows[0]?.dependenciesTruncated).toBe(true);
+    // And the shape a capture is assembled from carries the mark, so the slice can count on it.
+    const reserve = r.reserveFor("GET", "/cart", 1_200);
+    expect(reserve?.requests[0]?.dependenciesTruncated).toBe(true);
+    // A row whose list did fit is not marked: the mark is for the gap, and absent means false.
+    r.observe({
+      method: "GET",
+      route: "/cart",
+      status: 200,
+      startedAt: 1_110,
+      durationMs: 10,
+      operations: [],
+      dependencies: [dependencyKey("postgres", "db-0:5432")],
+    });
+    expect(r.requestsFor("GET /cart", 1_200)[1]?.dependenciesTruncated).toBeUndefined();
+  });
+
   it("folds a dependency label the same way", () => {
     const r = new PrearmRegister({ routes: 1, requestsPerRoute: 4, dependencyLabels: 2 });
     r.arm("GET /cart", 1_000, 60_000);
@@ -169,7 +246,7 @@ describe("the label tables of the reserve", () => {
       footprint: { method: "GET", route: "/cart" },
       reported: false,
     };
-    const slice = sliceFor(capture, new FineRegister().snapshot(), (route) => route, reserve);
+    const slice = sliceFor(capture, new FineRegister().snapshot(), (route) => route, [reserve]);
     expect(slice.requests.map((x) => x.startedAt)).toEqual([1_100, 1_101, 1_102, 1_103, 1_104, 1_105]);
     // The names are gone to the fold, and the loss is said rather than silent (COB-01): the first request's
     // labels kept their names, and every request after the cap reads the sentinel.

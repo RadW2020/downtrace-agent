@@ -11,7 +11,7 @@ import {
   PROTOCOL_VERSION,
 } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
-import { Captures, type LiveCapture, sliceFor } from "./captures.ts";
+import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
 import {
@@ -650,14 +650,20 @@ export class Agent {
       }
       // With the reserve, which is the whole point of having one: a route armed before this capture kept its
       // requests out of reach of everyone else's traffic, and this is where the two registers meet (ADR 0122).
-      // It used to be left out — the argument was optional and this call simply did not pass it — so a capture
-      // of an armed route delivered only what the global ring happened to still hold (gh-498).
-      const slice = sliceFor(
-        capture,
-        this.fine.snapshot(),
-        (route) => this.nameOf(route),
-        this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(capture.footprint.route ?? ""), this.now()),
-      );
+      // A capture of a route reads that route's reserve, and a capture without a route reads every armed
+      // route's, each from its own arm. The argument used to be a single route or nothing, and a capture of a
+      // dependency has no route to name: it arrived at no reserve at all and delivered only what the global
+      // ring happened to still hold (gh-498, and the last cut half of it, gh-861).
+      const route = capture.footprint.route;
+      const now = this.now();
+      let prearm: PrearmReserve[];
+      if (route !== undefined && route !== "") {
+        const own = this.prearm.reserveFor(capture.footprint.method ?? "", this.nameOf(route), now);
+        prearm = own === null ? [] : [own];
+      } else {
+        prearm = this.prearm.armedReserves(now);
+      }
+      const slice = sliceFor(capture, this.fine.snapshot(), (route) => this.nameOf(route), prearm);
       const evidence: CaptureEvidence = {
         protocol: PROTOCOL_VERSION,
         instance: { id: this.instance.id },

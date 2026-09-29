@@ -68,6 +68,7 @@ describe("the prearmed reserve carries what a capture needs", () => {
     });
 
     const reserve = prearm.reserveFor("GET", "/cart", 1_200);
+    if (!reserve) throw new Error("an armed route reports no reserve");
     const capture = {
       id: "cap-1",
       startedAt: 1_050,
@@ -78,12 +79,12 @@ describe("the prearmed reserve carries what a capture needs", () => {
     // An empty ring: whatever the reserve does not hold is gone.
     const empty = new FineRegister().snapshot();
 
-    const withReserve = sliceFor(capture, empty, (route) => route, reserve);
+    const withReserve = sliceFor(capture, empty, (route) => route, [reserve]);
     expect(withReserve.requests.map((r) => r.startedAt)).toEqual([1_100]);
     expect(withReserve.requests[0]?.operations).toHaveLength(1);
 
-    // And without it, which is what production did: the capture goes out empty.
-    const withoutReserve = sliceFor(capture, empty, (route) => route, null);
+    // And without it: no reserve to read, and the capture goes out empty.
+    const withoutReserve = sliceFor(capture, empty, (route) => route, []);
     expect(withoutReserve.requests).toHaveLength(0);
   });
 });

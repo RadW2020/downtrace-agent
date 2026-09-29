@@ -14,6 +14,7 @@
  * nothing confirms expires having cost a few kilobytes and no network (`product.md:102`).
  */
 
+import type { PrearmReserve } from "./captures.ts";
 import type { FineRequest } from "./fine.ts";
 import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
 import { OTHER_ROUTE } from "./routes.ts";
@@ -63,16 +64,20 @@ const R_OP_COUNT = 4;
 const R_POOL_WAIT = 5;
 const R_DEP_FROM = 6;
 const R_DEP_COUNT = 7;
-const R_FIELDS = 8;
+/** The same mark the fine register keeps: the row touched more dependencies than the row holds (invariant 14). */
+const R_DEP_TRUNCATED = 8;
+const R_FIELDS = 9;
 
 /**
  * Dependency labels kept per armed request. A capture can be about a dependency rather than a route, and
  * `sliceFor` decides that by reading this: a reserve whose rows have no dependencies is a reserve that never
- * matches such a capture. The reserve declared the field and dropped it, which is a silent wrong answer rather
- * than a missing one (gh-498).
+ * matches such a capture, and a capture without a route reads every armed route's reserve at once, so this is
+ * what its evidence is filtered by (gh-861). A row that touched more dependencies than this keeps is marked
+ * as truncated rather than dropping them in silence, so it still matches the capture of a dependency it
+ * cannot name, and the evidence is incomplete instead of wrong (invariant 14).
  *
- * Four is what the fine register keeps, for the same reason: a request touching more than four distinct
- * dependencies is rare, and the cap is what keeps this bounded.
+ * Four is half of what the fine register keeps, for the same reason: a request touching more than four
+ * distinct dependencies is rare, and the cap is what keeps this bounded.
  */
 const DEPS_PER_REQUEST = 4;
 
@@ -91,6 +96,8 @@ export interface PrearmRequest {
   poolWaitMs?: number;
   operations: { hash: string; startMs: number; endMs: number }[];
   dependencies: string[];
+  /** True when it touched more distinct dependencies than the row holds. Absent means false. */
+  dependenciesTruncated?: boolean;
 }
 
 /** What the register is told about a request that just finished. */
@@ -247,22 +254,25 @@ export class PrearmRegister {
     this.requests[at + R_POOL_WAIT] = r.poolWaitMs ?? Number.NaN;
     const depAt = index * DEPS_PER_REQUEST;
     let deps = 0;
+    let overflow = false;
     for (const dependency of r.dependencies) {
-      if (deps >= DEPS_PER_REQUEST) break;
+      if (deps >= DEPS_PER_REQUEST) {
+        overflow = true;
+        break;
+      }
       this.dependencies[depAt + deps] = this.dependencyLabels.intern(dependency);
       if (this.dependencyLabels.folded) this.labelsFolded += 1;
       deps++;
     }
     this.requests[at + R_DEP_FROM] = depAt;
     this.requests[at + R_DEP_COUNT] = deps;
+    // The same mark the fine register keeps, for the same reason: a row whose list does not fit is not a row
+    // that used only what it lists (invariant 14).
+    this.requests[at + R_DEP_TRUNCATED] = overflow ? 1 : 0;
     this.methods[index] = label;
     arm.written++;
   }
 
-  /**
-   * What the reserve kept for this route, oldest first. Empty when the route is not armed, which is the
-   * normal case and the reason this costs nothing in a process nobody has armed.
-   */
   /**
    * What this route kept, in the shape a capture is assembled from, or `null` when it is not armed.
    *
@@ -270,11 +280,37 @@ export class PrearmRegister {
    * capture must not have to know they are two. `truncated` and `detailLost` are false by construction: the
    * reserve is bounded per route and nobody else writes over it, which is the reason it exists (ADR 0122).
    */
-  reserveFor(method: string, route: string, now: number): { armedAt: number; requests: FineRequest[] } | null {
+  reserveFor(method: string, route: string, now: number): PrearmReserve | null {
     const label = `${method} ${route}`;
     const armedAt = this.armedAt(label, now);
     if (armedAt === undefined) return null;
-    const requests: FineRequest[] = this.requestsFor(label, now).map((r) => {
+    return { method, route, armedAt, requests: this.fineRequests(label, now) };
+  }
+
+  /**
+   * What every route armed right now kept, in the shape a capture is assembled from; none when nobody is
+   * armed, the normal case. A capture that is about none of the armed routes by name — the one about a
+   * dependency — reads all of them at once, each owning the window of the ring it replaced (gh-861).
+   */
+  armedReserves(now: number): PrearmReserve[] {
+    const out: PrearmReserve[] = [];
+    for (let i = 0; i < this.routeCapacity; i++) {
+      const arm = this.arms[i];
+      if (!arm || arm.until <= now) continue;
+      const space = arm.label.indexOf(" ");
+      out.push({
+        method: space < 0 ? arm.label : arm.label.slice(0, space),
+        route: space < 0 ? "" : arm.label.slice(space + 1),
+        armedAt: arm.armedAt,
+        requests: this.fineRequests(arm.label, now),
+      });
+    }
+    return out;
+  }
+
+  /** The rows as `sliceFor` reads them, with the flags it counts and the mark it matches against. */
+  private fineRequests(label: string, now: number): FineRequest[] {
+    return this.requestsFor(label, now).map((r) => {
       const out: FineRequest = {
         method: r.method,
         route: r.route,
@@ -287,9 +323,9 @@ export class PrearmRegister {
         detailLost: false,
       };
       if (r.poolWaitMs !== undefined && !Number.isNaN(r.poolWaitMs)) out.poolWaitMs = r.poolWaitMs;
+      if (r.dependenciesTruncated) out.dependenciesTruncated = true;
       return out;
     });
-    return { armedAt, requests };
   }
 
   requestsFor(label: string, now: number): PrearmRequest[] {
@@ -333,6 +369,7 @@ export class PrearmRegister {
         operations,
         dependencies,
         ...(Number.isNaN(wait) ? {} : { poolWaitMs: wait }),
+        ...((this.requests[at + R_DEP_TRUNCATED] ?? 0) === 1 ? { dependenciesTruncated: true } : {}),
       });
     }
     return out;

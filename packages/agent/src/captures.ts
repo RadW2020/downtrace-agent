@@ -142,8 +142,14 @@ export class Captures {
 /**
  * What an armed route kept for itself, if this capture is about one. `armedAt` is when its arm began, which is
  * the instant from which the reserve —and not the shared ring— is what this route's detail comes from.
+ *
+ * The method and the route are the arm's label, the one every row of this reserve carries: a capture that is
+ * about none of its routes by name reads several of these at once, and each owns the window of the ring it
+ * replaced, which is where the label is needed to tell the ring's rows apart (gh-861).
  */
 export interface PrearmReserve {
+  method: string;
+  route: string;
   armedAt: number;
   requests: FineRequest[];
 }
@@ -161,23 +167,29 @@ export interface CaptureSlice {
  * The order comes from the cloud, which only ever knew the outside name, so the comparison happens there
  * and not against what the register keeps (gh-395).
  *
- * `prearm` is **required**, and `null` is how a caller says there is no reserve. It was optional, and the one
- * caller in production simply never passed it: the reserve filled up for an armed route and nothing ever read
- * it, with a green test on each half and the wire between them cut (gh-498). An optional argument is an
- * invitation to forget; a required one makes the compiler ask.
+ * `prearm` is **required**, and an empty list is how a caller says there is no reserve. The argument used to
+ * be a single route's reserve or nothing: the one caller in production never passed it for anything but a
+ * named route, and a capture of a dependency has no route to name, so it went out with whatever the ring
+ * still held (gh-498, and its last cut half). A list, rather than an optional one, makes the compiler ask
+ * who decided what the capture reads.
  */
 export function sliceFor(
   capture: LiveCapture,
   snapshot: FineSnapshot,
   nameOf: (route: string) => string,
-  prearm: PrearmReserve | null,
+  prearm: PrearmReserve[],
 ): CaptureSlice {
   const keep = matcher(capture.footprint, nameOf);
-  // Where the two registers meet. A route armed before this capture kept its own requests from `armedAt` on,
-  // and those are the authority for that window: the global ring may have lost them to other routes' traffic,
-  // and the reserve cannot (ADR 0122). Before `armedAt` there is only the ring, as always. A boundary in time
-  // rather than a comparison of fields: nothing has to guess whether two rows are the same request.
-  const armedAt = prearm?.armedAt ?? Number.POSITIVE_INFINITY;
+  // Where the registers meet. A route armed before this capture kept its own requests from `armedAt` on, and
+  // those are the authority for that window: the global ring may have lost them to other routes' traffic, and
+  // the reserve cannot (ADR 0122). A capture of a route reads that route's reserve; a capture without a route
+  // reads every armed route's at once, and each owns the window of the ring it replaced (gh-861). A row of the
+  // ring is handed to the reserve of the route the row is, from that route's `armedAt` on — a boundary per
+  // route rather than a comparison of fields: nothing has to guess whether two rows are the same request, and
+  // a row of a route nobody armed stays in the ring, as always. Before a route's `armedAt` there is only the
+  // ring, for that route.
+  const takenByReserve = (r: FineRequest): boolean =>
+    prearm.some((p) => p.method === r.method && p.route === nameOf(r.route) && r.startedAt >= p.armedAt);
   let observed = 0;
   let attached = 0;
   let detailLost = 0;
@@ -191,14 +203,16 @@ export function sliceFor(
   };
   for (const r of snapshot.requests) {
     if (!keep(r)) continue;
-    if (r.startedAt >= armedAt) continue;
+    if (takenByReserve(r)) continue;
     requests.push(r);
     count(r);
   }
-  for (const r of prearm?.requests ?? []) {
-    if (!keep(r)) continue;
-    requests.push(r);
-    count(r);
+  for (const p of prearm) {
+    for (const r of p.requests) {
+      if (!keep(r)) continue;
+      requests.push(r);
+      count(r);
+    }
   }
   requests.sort((a, b) => a.startedAt - b.startedAt);
   return { requests, observedRequests: observed, attachedRequests: attached, detailLost, truncated };

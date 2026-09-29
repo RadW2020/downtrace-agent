@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Captures, type LiveCapture, MAX_LIVE_CAPTURES, sliceFor } from "../src/captures.ts";
+import { Captures, type LiveCapture, MAX_LIVE_CAPTURES, type PrearmReserve, sliceFor } from "../src/captures.ts";
 import { dependencyKey } from "../src/context.ts";
 import type { FineRequest, FineSnapshot } from "../src/fine.ts";
 import type { PendingCapture } from "../src/transport.ts";
@@ -152,7 +152,7 @@ describe("what one capture saw", () => {
         request(1_500),
       ]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.observedRequests).toBe(2);
     expect(slice.attachedRequests).toBe(2);
@@ -169,7 +169,7 @@ describe("what one capture saw", () => {
       live({ startedAt: start }),
       snapshot([request(1_000.5), request(1_000.9)]),
       (route) => route,
-      null,
+      [],
     );
     expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 1]);
     // Sorted by their own instants, which keep their decimals: two requests inside one millisecond still
@@ -179,7 +179,7 @@ describe("what one capture saw", () => {
 
   it("is an answer even when nothing ran", () => {
     // «A capture with no requests does not prove recovery» (CAP-01): empty evidence is a result, silence is not.
-    const slice = sliceFor(live(), snapshot([]), (route) => route, null);
+    const slice = sliceFor(live(), snapshot([]), (route) => route, []);
     expect(slice.requests).toEqual([]);
     expect(slice.observedRequests).toBe(0);
     expect(slice.attachedRequests).toBe(0);
@@ -201,7 +201,7 @@ describe("what one capture saw", () => {
         request(1_300, { method: "POST" }),
       ]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.requests.map((r) => `${r.method} ${r.route}`)).toEqual(["GET /orders", "GET /orders"]);
     expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 1]);
@@ -212,7 +212,7 @@ describe("what one capture saw", () => {
       live({ footprint: { route: "/orders" } }),
       snapshot([request(1_100), request(1_200, { method: "POST" }), request(1_300, { route: "/products" })]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.requests).toHaveLength(2);
   });
@@ -226,7 +226,7 @@ describe("what one capture saw", () => {
         request(1_300, { dependencies: [] }),
       ]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
   });
@@ -241,7 +241,7 @@ describe("what one capture saw", () => {
         request(1_200, { dependencies: [dependencyKey("redis", "cache:6379")], dependenciesTruncated: true }),
       ]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_200]);
   });
@@ -251,7 +251,7 @@ describe("what one capture saw", () => {
       live({ footprint: { environment: "production" } }),
       snapshot([request(1_100), request(1_200, { route: "/products" })]),
       (route) => route,
-      null,
+      [],
     );
     expect(slice.requests).toHaveLength(2);
   });
@@ -286,11 +286,15 @@ describe("evidence of an armed route", () => {
       coverage: { requestCapacity: 10, operationCapacity: 10, requests: 3, detailLost: 0, truncated: 0 },
     } as unknown as FineSnapshot;
 
-    const slice = sliceFor(capture, snapshot, (r) => r, {
-      armedAt: 1_050,
-      // What the reserve kept: the same two the ring happens to still have, plus one it had already lost.
-      requests: [fine(1_100), fine(1_200), fine(1_300)],
-    });
+    const slice = sliceFor(capture, snapshot, (r) => r, [
+      {
+        method: "GET",
+        route: "/cart",
+        armedAt: 1_050,
+        // What the reserve kept: the same two the ring happens to still have, plus one it had already lost.
+        requests: [fine(1_100), fine(1_200), fine(1_300)],
+      },
+    ]);
 
     expect(slice.requests.map((r) => r.startedAt)).toEqual([900, 1_100, 1_200, 1_300]);
   });
@@ -301,6 +305,132 @@ describe("evidence of an armed route", () => {
       coverage: { requestCapacity: 10, operationCapacity: 10, requests: 2, detailLost: 0, truncated: 0 },
     } as unknown as FineSnapshot;
 
-    expect(sliceFor(capture, snapshot, (r) => r, null).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
+    expect(sliceFor(capture, snapshot, (r) => r, []).requests.map((r) => r.startedAt)).toEqual([900, 1_100]);
+  });
+});
+
+// The connection gh-861 makes: a capture is about a dependency and names no route, so it reads the reserves
+// of **every** route that was armed, each owning the window of the ring it replaced from its own `armedAt` on
+// (ADR 0122). Before, the one production call asked the reserve for the footprint's method and an empty
+// route, no arm answered that, and the capture went out with whatever the ring still held (gh-498, the last
+// cut half).
+describe("evidence of a dependency, across the armed routes' reserves", () => {
+  const pg = dependencyKey("postgres", "db:5432");
+  const redis = dependencyKey("redis", "cache:6379");
+  const capture: LiveCapture = {
+    id: "cap-dep",
+    footprint: { kind: "postgres", target: "db:5432" },
+    startedAt: 1_000,
+    endsAt: 9_000,
+    reported: false,
+  };
+  const row = (startedAt: number, over: Partial<FineRequest> = {}): FineRequest => ({
+    method: "GET",
+    route: "/cart",
+    status: 200,
+    startedAt,
+    durationMs: 10,
+    operations: [],
+    dependencies: [pg],
+    truncated: false,
+    detailLost: false,
+    ...over,
+  });
+  const ring = (requests: FineRequest[]): FineSnapshot => ({
+    requests,
+    coverage: {
+      requestCapacity: 10,
+      operationCapacity: 10,
+      requests: requests.length,
+      detailLost: 0,
+      truncated: 0,
+      labelsFolded: 0,
+    },
+  });
+  const cart = (armedAt: number, requests: FineRequest[]): PrearmReserve => ({
+    method: "GET",
+    route: "/cart",
+    armedAt,
+    requests,
+  });
+  const orders = (armedAt: number, requests: FineRequest[]): PrearmReserve => ({
+    method: "POST",
+    route: "/orders",
+    armedAt,
+    requests,
+  });
+
+  it("brings the requests the ring lost, from the reserve of the armed route", () => {
+    // The case the reserve exists for: the ring has already lost the armed route's requests to the traffic of
+    // every other route, and the capture of the dependency those requests used is what reaches them now.
+    const slice = sliceFor(capture, ring([]), (r) => r, [cart(1_050, [row(1_100), row(1_200)])]);
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_100, 1_200]);
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([2, 0]);
+  });
+
+  it("lets no request appear twice, neither by the ring nor by the two reserves", () => {
+    // A row belongs to one route and one route only, so the per-route windows cannot hand the same request to
+    // two reserves, and the ring gives up each row to the reserve of the route it is — the evidence says
+    // every request once.
+    const slice = sliceFor(
+      capture,
+      ring([
+        row(900),
+        row(1_100),
+        row(1_200),
+        row(2_100, { method: "POST", route: "/orders" }),
+        row(2_200, { method: "POST", route: "/orders" }),
+      ]),
+      (r) => r,
+      [
+        cart(1_050, [row(1_100), row(1_200), row(1_300)]),
+        orders(2_050, [
+          row(2_100, { method: "POST", route: "/orders" }),
+          row(2_200, { method: "POST", route: "/orders" }),
+          row(2_300, { method: "POST", route: "/orders" }),
+        ]),
+      ],
+    );
+    expect(slice.requests.map((r) => `${r.method} ${r.route} @ ${r.startedAt}`)).toEqual([
+      "GET /cart @ 900",
+      "GET /cart @ 1100",
+      "GET /cart @ 1200",
+      "GET /cart @ 1300",
+      "POST /orders @ 2100",
+      "POST /orders @ 2200",
+      "POST /orders @ 2300",
+    ]);
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([6, 1]);
+  });
+
+  it("keeps a ring row of a route nobody armed, whatever the armed routes' windows are", () => {
+    // The boundary is per route: /users has no reserve to take its rows, so they stay in the ring after both
+    // armedAts. Discarding them by someone else's window would lose detail no reserve holds.
+    const slice = sliceFor(capture, ring([row(3_000, { route: "/users" })]), (r) => r, [
+      cart(1_050, []),
+      orders(2_050, []),
+    ]);
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([3_000]);
+  });
+
+  it("keeps a ring row of an armed route from before its own arm, not from someone else's", () => {
+    // The window of /orders begins at /orders' armedAt: its ring rows from before that are only the ring's,
+    // even though /cart has been armed since long before.
+    const slice = sliceFor(capture, ring([row(1_900, { method: "POST", route: "/orders" })]), (r) => r, [
+      cart(1_050, []),
+      orders(2_050, []),
+    ]);
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_900]);
+  });
+
+  it("matches a reserve row whose dependency list did not fit, and counts it in the evidence", () => {
+    // The row touched more dependencies than the row holds, and the one it cannot name is the one this
+    // capture is about. The mark is what matches it — a gap is not a proof (invariant 14) — and the evidence
+    // counts the row rather than dropping it, incomplete instead of wrong.
+    const slice = sliceFor(capture, ring([]), (r) => r, [
+      cart(1_050, [row(1_100, { dependencies: [redis], dependenciesTruncated: true })]),
+    ]);
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([1_100]);
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 0]);
   });
 });
