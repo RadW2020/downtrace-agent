@@ -17,8 +17,8 @@
  */
 
 import type { FineOperation } from "./fine.ts";
-import { FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
-import { OTHER_ROUTE } from "./routes.ts";
+import { FINGERPRINT_LABEL_MAX_LENGTH, LabelTable, labelBytes } from "./labels.ts";
+import { MAX_ROUTE_LABEL_LENGTH, OTHER_ROUTE } from "./routes.ts";
 
 /** How many endpoints it keeps samples for. */
 export const DEFAULT_REFERENCE_ROUTES = 16;
@@ -32,8 +32,13 @@ export const DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE = 32;
 /**
  * What this register may allocate, in bytes. Asserted by a test rather than promised by a comment, like
  * the other two halves of the black box.
+ *
+ * Raised from sixty-four to seventy-two KiB when the route table entered the count (gh-859): the old line
+ * was what an arithmetic admitted that left the table out, and the worst case it then holds — every table
+ * at its cap with every label at its longest — crossed it. A line the worst case can cross is not a budget
+ * (ADR 0067); the global budget is measured in mebibytes, and this is a fraction of one percent of it.
  */
-export const REFERENCE_MAX_BYTES = 64 * 1024;
+export const REFERENCE_MAX_BYTES = 72 * 1024;
 
 /**
  * How many distinct fingerprints the register may remember. Its route table is bounded by `routeCapacity`,
@@ -202,9 +207,23 @@ export class ReferenceRegister {
   }
 
   /**
-   * What this register holds, in bytes: the arrays and the label table the operation slots point at. The
-   * table is counted by the same arithmetic the reserve uses, so a budget that leaves it out is not an option
-   * — that blindness is how gh-765 grew, and gh-805 is the same growth that was still left (ADR 0067).
+   * What the route table holds, by the same arithmetic the reserve uses: each label as UTF-16 plus its
+   * bookkeeping (labels.ts). It is not a `LabelTable`, because what does not fit is not folded into a
+   * sentinel but dropped — the request is counted in `routesDropped` — and a reference sample that cannot
+   * name its endpoint is not a reference to compare against (invariant 14). Bounded by `routeCapacity`, so
+   * it never grows with the traffic (gh-765).
+   */
+  private routeTableBytes(): number {
+    let bytes = 0;
+    for (const label of this.routes) bytes += labelBytes(label.length);
+    return bytes;
+  }
+
+  /**
+   * What this register holds, in bytes: the arrays, the route table, and the fingerprint table the
+   * operation slots point at. Every table is counted by the same arithmetic the reserve uses, so a budget
+   * that leaves one out is not an option — that blindness is how gh-765 grew, and gh-805 and gh-859 are the
+   * same growth that was still left (ADR 0067).
    */
   bytes(): number {
     return (
@@ -212,14 +231,16 @@ export class ReferenceRegister {
       this.operations.byteLength +
       this.counts.byteLength +
       this.seen.byteLength +
+      this.routeTableBytes() +
       this.fingerprintLabels.bytes
     );
   }
 
   /**
-   * What this register may hold, in bytes, at its worst: the arrays, and the label table at its cap with
-   * every fingerprint at its longest. The arrays are never freed and the table never shrinks, so the worst
-   * case is what the register really holds once it is full — a number, not a promise (ADR 0067, gh-805).
+   * What this register may hold, in bytes, at its worst: the arrays, the route table at `routeCapacity`
+   * with every label at its longest, and the fingerprint table at its cap with every fingerprint at its
+   * longest. The arrays are never freed and the tables never shrink, so the worst case is what the register
+   * really holds once it is full — a number, not a promise (ADR 0067, gh-805, gh-859).
    */
   reservedBytes(): number {
     return (
@@ -227,6 +248,7 @@ export class ReferenceRegister {
       this.operations.byteLength +
       this.counts.byteLength +
       this.seen.byteLength +
+      this.routeCapacity * labelBytes(MAX_ROUTE_LABEL_LENGTH) +
       this.fingerprintLabels.worstBytes(FINGERPRINT_LABEL_MAX_LENGTH)
     );
   }

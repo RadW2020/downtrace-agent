@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { FINGERPRINT_LABEL_MAX_LENGTH, labelBytes } from "../src/labels.ts";
 import {
+  DEFAULT_REFERENCE_FINGERPRINT_LABELS,
   DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE,
   DEFAULT_REFERENCE_ROUTES,
   DEFAULT_SAMPLES_PER_ROUTE,
   REFERENCE_MAX_BYTES,
   ReferenceRegister,
 } from "../src/reference.ts";
-import { OTHER_ROUTE } from "../src/routes.ts";
+import { MAX_ROUTE_LABEL_LENGTH, MAX_ROUTE_LENGTH, OTHER_ROUTE } from "../src/routes.ts";
 
 /**
  * The third register of the black box: a few requests per endpoint, kept so that a capture has something
@@ -219,18 +221,27 @@ describe("the label tables of the reference", () => {
     expect(snapshot.labelsFolded).toBe(2);
   });
 
-  // The memory half of invariant 3, at the worst case this ticket is about: every slot of every endpoint
-  // filled, and a fingerprint nobody has seen before, in every operation, at the longest one may be.
-  it("holds its memory budget at the worst case of distinct fingerprints", () => {
+  // The memory half of invariant 3, at the worst case: every slot of every endpoint filled, a route
+  // nobody has seen before in every endpoint at the longest label the table may hold, and a fingerprint
+  // nobody has seen before, in every operation, at the longest one may be.
+  it("holds its memory budget at the worst case of distinct routes and fingerprints", () => {
     const r = new ReferenceRegister({ random: () => 0 });
     for (let i = 0; i < DEFAULT_REFERENCE_ROUTES; i += 1) {
       for (let n = 0; n < DEFAULT_SAMPLES_PER_ROUTE; n += 1) {
-        r.consider("GET", `/route-${i}`, 200, 1_000 + i * 10 + n, 5, () =>
-          Array.from({ length: DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE }, (_, j) => ({
-            hash: String(i * 100 + n * 10 + j).padStart(16, "0"),
-            startMs: j,
-            endMs: j + 1,
-          })),
+        // A route at the longest label the table may hold, since gh-859 the route table is in the count:
+        // a worst case that left it out would hold a reserve the register does not really hold.
+        r.consider(
+          "OPTIONS",
+          `/${i}${"r".repeat(MAX_ROUTE_LENGTH - String(i).length - 1)}`,
+          200,
+          1_000 + i * 10 + n,
+          5,
+          () =>
+            Array.from({ length: DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE }, (_, j) => ({
+              hash: String(i * 100 + n * 10 + j).padStart(16, "0"),
+              startMs: j,
+              endMs: j + 1,
+            })),
         );
       }
     }
@@ -239,5 +250,53 @@ describe("the label tables of the reference", () => {
     // exactly — a number, not a promise — and the reserve fits the budget the arithmetic is for (ADR 0067).
     expect(r.bytes()).toBe(r.reservedBytes());
     expect(r.bytes()).toBeLessThanOrEqual(REFERENCE_MAX_BYTES);
+  });
+});
+
+describe("the route table of the reference", () => {
+  // gh-859. The route table was the last table the arithmetic left out: `bytes()` and `reservedBytes()`
+  // counted the arrays and the fingerprint table, and the labels of the routes — up to
+  // `MAX_ROUTE_LABEL_LENGTH` each — were not in the number, so the worst case the register may hold passed
+  // `REFERENCE_MAX_BYTES` while the tests held the line. The arithmetic counts everything the register
+  // keeps, or the budget is not one (ADR 0067).
+
+  /** A route template at `MAX_ROUTE_LENGTH`, apart for each `i`: with the longest method, the longest label the table may hold. */
+  const longestRoute = (i: number) => `/${i}${"r".repeat(MAX_ROUTE_LENGTH - String(i).length - 1)}`;
+
+  it("reserves its worst case, computed from the constants", () => {
+    const r = new ReferenceRegister();
+    // What the register holds before traffic names anything — the arrays, preallocated, and the sentinel
+    // its fingerprint table starts with — plus each table at its room with every label at its longest. The
+    // worst case from the constants the register is built from: computed, not copied (ADR 0067).
+    const worst =
+      r.bytes() +
+      DEFAULT_REFERENCE_FINGERPRINT_LABELS * labelBytes(FINGERPRINT_LABEL_MAX_LENGTH) +
+      DEFAULT_REFERENCE_ROUTES * labelBytes(MAX_ROUTE_LABEL_LENGTH);
+    expect(r.reservedBytes()).toBe(worst);
+    expect(worst).toBeLessThanOrEqual(REFERENCE_MAX_BYTES);
+  });
+
+  it("counts the route table it interns, the way it counts the fingerprints", () => {
+    const r = new ReferenceRegister();
+    const empty = r.bytes();
+    r.consider("OPTIONS", longestRoute(0), 200, 1_000, 5, noOperations);
+    // A new route costs its label, by the same arithmetic the reserve uses (labels.ts): the table is part
+    // of what the register holds, the way gh-805 made the fingerprint table part of the arithmetic.
+    expect(r.bytes()).toBe(empty + labelBytes(MAX_ROUTE_LABEL_LENGTH));
+    // The same traffic on a route it already keeps costs nothing: the table interns, it does not append.
+    r.consider("OPTIONS", longestRoute(0), 200, 2_000, 5, noOperations);
+    expect(r.bytes()).toBe(empty + labelBytes(MAX_ROUTE_LABEL_LENGTH));
+  });
+
+  it("does not count a route it had no room for, and says it dropped it", () => {
+    const r = new ReferenceRegister();
+    for (let i = 0; i < DEFAULT_REFERENCE_ROUTES; i += 1)
+      r.consider("OPTIONS", longestRoute(i), 200, 1_000 + i, 5, noOperations);
+    const at = r.bytes();
+    r.consider("OPTIONS", longestRoute(16), 200, 2_000, 5, noOperations);
+    // Past the cap the traffic costs nothing — a register that still grew here was the bug (invariant 3) —
+    // and the loss is said, not silent (invariant 14).
+    expect(r.bytes()).toBe(at);
+    expect(r.snapshot().routesDropped).toBe(1);
   });
 });
