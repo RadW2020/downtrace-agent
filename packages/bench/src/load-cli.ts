@@ -1,8 +1,10 @@
 import { parseArgs } from "node:util";
+import { cliArgs } from "./cli-args.ts";
 import { runLoad } from "./load.ts";
 
 const { values } = parseArgs({
-  allowPositionals: true, // pnpm may forward a literal `--`
+  args: cliArgs(process.argv.slice(2)),
+  allowPositionals: false, // whatever is left over is a usage error, never a campaign run on the defaults (gh-853)
   options: {
     url: { type: "string", default: "http://127.0.0.1:4000" },
     rps: { type: "string", default: "200" },

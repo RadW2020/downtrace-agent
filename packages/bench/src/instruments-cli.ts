@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { runBench } from "./bench.ts";
+import { cliArgs } from "./cli-args.ts";
 import { STEPS } from "./instruments-steps.ts";
 import type { BenchReport } from "./report.ts";
 import { EXACT_LIMIT, gate, permutationP, roundsToResolve, smallestP } from "./significance.ts";
@@ -23,7 +24,8 @@ import { round } from "./stats.ts";
  * the two things this run gets wrong if left to a fixed interval: few rounds, and several comparisons at once.
  */
 const { values } = parseArgs({
-  allowPositionals: true,
+  args: cliArgs(process.argv.slice(2)),
+  allowPositionals: false, // whatever is left over is a usage error, never a campaign run on the defaults (gh-853)
   options: {
     rounds: { type: "string" },
     measure: { type: "string" },

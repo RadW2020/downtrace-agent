@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULT_TRACKER_PATH, repoRoot, runBench } from "./bench.ts";
 import { METRICS } from "./budget.ts";
+import { cliArgs } from "./cli-args.ts";
 import { coexistenceMarkdown, readCoexistence } from "./coexistence.ts";
 import { COEXISTENCE } from "./instruments-steps.ts";
 import { gate, roundsToResolve, smallestP } from "./significance.ts";
@@ -24,7 +25,8 @@ import { round } from "./stats.ts";
  * mirror's `bench` workflow runs it when dispatched with `mode: coexistence`.
  */
 const { values } = parseArgs({
-  allowPositionals: true, // pnpm may forward a literal `--`
+  args: cliArgs(process.argv.slice(2)),
+  allowPositionals: false, // whatever is left over is a usage error, never a campaign run on the defaults (gh-853)
   options: {
     rounds: { type: "string" },
     measure: { type: "string" },

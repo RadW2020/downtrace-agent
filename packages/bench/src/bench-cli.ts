@@ -1,9 +1,11 @@
 import { parseArgs } from "node:util";
 import { runBench } from "./bench.ts";
+import { cliArgs } from "./cli-args.ts";
 import { appendStepSummary, toMarkdown, writeJson } from "./report.ts";
 
 const { values } = parseArgs({
-  allowPositionals: true, // pnpm may forward a literal `--`
+  args: cliArgs(process.argv.slice(2)),
+  allowPositionals: false, // whatever is left over is a usage error, never a campaign run on the defaults (gh-853)
   options: {
     rounds: { type: "string" },
     /** Consecutive clean seconds of warmup before measuring. */

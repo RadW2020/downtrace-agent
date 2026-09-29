@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { runBench } from "./bench.ts";
+import { cliArgs } from "./cli-args.ts";
 import { type ProfileFunction, type ProfileGroupTotal, readCpuProfiles } from "./cpu-profile.ts";
 import type { BenchReport } from "./report.ts";
 import { round } from "./stats.ts";
@@ -20,13 +21,9 @@ import { round } from "./stats.ts";
  * the instruments and coexistence campaigns are kept — beside the series, named apart from it (ADR 0134). The
  * mirror's `bench` workflow runs it when dispatched with `mode: profile`.
  */
-// pnpm may forward a literal `--` (`pnpm run profile -- --rounds 1`); to parseArgs it is a separator that
-// demotes every flag after it to a positional, and the run would silently take the defaults. Strip it.
-const argv = process.argv.slice(2);
-if (argv[0] === "--") argv.splice(0, 1);
 const { values } = parseArgs({
-  args: argv,
-  allowPositionals: true,
+  args: cliArgs(process.argv.slice(2)),
+  allowPositionals: false, // whatever is left over is a usage error, never a campaign run on the defaults (gh-853)
   options: {
     rounds: { type: "string" },
     measure: { type: "string" },
