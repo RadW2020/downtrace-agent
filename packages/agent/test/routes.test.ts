@@ -1,11 +1,15 @@
+import express from "express";
 import { describe, expect, it } from "vitest";
 import { heuristicTemplate, normalizeMethod, routeOf } from "../src/routes.ts";
 
 describe("routeOf", () => {
-  it("prefers the Express template, including the mount path", () => {
+  it("prefers the Express template, and a baseUrl nobody's router explains comes out as `:param`", () => {
     expect(routeOf({ url: "/products/42?x=1", route: { path: "/products/:id" }, baseUrl: "" })).toBe("/products/:id");
+    // Without the app's routers there is nothing to check the mount against, and a segment whose
+    // literalness cannot be told is a parameter, not a word (invariant 5, gh-858). With the app it is
+    // read as it was registered, which is the case below.
     expect(routeOf({ url: "/api/v1/users/7", route: { path: "/users/:id" }, baseUrl: "/api/v1" })).toBe(
-      "/api/v1/users/:id",
+      "/:param/:param/users/:id",
     );
     expect(routeOf({ url: "/", route: { path: "/" }, baseUrl: "" })).toBe("/");
   });
@@ -81,6 +85,62 @@ describe("routeOf", () => {
     expect(routeOf({ url: "/" })).toBe("/");
     expect(routeOf({ url: "?name=alice" })).toBe("/");
     expect(routeOf({ url: "//" })).toBe("/");
+  });
+});
+
+// Real Express (5.2.1, the package's devDependency) and real registration: the mount path is recorded
+// where the application writes it, and the template is built from the routers, not from the value the
+// mount matched (invariant 5, gh-858).
+describe("routeOf over a real Express mount (gh-858)", () => {
+  function mountedAt(mount: string): { app: express.Express; route: object } {
+    const router = express.Router();
+    router.get("/users/:id", () => {});
+    const app = express();
+    app.use(mount, router);
+    const route = router.stack[0]?.route;
+    if (route === undefined) throw new Error("the route was not registered");
+    return { app, route };
+  }
+
+  it("carries a literal mount as written and a parameterised one as its pattern", () => {
+    const literal = mountedAt("/api/v1");
+    expect(routeOf({ url: "/api/v1/users/7", route: literal.route, baseUrl: "/api/v1", app: literal.app })).toBe(
+      "/api/v1/users/:id",
+    );
+    const tenant = mountedAt("/tenants/:tenant");
+    expect(
+      routeOf({
+        url: "/tenants/acme-corp/users/42",
+        route: tenant.route,
+        baseUrl: "/tenants/acme-corp",
+        app: tenant.app,
+      }),
+    ).toBe("/tenants/:tenant/users/:id");
+    // The same template for another tenant: what changes is the request, not the route.
+    expect(
+      routeOf({ url: "/tenants/otro/users/7", route: tenant.route, baseUrl: "/tenants/otro", app: tenant.app }),
+    ).toBe("/tenants/:tenant/users/:id");
+  });
+
+  it("keeps a nested mount's parameter out, and says the heuristic would not have saved it", () => {
+    const inner = express.Router();
+    inner.get("/users/:id", () => {});
+    const outer = express.Router();
+    outer.use("/teams/:team", inner);
+    const app = express();
+    app.use("/tenants/:tenant", outer);
+    const route = inner.stack[0]?.route;
+    if (route === undefined) throw new Error("the route was not registered");
+    const req = {
+      url: "/tenants/acme-corp/teams/team-7/users/42",
+      route,
+      baseUrl: "/tenants/acme-corp/teams/team-7",
+      app,
+    };
+    expect(routeOf(req)).toBe("/tenants/:tenant/teams/:team/users/:id");
+    // A slug like a tenant's name passes the heuristic as it is (gh-756): the mount's pattern is the only
+    // thing that keeps it out of the template, and this is what the PR says out loud.
+    expect(heuristicTemplate("/tenants/acme-corp/users/42")).toBe("/tenants/acme-corp/users/:id");
   });
 });
 

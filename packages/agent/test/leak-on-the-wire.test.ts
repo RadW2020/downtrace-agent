@@ -1,5 +1,8 @@
+import { channel } from "node:diagnostics_channel";
+import type { AddressInfo } from "node:net";
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
+import express from "express";
 import { describe, expect, it } from "vitest";
 import { IntervalAggregator } from "../src/aggregator.ts";
 import { enterRequest, recordOperationIn } from "../src/context.ts";
@@ -7,7 +10,7 @@ import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import type { Logger } from "../src/log.ts";
 import { PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
-import { routeOf } from "../src/routes.ts";
+import { type RouteSource, routeOf } from "../src/routes.ts";
 import { sanitizeMessage } from "../src/sanitize.ts";
 import { Sender } from "../src/transport.ts";
 import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
@@ -238,6 +241,73 @@ describe("what actually leaves, in the bytes", () => {
     for (const route of routes) {
       expect(body, `«${route}» never reached the wire`).toContain(`"route":"${route}"`);
     }
+    expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
+  });
+
+  /**
+   * gh-858. The mount's own value used to be the route: `app.use("/tenants/:tenant", router)` put the
+   * tenant's name in every batch, and the heuristic would not have saved it, because a slug like
+   * `acme-corp` is of what `segmentLooksLikeValue` leaves as written. The route is built here from a
+   * request a real Express (5.2.1, the package's devDependency) answered, and driven through the real
+   * interval and the real sender, and the bytes are swept for the tenant.
+   */
+  it("carries the mount's pattern, not the tenant it matched", async () => {
+    const router = express.Router();
+    router.get("/users/:id", (_req, res) => {
+      res.json({});
+    });
+    const app = express();
+    app.use("/tenants/:tenant", router);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    // The one route a request to a mounted router becomes, read the way the agent reads it: off the
+    // request as it is when the response finishes.
+    const routes: string[] = [];
+    const finish = (message: unknown): void => {
+      const request = (message as { request?: unknown }).request;
+      if (request !== null && typeof request === "object") routes.push(routeOf(request as RouteSource));
+    };
+    const ch = channel("http.server.response.finish");
+    ch.subscribe(finish);
+    for (const path of ["/tenants/acme-corp/users/42", "/tenants/otro/users/7"]) {
+      const res = await fetch(base + path);
+      await res.arrayBuffer();
+    }
+    ch.unsubscribe(finish);
+    server.close();
+    expect(routes, "the two requests were read").toEqual(["/tenants/:tenant/users/:id", "/tenants/:tenant/users/:id"]);
+
+    // The aggregates door: the real interval the sender enqueues.
+    const recorder = new IntervalAggregator({ now: () => 1_000_000 });
+    for (const route of routes) recorder.record("GET", route, 200, 1);
+    const interval = recorder.rotate();
+    expect(interval, "the interval should have rotated").not.toBeNull();
+
+    let body = "";
+    const sender = new Sender({
+      url: "http://sink.invalid",
+      token: "t",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v0" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        body = String(init.body);
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch,
+      now: () => 1_000_000,
+    });
+    if (interval) sender.enqueue(interval);
+    expect(await sender.flush()).toBe(true);
+    expect(body, "nothing was sent").not.toBe("");
+
+    for (const tenant of ["acme-corp", "otro"]) {
+      expect(body, `«${tenant}» reached the wire`).not.toContain(tenant);
+    }
+    // And the pattern did arrive, twice as one route: omission has to be the exception.
+    expect(body).toContain(`"route":"/tenants/:tenant/users/:id"`);
     expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });
 });
