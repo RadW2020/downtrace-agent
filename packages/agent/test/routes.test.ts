@@ -1,4 +1,5 @@
 import express from "express";
+import express4 from "express4";
 import { beforeAll, describe, expect, it } from "vitest";
 import { armMountRecording } from "../src/mounts.ts";
 import { heuristicTemplate, normalizeMethod, routeOf } from "../src/routes.ts";
@@ -172,6 +173,167 @@ describe("routeOf over a real Express mount (gh-858)", () => {
     // A slug like a tenant's name passes the heuristic as it is (gh-756): the mount's pattern is the only
     // thing that keeps it out of the template, and this is what the PR says out loud.
     expect(heuristicTemplate("/tenants/acme-corp/users/42")).toBe("/tenants/acme-corp/users/:id");
+  });
+});
+
+// gh-898. In Express 4 the app keeps its router on `_router`, and `router` is a getter that throws:
+// `routeOf` must never let that throw out, and a read of the app's object that throws is a read the walk
+// cannot trust, so it comes up as `undefined` and the `:param` fallback follows (invariant 2).
+describe("an app whose router getter throws (gh-898)", () => {
+  // The record armed, as in the mount describes above: what is under test is the read of the app, not
+  // the recovery of the pattern.
+  beforeAll(() => {
+    armMountRecording(express.Router.prototype);
+  });
+
+  const throwing = (onRead?: () => void): { router: unknown; _router?: unknown } =>
+    ({
+      get router() {
+        onRead?.();
+        throw new Error("'app.router' is deprecated!");
+      },
+    }) as { router: unknown; _router?: unknown };
+
+  it("reads _router first, and the throwing getter is never read", () => {
+    // The shape an Express 4 app has: the router on `_router`, and a `router` getter that throws. The
+    // walk reads the app whenever `baseUrl` is not empty, so this is the read a request to any mounted
+    // router in an Express 4 application performs.
+    const router = express.Router();
+    router.get("/users/:id", () => {});
+    const appRouter = express.Router();
+    appRouter.use("/api", router);
+    let reads = 0;
+    // Object.assign, not a spread: a spread would read the getter, and reading it is the act under test.
+    const app = Object.assign(
+      throwing(() => (reads += 1)),
+      { _router: appRouter },
+    );
+    expect(routeOf({ url: "/users/7", route: router.stack[0]?.route, baseUrl: "/api", app })).toBe("/api/users/:id");
+    expect(reads, "the throwing getter is never read").toBe(0);
+  });
+
+  it("comes out as the :param fallback when the router cannot be read at all, and throws nothing", () => {
+    expect(() =>
+      routeOf({ url: "/api/v1/users/7", route: { path: "/users/:id" }, baseUrl: "/api/v1", app: throwing() }),
+    ).not.toThrow();
+    expect(
+      routeOf({ url: "/api/v1/users/7", route: { path: "/users/:id" }, baseUrl: "/api/v1", app: throwing() }),
+    ).toBe("/:param/:param/users/:id");
+  });
+});
+
+describe("a mounted sub-app whose parent or mountpath throws (gh-898)", () => {
+  function mountedSubApp() {
+    const sub = express();
+    sub.get("/users/:id", () => {});
+    const root = express();
+    root.use("/api", sub);
+    const route = sub.router.stack[0]?.route;
+    if (route === undefined) throw new Error("the route was not registered");
+    return { sub, route };
+  }
+
+  function request(sub: express.Express, route: object) {
+    return { url: "/users/7", route, baseUrl: "/api", app: sub };
+  }
+
+  it("says :param for the mount when the app's parent cannot be read, and throws nothing", () => {
+    const { sub, route } = mountedSubApp();
+    const req = request(sub, route);
+    expect(routeOf(req)).toBe("/api/users/:id");
+    Object.defineProperty(sub, "parent", {
+      configurable: true,
+      get() {
+        throw new Error("parent is gone");
+      },
+    });
+    expect(() => routeOf(req)).not.toThrow();
+    expect(routeOf(req)).toBe("/:param/users/:id");
+  });
+
+  it("says :param for the mount when the app's mountpath cannot be read, and throws nothing", () => {
+    const { sub, route } = mountedSubApp();
+    const req = request(sub, route);
+    expect(routeOf(req)).toBe("/api/users/:id");
+    Object.defineProperty(sub, "mountpath", {
+      configurable: true,
+      get() {
+        throw new Error("mountpath is gone");
+      },
+    });
+    expect(() => routeOf(req)).not.toThrow();
+    expect(routeOf(req)).toBe("/:param/users/:id");
+  });
+});
+
+// Real Express 4 (4.22.3, the `express4` devDependency) and real registration: the record arms on the
+// `Router` function, where `use` lives in Express 4 (gh-898), and the template is built from the record
+// and the layers' own compiled matchers — never from the value a request matched (invariant 5).
+describe("routeOf over a real Express 4 mount (gh-898)", () => {
+  beforeAll(() => {
+    armMountRecording(express4.Router);
+  });
+
+  function mountedAt(mount: string): { app: express4.Express; route: object } {
+    const router = express4.Router();
+    router.get("/users/:id", () => {});
+    const app = express4();
+    app.use(mount, router);
+    const route = router.stack[0]?.route;
+    if (route === undefined) throw new Error("the route was not registered");
+    return { app, route };
+  }
+
+  type StackLayer = { route?: unknown; handle?: unknown; regexp?: unknown };
+
+  it("carries a literal mount as written and a parameterised one as its pattern", () => {
+    const literal = mountedAt("/api/v1");
+    expect(routeOf({ url: "/api/v1/users/7", route: literal.route, baseUrl: "/api/v1", app: literal.app })).toBe(
+      "/api/v1/users/:id",
+    );
+    const tenant = mountedAt("/tenants/:tenant");
+    expect(
+      routeOf({
+        url: "/tenants/acme-corp/users/42",
+        route: tenant.route,
+        baseUrl: "/tenants/acme-corp",
+        app: tenant.app,
+      }),
+    ).toBe("/tenants/:tenant/users/:id");
+    // The same template for another tenant: what changes is the request, not the route.
+    expect(
+      routeOf({ url: "/tenants/otro/users/7", route: tenant.route, baseUrl: "/tenants/otro", app: tenant.app }),
+    ).toBe("/tenants/:tenant/users/:id");
+  });
+
+  it("does not use a mount's matcher when it is stateful, and leaves its state as it found it (gh-898)", () => {
+    for (const flag of ["g", "y"]) {
+      const router = express4.Router();
+      router.get("/users/:id", () => {});
+      const app = express4();
+      app.use("/tenants/:tenant", router);
+      const route = router.stack[0]?.route;
+      if (route === undefined) throw new Error("the route was not registered");
+
+      const appStack = (app as unknown as { _router?: { stack?: StackLayer[] } })._router?.stack;
+      const mount = appStack?.find((layer) => layer.route === undefined && layer.handle === router);
+      if (mount === undefined || !(mount.regexp instanceof RegExp)) {
+        throw new Error("the mount's compiled matcher was not found");
+      }
+
+      const stateful = new RegExp(mount.regexp.source, mount.regexp.flags + flag);
+      stateful.lastIndex = 0;
+      mount.regexp = stateful;
+
+      const req = { url: "/tenants/acme-corp/users/42", route, baseUrl: "/tenants/acme-corp", app };
+      let first = "";
+      expect(() => {
+        first = routeOf(req);
+      }).not.toThrow();
+      expect(first).toBe("/:param/:param/users/:id");
+      expect(routeOf(req), "asking the same request twice says the same thing").toBe(first);
+      expect(stateful.lastIndex, "the stateful matcher is never asked").toBe(0);
+    }
   });
 });
 

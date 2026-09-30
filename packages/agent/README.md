@@ -535,9 +535,10 @@ you would give an application log.
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query`: it passes arguments, results and errors
   through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
-- For Express route templates the instrumentation wraps one more method, `Router.prototype.use`, to keep the pattern of each
-  mount, because Express discards it as soon as it compiles it: without the pattern, a mount with a parameter would reach
-  the template as its value. The wrapper is put in place when the instrumentation **starts** — with `--import`, before your
+- For Express route templates the instrumentation wraps one more method — `Router.prototype.use`, or the
+  `Router` function's own `use` in Express 4, where it is the routers' prototype — to keep the pattern of
+  each mount, because Express discards it as soon as it compiles it: without the pattern, a mount with a
+  parameter would reach the template as its value. The wrapper is put in place when the instrumentation **starts** — with `--import`, before your
   application registers anything — and not when the package is imported: an import with the instrumentation not running
   loads no Express and touches nothing. The wrapper passes arguments and the new layers through untouched, and a failure
   inside it runs your application anyway — the mount is then read as `:param`, which is the safe side (see Requirements).

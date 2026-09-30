@@ -27,9 +27,11 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/express4": "npm:@types/express@^4.17.25",
     "@types/pg": "^8.23.1",
     "ajv": "^8.20.0",
     "express": "^5.2.1",
+    "express4": "npm:express@^4",
     "pg": "^8.23.0"
   },
   "license": "MIT",

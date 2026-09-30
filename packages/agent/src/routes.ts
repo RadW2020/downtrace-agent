@@ -89,7 +89,6 @@ interface LayerLike {
   handle?: unknown;
   matchers?: unknown;
   regexp?: unknown;
-  path?: unknown;
   slash?: unknown;
 }
 
@@ -155,13 +154,27 @@ function mountLinks(req: RouteSource, route: object, base: string): MountLink[] 
 /**
  * The router of the app the request is being answered by. Express keeps it on the app, and the app —
  * whichever one is answering, a mounted sub-app included — on the request.
+ *
+ * It is read, never called, and a read that throws is a read the walk cannot trust: in Express 4 the
+ * router is on `_router` and `router` is a getter that throws, so `_router` goes first, and whatever a
+ * read comes up as is what the walk has — `undefined` when it threw, and the `:param` fallback follows
+ * (gh-898). This runs on the path of every request, and it does not throw because of the app (invariant 2).
  */
 function anchorRouter(app: unknown): RouterLike | undefined {
   // An express app is a function (the dispatch), carrying its router as `router`.
   if (app === null || (typeof app !== "object" && typeof app !== "function")) return undefined;
   const candidate = app as { router?: unknown; _router?: unknown };
-  const router = candidate.router ?? candidate._router;
+  const router = safeRead(() => candidate._router) ?? safeRead(() => candidate.router);
   return isRouterLike(router) ? router : undefined;
+}
+
+/** What a read of the application's object comes up as: `undefined` when it throws, and nothing else. */
+function safeRead<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -180,9 +193,13 @@ function appChain(app: unknown): (string | undefined)[] {
     const a = current as { mountpath?: unknown; parent?: unknown };
     if (seen.has(a)) break;
     seen.add(a);
-    if (a.parent === null || (typeof a.parent !== "object" && typeof a.parent !== "function")) break; // the top app has no parent
-    chain.push(typeof a.mountpath === "string" ? a.mountpath : undefined);
-    current = a.parent;
+    // The records Express writes when one app is mounted under another, each read the walk cannot let
+    // throw (gh-898).
+    const parent = safeRead(() => a.parent);
+    const mountpath = safeRead(() => a.mountpath);
+    if (parent === null || (typeof parent !== "object" && typeof parent !== "function")) break; // the top app has no parent
+    chain.push(typeof mountpath === "string" ? mountpath : undefined);
+    current = parent;
   }
   return chain.reverse();
 }
@@ -192,10 +209,11 @@ function appChain(app: unknown): (string | undefined)[] {
  * and what it was registered with.
  *
  * It reads from what the routers keep from registration and nothing else: the layers' own compiled
- * matchers (the same ones the router used), the patterns `mounts.ts` recorded, and the object graph of
- * which router is mounted in which. The state the routers keep per request (`layer.path`, `layer.params`)
- * is not read: the next request that matches the same layer overwrites it, and by the time a response
- * finishes there may have been many.
+ * matchers and regexps (the same ones the router used), the patterns `mounts.ts` recorded, and the object
+ * graph of which router is mounted in which. The state the routers keep per request (`layer.path`,
+ * `layer.params`) is not read: the next request that matches the same layer overwrites it, and by the
+ * time a response finishes there may have been many — in Express 4 the value there is another tenant's
+ * under interleaved requests (gh-898).
  *
  * `undefined` when the route cannot be reached from the anchor with the mounts lined up against
  * `remaining`: then nothing of them can be said with confidence, and that is what the caller falls back to.
@@ -267,13 +285,21 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
     }
     return undefined;
   }
-  // Express 4 (router 1.x) keeps no matchers: a countable pattern — literals and `:name`, no wildcard, no
-  // custom regexp — says how many segments the mount took, and the first ones are its value.
-  if (layer.regexp instanceof RegExp && typeof layer.path === "string" && !/[*(]/.test(layer.path)) {
-    const need = layer.path.split("/").filter((s) => s !== "").length;
-    const parts = path.split("/").filter((s) => s !== "");
-    if (parts.length < need) return undefined;
-    return { value: `/${parts.slice(0, need).join("/")}`, index: 0 };
+  // Express 4 (router 1.x) keeps no matchers: the value is what the layer's own compiled regexp takes of
+  // the path — the same one the router asked in its dispatch, called rather than the router because the
+  // router's `match` writes the value onto a layer shared with every other request. It is compiled at
+  // registration and stateless, which is why it can be asked twice; a stateful one would say something
+  // different on each call and would make the walk change the application's state (gh-898). The value on
+  // the layer, `path`, is never read: it is what the last request matched, not what the mount was
+  // registered with.
+  if (layer.regexp instanceof RegExp && !/[gy]/.test(layer.regexp.flags)) {
+    let match: RegExpExecArray | null;
+    try {
+      match = layer.regexp.exec(path);
+    } catch {
+      return undefined; // the router skips a matcher that throws; so does the walk
+    }
+    if (match) return { value: match[0], index: 0 };
   }
   return undefined;
 }
@@ -282,17 +308,15 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
  * What a mount comes out as in the template: the path it was registered with, as written.
  *
  * `undefined` is «cannot be said with confidence», and the caller folds the mount's value into `:param`
- * per segment (invariant 5): a mount registered with a regular expression, which has no words to be
- * written back, and a layer registered before the record was armed or in a router it did not reach.
- * Express 4 is the one kind of layer that still keeps its pattern — on `path`, beside a compiled `regexp`;
- * Express 5's `path` is a value, and reading it would be the very leak this exists to close.
+ * per segment (invariant 5): a layer registered before the record was armed or in a router it did not
+ * reach, and a mount whose path is a regular expression, which has no words to be written back. The
+ * record is the only source of the pattern: on the layer, `path` is a value in every Express — what the
+ * last request matched, overwritten by the next one, another tenant's under interleaved requests — and
+ * reading it for the pattern is the very leak this exists to close (invariant 5, gh-898).
  */
 function linkPattern(layer: LayerLike, index: number): string | undefined {
   let raw: unknown = mountPathOf(layer);
-  if (raw === undefined) {
-    if (layer.regexp instanceof RegExp && typeof layer.path === "string") raw = layer.path;
-    else return undefined;
-  }
+  if (raw === undefined) return undefined;
   if (Array.isArray(raw)) raw = raw[index];
   if (typeof raw === "string") return raw;
   if (raw instanceof RegExp) return undefined;

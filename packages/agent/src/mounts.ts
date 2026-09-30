@@ -5,9 +5,10 @@ import { createRequire } from "node:module";
  *
  * Why it has to be recorded here rather than read at request time: Express compiles the path of
  * `app.use("/tenants/:tenant", router)` into a matcher at registration and leaves on the layer what the
- * request matched — the value, per request, overwritten by the next one (router 2.x, the one Express 5
- * ships). At request time the pattern exists only where this module put it. Express 4 (router 1.x) still
- * keeps the pattern on the layer, and `routes.ts` reads that one as a fallback.
+ * request matched — the value, per request, overwritten by the next one — in Express 4 (router 1.x) as
+ * `path`, and in Express 5 (router 2.x) as well. At request time the pattern exists only where this
+ * module put it, and reading the value for the pattern is the leak the record exists to close
+ * (invariant 5, gh-898).
  *
  * The record is a WeakMap from layer to path, not a property on the layer: the layers are the
  * application's, and the instrumentation does not write into the application's objects.
@@ -28,8 +29,8 @@ interface RouterPrototype extends Record<string, unknown> {
 }
 
 /**
- * Wraps `Router.prototype.use` so that the layers an application registers are recorded with the path it
- * registered them with.
+ * Wraps the `use` the routers call, so that the layers an application registers are recorded with the
+ * path they were registered with.
  *
  * The wrapper wraps and nothing else: the original is called with what it was called with, and what it
  * returns is returned; the record sits in a `try` no request will ever see. A failure here degrades the
@@ -64,7 +65,7 @@ export function armMountRecording(proto: unknown): boolean {
 }
 
 /**
- * Resolves the express the application uses and arms the record on its `Router.prototype.use`.
+ * Resolves the express the application uses and arms the record on the `use` its routers call.
  *
  * It runs from `Agent.start()` and not at the load of this module: an import of the package must not load
  * express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
@@ -77,6 +78,12 @@ export function armMountRecording(proto: unknown): boolean {
  * Resolving loads express into the module cache before the application loads it; that is deliberate — the
  * prototype that gets patched is the one the application will use, whatever the order of the loads.
  *
+ * Where `use` lives is the express's business, and the two supported ones keep it apart (gh-898): router
+ * 2.x, the one Express 5 ships, on `Router.prototype`, and router 1.x, the one Express 4 ships, on the
+ * `Router` function itself — the routers' own prototype, the one their instances inherit from. One of the
+ * two has it, the mark keeps the record from being armed twice, and a `Router` without either leaves the
+ * application as it was.
+ *
  * Best effort: no express, or an express that is not resolvable from the application's root, leaves the
  * `:param` fallback in place, which is the safe side (invariant 5). It cannot throw, and `start()` relies on
  * that (invariant 2).
@@ -85,7 +92,7 @@ export function armMounts(from?: string): void {
   try {
     const base = from ?? process.argv[1] ?? `${process.cwd()}/`;
     const express = createRequire(base)("express") as { Router?: { prototype?: unknown } };
-    armMountRecording(express.Router?.prototype);
+    armMountRecording(express.Router?.prototype) || armMountRecording(express.Router);
   } catch {
     // The application does not use express, or it is not resolvable from here.
   }

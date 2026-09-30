@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
+import express from "express";
+import express4 from "express4";
+import { afterEach, describe, expect, it } from "vitest";
 import { armMountRecording, armMounts, mountPathOf } from "../src/mounts.ts";
+import { express4Root } from "./support/express4-root.ts";
+
+const MARK = Symbol.for("downtrace.mounts.use");
+const cleanups: Array<() => Promise<unknown>> = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()?.();
+});
 
 /**
  * gh-903, the failure half of the criteria: the arming is best effort, and a failure to arm must cost the
@@ -10,6 +20,39 @@ describe("armMounts", () => {
   it("does not throw when express is not resolvable from the application", () => {
     // A base that resolves nothing: the application does not use express, or it is not reachable from it.
     expect(() => armMounts("/nonexistent/no-such-application-root-903/")).not.toThrow();
+  });
+
+  it("arms the Router function of an Express 4 application, where its use lives (gh-898)", async () => {
+    // The shape the record touches on Express 4: `use` on the `Router` function itself — the routers' own
+    // prototype — and not on `Router.prototype`, where it is not.
+    const R = express4.Router as unknown as {
+      prototype: Record<PropertyKey, unknown>;
+      use: (this: { stack?: unknown[] }, path: string, fn: unknown) => unknown;
+    } & Record<symbol, unknown>;
+    // From an application root whose express is Express 4.
+    const root = await express4Root();
+    cleanups.push(root.close);
+    armMounts(`${root.base}/app.js`);
+    expect(R.prototype[MARK], "not on the prototype").toBeUndefined();
+    expect(R[MARK], "on the Router function").toBe(true);
+    expect(typeof R.use, "still the method the applications call").toBe("function");
+    // A router registered through it is recorded, and the wrapper passes the call through.
+    const router = express4.Router();
+    const middleware = (_req: unknown, _res: unknown): void => {};
+    const returned = R.use.call(router, "/t/:t", middleware);
+    expect(returned).toBe(router);
+    const layer = (router as { stack: object[] }).stack[0];
+    if (layer === undefined) throw new Error("the layer was not registered");
+    expect(mountPathOf(layer)).toBe("/t/:t");
+  });
+
+  it("arms the prototype of an Express 5 application, as it always did", () => {
+    // From an application root whose express is Express 5: `use` is on `Router.prototype` (router 2.x),
+    // and the `Router` function itself is left as it was.
+    const base = createRequire(import.meta.url).resolve("express");
+    armMounts(base);
+    expect(express.Router.prototype[MARK], "on the prototype").toBe(true);
+    expect((express.Router as unknown as Record<symbol, unknown>)[MARK], "not on the function").toBeUndefined();
   });
 });
 
