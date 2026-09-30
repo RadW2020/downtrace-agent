@@ -144,6 +144,20 @@ export function createServer(opts: ServerOptions) {
             );
           }
         }
+        if (tool.name === "silence_alerts" && args.finding !== undefined) {
+          // The silence covers the finding's whole footprint, and the cloud copies it from the finding,
+          // so this argument is the id and the API takes it as a number (gh-749). A value that is not a
+          // positive whole number is not an id, and sent it would only come back as a refusal somebody
+          // has to read. Refused here, before anything is sent, as `version` is.
+          if (positiveFindingId(args.finding) === undefined) {
+            return text(
+              "`finding` must be a positive whole number, the finding's id as `list_findings` and " +
+                "`read_report` give it: the silence takes the finding's whole footprint from it, and " +
+                "without a usable id there is no footprint to take. Nothing was sent.",
+              true,
+            );
+          }
+        }
         return call(tool, args);
       }
       default:
@@ -160,6 +174,19 @@ export function createServer(opts: ServerOptions) {
 
 function text(body: string, isError = false): ToolResult {
   return { content: [{ type: "text", text: body }], ...(isError ? { isError: true } : {}) };
+}
+
+/**
+ * A finding's id as this server sends it to the API: a positive whole number, given as the number it is or
+ * as a string of digits, which is how this server declares it (gh-749).
+ */
+function positiveFindingId(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) && value > 0 ? value : undefined;
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const id = Number(value);
+    return id > 0 ? id : undefined;
+  }
+  return undefined;
 }
 
 /** Fills the path template. The values are escaped: an id that is not one must not become a different path. */
@@ -196,9 +223,13 @@ function bodyOf(tool: Tool, args: Record<string, unknown>): Record<string, unkno
     return out;
   }
   if (tool.name === "silence_alerts") {
-    // The API calls the reason `why` and the scope's footprint is optional; a project-wide silence sends
-    // neither, which is the common case.
-    return { scope: args.scope, until: args.until, why: args.why };
+    // The API calls the reason `why`, and a footprint silence named by finding sends the finding's id as
+    // the number the API reads — the footprint itself is copied by the cloud (gh-749). A project-wide
+    // silence sends neither, which is the common case.
+    const out: Record<string, unknown> = { scope: args.scope, until: args.until, why: args.why };
+    const finding = positiveFindingId(args.finding);
+    if (finding !== undefined) out.finding = finding;
+    return out;
   }
   if (tool.name === "give_feedback" || tool.name === "assess_hypothesis") {
     // The caller of this server is by construction a coding agent, and the product keeps its ratings and

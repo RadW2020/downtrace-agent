@@ -530,6 +530,13 @@ export const tools: Tool[] = [
       properties: {
         project,
         scope: { type: "string", description: "project | footprint" },
+        finding: {
+          type: "string",
+          description:
+            "The finding's numeric id, when `scope` is `footprint`: the silence takes the finding's whole " +
+            "footprint from it, so nothing is typed by hand and a finding without a route is silenced too. " +
+            "Refused with `project`. The detector keeps running: the finding still opens and still counts.",
+        },
         until: { type: "string", description: "RFC 3339 instant, at most thirty days away." },
         why,
         idempotencyKey,

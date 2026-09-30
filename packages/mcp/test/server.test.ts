@@ -654,6 +654,99 @@ describe("the assessment of a hypothesis, given through this server", () => {
   });
 });
 
+/**
+ * gh-749, invariant 13: silencing one footprint is a capability of the interface, and a program can exercise
+ * it. The six fields of the footprint are not typed by hand: they come from the finding, the cloud copies
+ * them, and the detector keeps running.
+ */
+describe("the silence of an alert, by its finding", () => {
+  // The other ids of this server are declared strings; `finding` is one of them, and the body is what
+  // turns it into the number the API takes (gh-769 compares this).
+  it("declares the finding as a string, the type every other tool declares for it", () => {
+    const tool = toolNamed("silence_alerts");
+    expect(tool?.inputSchema.properties.finding?.type).toBe("string");
+  });
+
+  it("says in the finding's description that the footprint comes from the finding and the detection goes on", () => {
+    const description = toolNamed("silence_alerts")?.inputSchema.properties.finding?.description ?? "";
+    expect(description).toContain("footprint");
+    expect(description).toContain("still opens and still counts");
+  });
+
+  it("sends the finding as the number the API reads, beside the scope and the end", async () => {
+    const { s, calls } = server([{}]);
+    const out = (await s.handle("tools/call", {
+      name: "silence_alerts",
+      arguments: {
+        project: "tienda",
+        scope: "footprint",
+        finding: "7",
+        until: "2026-10-01T00:00:00Z",
+        why: "noisy route",
+      },
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(out.isError).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/silences");
+    expect(only(calls, 0).body).toEqual({
+      scope: "footprint",
+      until: "2026-10-01T00:00:00Z",
+      why: "noisy route",
+      finding: 7,
+    });
+  });
+
+  it("sends no finding at all with a project-wide silence, as it did before", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "silence_alerts",
+      arguments: { project: "tienda", scope: "project", until: "2026-10-01T00:00:00Z", why: "migrating" },
+    });
+    expect(only(calls, 0).body).toEqual({ scope: "project", until: "2026-10-01T00:00:00Z", why: "migrating" });
+  });
+
+  // A value that is not a positive whole number is not an id: sent, it would only come back as a refusal
+  // somebody has to read. Refused here, before anything is sent, as `version` is.
+  it("refuses a finding that is not a positive whole number, and sends nothing", async () => {
+    for (const bad of ["", "   ", "abc", "7.5", "-3", "0", 0, -1, 2.5]) {
+      const { s, calls } = server();
+      const out = (await s.handle("tools/call", {
+        name: "silence_alerts",
+        arguments: {
+          project: "tienda",
+          scope: "footprint",
+          finding: bad,
+          until: "2026-10-01T00:00:00Z",
+          why: "x",
+        },
+      })) as { content: Array<{ text: string }>; isError?: boolean };
+      expect(out.isError, JSON.stringify(bad)).toBe(true);
+      expect(said(out), JSON.stringify(bad)).toContain("`finding`");
+      expect(calls, JSON.stringify(bad)).toHaveLength(0);
+    }
+  });
+
+  it("accepts the id as the number an agent that read it from a report may give", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "silence_alerts",
+      arguments: {
+        project: "tienda",
+        scope: "footprint",
+        finding: 7,
+        until: "2026-10-01T00:00:00Z",
+        why: "noisy route",
+      },
+    });
+    expect(only(calls, 0).body).toEqual({
+      scope: "footprint",
+      until: "2026-10-01T00:00:00Z",
+      why: "noisy route",
+      finding: 7,
+    });
+  });
+});
+
 describe("when something goes wrong", () => {
   // A failure is a result the agent can read, never an exception that ends the session.
   it("turns an API error into a readable result and stays alive", async () => {
