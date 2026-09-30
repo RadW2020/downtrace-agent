@@ -1,5 +1,6 @@
 import express from "express";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { armMountRecording } from "../src/mounts.ts";
 import { heuristicTemplate, normalizeMethod, routeOf } from "../src/routes.ts";
 
 describe("routeOf", () => {
@@ -116,6 +117,12 @@ describe("routeOf", () => {
 // where the application writes it, and the template is built from the routers, not from the value the
 // mount matched (invariant 5, gh-858).
 describe("routeOf over a real Express mount (gh-858)", () => {
+  // The record is armed here and not at the import of `mounts.ts`: an import must not wrap
+  // `Router.prototype.use` (gh-903), and a test that registers routes says the arm out loud.
+  beforeAll(() => {
+    armMountRecording(express.Router.prototype);
+  });
+
   function mountedAt(mount: string): { app: express.Express; route: object } {
     const router = express.Router();
     router.get("/users/:id", () => {});

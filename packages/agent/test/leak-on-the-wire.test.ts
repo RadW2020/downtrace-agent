@@ -3,12 +3,13 @@ import type { AddressInfo } from "node:net";
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import express from "express";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { IntervalAggregator } from "../src/aggregator.ts";
 import { enterRequest, recordOperationIn } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
 import type { Logger } from "../src/log.ts";
+import { armMountRecording } from "../src/mounts.ts";
 import { PROFILE_WINDOW_MS, ProfileAggregator } from "../src/profile.ts";
 import { type RouteSource, routeOf } from "../src/routes.ts";
 import { sanitizeMessage } from "../src/sanitize.ts";
@@ -63,6 +64,12 @@ const SECRETS = [
 ];
 
 describe("what actually leaves, in the bytes", () => {
+  // The mount record is armed here and not at the import of `mounts.ts`: an import must not wrap
+  // `Router.prototype.use` (gh-903). The tests that register real mounts read back what this arm records.
+  beforeAll(() => {
+    armMountRecording(express.Router.prototype);
+  });
+
   afterEach(() => {
     // The first test pins the system clock; the pin must not leak past it.
     vi.useRealTimers();

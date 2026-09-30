@@ -65,10 +65,15 @@ function routesOf(batch: AggregatesBatch | undefined): Map<string, number> {
  * admin router were attributed to a path that does not exist at the top level.
  *
  * Real Express (5.2.1, the package's devDependency), real agent, real batch, like `agent.integration.test.ts`.
+ *
+ * The agent starts **before** the routes are registered: `start()` is what arms the mount record (gh-903),
+ * and a mount registered before the record is armed comes out as `:param`.
  */
 describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () => {
   it("names a middleware's answer by the path the client asked for, and leaves the prefix-less path alone", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.use((_req, res) => {
       res.status(401).json({ error: "unauthorized" });
@@ -81,13 +86,11 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     expect(await hit(url, "/admin/x")).toBe(401);
     expect(await hit(url, "/x")).toBe(200);
@@ -104,6 +107,8 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
 
   it("keeps the prefix of a plain app.use middleware", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const app = express();
     app.use("/static", (_req, res) => {
       res.send("body");
@@ -111,13 +116,11 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     expect(await hit(url, "/static/app.css")).toBe(200);
     expect(await agent.flushNow()).toBe(true);
@@ -126,6 +129,8 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
 
   it("folds a value in any segment of the path, the prefix and all, and the value does not leave", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.use((_req, res) => {
       res.status(401).json({});
@@ -135,13 +140,11 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     expect(await hit(url, "/admin/users/ana%40cliente.com/orders")).toBe(401);
     expect(await hit(url, "/admin/reset-password/Zx8kQ2vN4pL9mR7tY3wB")).toBe(401);
@@ -157,6 +160,8 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
 
   it("still lets a matched route win over the heuristic", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.use((req, res, next) => {
       if (req.url === "/secret") {
@@ -173,13 +178,11 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     expect(await hit(url, "/admin/secret")).toBe(401);
     expect(await hit(url, "/admin/items/42")).toBe(200);

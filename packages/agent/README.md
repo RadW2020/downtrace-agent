@@ -51,7 +51,7 @@ would be worse than the wrong label — and the project's page shows the instanc
 is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the
 batch declare.
 
-Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else. So you can add it to a deployment before you have a token: nothing changes until both exist.
+Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else: it loads none of your dependencies and changes none of them — importing the package, or loading it without the token, does not even load Express. So you can add it to a deployment before you have a token: nothing changes until both exist.
 
 ## If your build prunes dependencies it cannot see
 
@@ -537,8 +537,10 @@ you would give an application log.
   through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - For Express route templates the instrumentation wraps one more method, `Router.prototype.use`, to keep the pattern of each
   mount, because Express discards it as soon as it compiles it: without the pattern, a mount with a parameter would reach
-  the template as its value. The wrapper passes arguments and the new layers through untouched, and a failure inside it
-  runs your application anyway — the mount is then read as `:param`, which is the safe side (see Requirements).
+  the template as its value. The wrapper is put in place when the instrumentation **starts** — with `--import`, before your
+  application registers anything — and not when the package is imported: an import with the instrumentation not running
+  loads no Express and touches nothing. The wrapper passes arguments and the new layers through untouched, and a failure
+  inside it runs your application anyway — the mount is then read as `:param`, which is the safe side (see Requirements).
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
@@ -558,8 +560,9 @@ tenant — one route, not one per tenant. That is also what keeps a tenant's nam
 a plain word the heuristic below leaves as written. When a mount's pattern cannot be recovered with confidence,
 its segments come out as `:param` instead of the values they carried — the requests still group under one stable
 route. That happens for a mount registered with a regular expression (there is no pattern to read), for an app
-mounted under a router (Express records no prefix in that case), and for routes registered on a copy of Express
-different from the one the agent wrapped (a duplicated dependency). Without a framework — and for whatever Express
+mounted under a router (Express records no prefix in that case), for a mount registered before the instrumentation
+started — start the agent before the routes are registered, and `--import` does that for you — and for routes
+registered on a copy of Express different from the one the agent wrapped (a duplicated dependency). Without a framework — and for whatever Express
 answers before a route matched, a middleware's 401 or a 404, read as the path the client asked for, the prefix of
 the mount it passed through and all — a segment that carries a value is collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a

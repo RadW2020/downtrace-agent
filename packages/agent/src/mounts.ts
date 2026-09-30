@@ -66,16 +66,20 @@ export function armMountRecording(proto: unknown): boolean {
 /**
  * Resolves the express the application uses and arms the record on its `Router.prototype.use`.
  *
- * It runs once, as soon as this module is loaded (see the end of the file), and not from the first request:
- * the pattern is discarded at the moment the route is registered, and there is no later moment from which
- * it can be recovered. `armPg` can defer its patch (ADR 0209) because a query cannot run before the driver
- * is loaded; a mount registered before the record is armed cannot be read after.
+ * It runs from `Agent.start()` and not at the load of this module: an import of the package must not load
+ * express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
+ * and `register` calls `start()` during `--import`, before the application registers anything, so no pattern
+ * is lost. It is still not deferred to the first request: the pattern is discarded at the moment the route is
+ * registered, and there is no later moment from which it can be recovered. `armPg` can defer its patch
+ * (ADR 0209) because a query cannot run before the driver is loaded; a mount registered before the record is
+ * armed cannot be read after.
  *
  * Resolving loads express into the module cache before the application loads it; that is deliberate — the
  * prototype that gets patched is the one the application will use, whatever the order of the loads.
  *
  * Best effort: no express, or an express that is not resolvable from the application's root, leaves the
- * `:param` fallback in place, which is the safe side (invariant 5).
+ * `:param` fallback in place, which is the safe side (invariant 5). It cannot throw, and `start()` relies on
+ * that (invariant 2).
  */
 export function armMounts(from?: string): void {
   try {
@@ -86,8 +90,3 @@ export function armMounts(from?: string): void {
     // The application does not use express, or it is not resolvable from here.
   }
 }
-
-// Armed at the load of this module, because registration does not wait for the agent: every route an
-// application registers from this process on is recorded, and a process that never builds an express app
-// pays one failed resolution and nothing else.
-armMounts();

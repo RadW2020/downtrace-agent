@@ -64,10 +64,15 @@ function routesOf(batch: AggregatesBatch | undefined): Map<string, number> {
  * groups by, so the value travelled in every batch and grew the cardinality with every tenant.
  *
  * Real Express (5.2.1, the package's devDependency), real agent, real batch, like `agent.integration.test.ts`.
+ *
+ * The agent starts **before** the routes are registered: `start()` is what arms the mount record (gh-903),
+ * and a mount registered before the record is armed comes out as `:param`.
  */
 describe("a mounted router carries its pattern, not its value (gh-858)", () => {
   it("keeps the mount's parameter out of the template, for every tenant", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.get("/users/:id", (req, res) => {
       res.json({ id: req.params.id });
@@ -77,13 +82,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/tenants/acme-corp/users/42");
     await hit(url, "/tenants/otro/users/7");
@@ -104,6 +107,8 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
 
   it("keeps a mount without parameters as it was written", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.get("/users/:id", (_req, res) => {
       res.json({});
@@ -113,13 +118,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/api/users/7");
     expect(await agent.flushNow()).toBe(true);
@@ -128,6 +131,8 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
 
   it("keeps the values of two nested mounts out of the template", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const inner = express.Router();
     inner.get("/users/:id", (_req, res) => {
       res.json({});
@@ -139,13 +144,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/tenants/acme-corp/teams/team-7/users/42");
     await hit(url, "/tenants/otro/teams/t-2/users/9");
@@ -166,6 +169,8 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     // on the request until the response does. A late answer is the normal case, and it is the one a fix
     // that reads the request too early misses.
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const router = express.Router();
     router.get("/users/:id", async (_req, res) => {
       await new Promise((r) => setTimeout(r, 25));
@@ -176,13 +181,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/tenants/acme-corp/users/42");
     expect(await agent.flushNow()).toBe(true);
@@ -191,6 +194,8 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
 
   it("keeps the mount's parameter out when an app, not a router, is mounted", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const sub = express();
     sub.get("/users/:id", (_req, res) => {
       res.json({});
@@ -200,13 +205,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/orgs/acme-corp/users/42");
     await hit(url, "/orgs/otro/users/7");
@@ -218,6 +221,8 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
 
   it("keeps the mount's parameter out when an app is mounted under a router", async () => {
     const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
     const sub = express();
     sub.get("/users/:id", (_req, res) => {
       res.json({});
@@ -229,13 +234,11 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     const server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const agent = createAgent(config(sink.url), { log: quiet });
     cleanups.push(
       () => agent.stop(),
       () => new Promise<void>((r) => server.close(() => r())),
       sink.close,
     );
-    agent.start();
 
     await hit(url, "/v2/orgs/acme-corp/users/42");
     await hit(url, "/v2/orgs/otro/users/7");

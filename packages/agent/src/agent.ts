@@ -34,6 +34,7 @@ import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
+import { armMounts } from "./mounts.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel, shedReasonOf } from "./overhead.ts";
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
@@ -428,6 +429,12 @@ export class Agent {
   start(): void {
     if (this.started || this.disabled) return;
     this.started = true;
+    // The mount record arms here and not at the load of `mounts.ts`: an import of the package must not load
+    // express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
+    // and `register` calls `start()` during `--import`, before the application registers anything, so no
+    // pattern is lost. `armMounts` cannot throw; a failure to arm leaves the `:param` fallback, and the
+    // application goes on (invariant 2).
+    armMounts();
     const on = this.config.instrument;
     // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
     // which is a configuration and not a fault; `unavailable` is «asked for and could not attach», which is
