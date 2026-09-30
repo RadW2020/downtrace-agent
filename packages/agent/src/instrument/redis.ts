@@ -1,6 +1,7 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { currentContext, type RequestContext, recordCallIn } from "../context.ts";
+import { currentContext, type RequestContext, recordCallIn, recordErrorIn } from "../context.ts";
+import type { ErrorFingerprintCache } from "../errors.ts";
 import type { Logger } from "../log.ts";
 
 interface Pending {
@@ -23,6 +24,11 @@ export interface InstrumentRedisDeps {
    * debug, sends the count in the batch and disables the instrumentation at the tenth (invariant 2, ADR 0161).
    */
   internalError: (err: unknown) => void;
+  /**
+   * Where a thrown thing becomes a signature. Absent means a failed command is counted and not identified,
+   * which is what this observer did until gh-907: a failure was a number of the dependency's, and nothing more.
+   */
+  errors?: ErrorFingerprintCache | undefined;
 }
 
 /**
@@ -41,7 +47,13 @@ export function instrumentRedis(deps: InstrumentRedisDeps): () => void {
     const p = pending.get(message as object);
     if (!p) return;
     pending.delete(message as object);
-    recordCallIn(p.ctx, "redis", p.target, performance.now() - p.started, failed || message.error !== undefined);
+    const now = performance.now();
+    // A command the driver settles as a failure is one of the dependency's errors, the same as a call that
+    // never answered.
+    const isFailure = failed || message.error !== undefined;
+    recordCallIn(p.ctx, "redis", p.target, now - p.started, isFailure);
+    // A failure that carried an error is an error beside the failed call (ERR-01); one that did not is not.
+    recordErrorIn(p.ctx, deps.errors, isFailure, message.error, p.target, p.started, now);
   };
 
   // Every handler runs behind one guard, for the same reason as outgoing HTTP's: Node rethrows a subscriber's throw

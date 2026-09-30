@@ -69,7 +69,7 @@ SENTRY_DSN=… node --import @downtrace/agent/register --import ./src/sentry.ts 
 ## Admin (`ADMIN_ENABLED=1`, the default)
 
 - `GET`/`PUT /__admin/regressions` — state and parameters.
-- `GET`/`PUT /__admin/provider` — manual `delayMs` and `failureRate` of the provider.
+- `GET`/`PUT /__admin/provider` — manual `delayMs` and `failureRate` of the provider, and `refuse`, which makes its port refuse every connection rather than answer with a 500.
 - `GET /__admin/process` — `cpu` (`process.cpuUsage()`), `memory` (`process.memoryUsage()`), `eventLoopUtilization`, `uptimeMs`; the overhead benchmark samples it.
 - `GET /__admin/stats` — per endpoint: requests, status by class, `sqlQueries`, `providerCalls`, `providerRetries`, `redisOps`, `poolWaitMs`, `errors` by type, `totalDurationMs`.
 - `POST /__admin/stats/reset`.

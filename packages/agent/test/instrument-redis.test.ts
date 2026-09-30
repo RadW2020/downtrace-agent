@@ -1,6 +1,8 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { afterEach, describe, expect, it } from "vitest";
 import { currentContext, enterRequest, type RequestContext } from "../src/context.ts";
+import { ErrorFingerprintCache } from "../src/errors.ts";
+import { Excluded } from "../src/exclude.ts";
 import { instrumentRedis } from "../src/instrument/redis.ts";
 import type { Logger } from "../src/log.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -99,6 +101,73 @@ describe("instrumentRedis", () => {
     const ctx = enterRequest();
     await command({ command: "GET", serverAddress: "127.0.0.1", serverPort: 6379 });
     expect(redisWork(ctx)).toHaveLength(0);
+  });
+});
+
+/**
+ * ERR-01, the half this ticket adds: a command the driver settles as failed is an operation with its identity,
+ * not only a failed call of the dependency. The identity is the one a failed query already had (gh-338): the
+ * same signature, the same bounds, beside the same counters.
+ */
+describe("a command that fails", () => {
+  const errors = new ErrorFingerprintCache();
+  const observingWithError = (): void => {
+    stops.push(instrumentRedis({ ...deps, errors }));
+  };
+
+  it("records what a failed command threw, beside the failed call", async () => {
+    observingWithError();
+    const ctx = enterRequest();
+    await command({ command: "EVAL", serverAddress: "127.0.0.1", serverPort: 6379 }, true);
+    const [dep] = redisWork(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    const operations = [...(ctx.operations?.values() ?? [])];
+    const error = operations.find((o) => o.kind === "error");
+    expect(error, "the failure is identified, not only counted").toBeDefined();
+    expect(error?.errors).toBe(1);
+    expect(error?.text).toContain("redis said no");
+  });
+
+  it("records nothing extra when the command succeeds", async () => {
+    observingWithError();
+    const ctx = enterRequest();
+    await command({ command: "GET", serverAddress: "127.0.0.1", serverPort: 6379 });
+    expect(ctx.operations, "no identity is invented for a success").toBeUndefined();
+  });
+
+  it("withholds the error of a command the operator excluded, with the failed call it is beside", async () => {
+    // What the operator asked not to be looked at is not looked at (`product.md:104`, ADR 0101): an excluded
+    // server leaves neither its counters nor the identity of what it threw.
+    observingWithError();
+    const ctx = enterRequest(undefined, undefined, new Excluded(["127.0.0.1:6379"]));
+    await command({ command: "EVAL", serverAddress: "127.0.0.1", serverPort: 6379 }, true);
+    expect(redisWork(ctx), "an excluded dependency is not looked at at all").toEqual([]);
+    expect(ctx.operations, "neither the identity of what it threw").toBeUndefined();
+  });
+
+  it("counts a fingerprint that throws as an internal error, once", async () => {
+    const exploded = new Error("fingerprint broke");
+    stops.push(
+      instrumentRedis({
+        ...deps,
+        errors: {
+          get: () => {
+            throw exploded;
+          },
+        } as unknown as ErrorFingerprintCache,
+      }),
+    );
+    const ctx = enterRequest();
+    await command({ command: "EVAL", serverAddress: "127.0.0.1", serverPort: 6379 }, true);
+    const [dep] = redisWork(ctx);
+    // The failed call is counted; the operation the fingerprint is for is not.
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    expect(ctx.operations).toBeUndefined();
+    // And the bug is the instrumentation's own, counted once (ADR 0161): the `error` handler ends the command,
+    // and the `asyncEnd` that follows it finds nothing left to finish.
+    expect(failures.splice(0)).toEqual([exploded]);
   });
 });
 

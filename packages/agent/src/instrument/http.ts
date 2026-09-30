@@ -1,6 +1,7 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { currentContext, type RequestContext, recordCallIn } from "../context.ts";
+import { currentContext, type RequestContext, recordCallIn, recordErrorIn } from "../context.ts";
+import type { ErrorFingerprintCache } from "../errors.ts";
 import type { Logger } from "../log.ts";
 
 /** What was known when the call started, kept until it finishes. */
@@ -19,6 +20,11 @@ export interface InstrumentHttpDeps {
    * debug, sends the count in the batch and disables the instrumentation at the tenth (invariant 2, ADR 0161).
    */
   internalError: (err: unknown) => void;
+  /**
+   * Where a thrown thing becomes a signature. Absent means a failed call is counted and not identified, which
+   * is what this observer did until gh-907: a failure was a number of the dependency's, and nothing more.
+   */
+  errors?: ErrorFingerprintCache | undefined;
 }
 
 /**
@@ -40,13 +46,18 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
     pending.set(key, { ctx, started: performance.now(), target: clamp(target) });
   };
 
-  const end = (key: object | undefined, status: number | undefined, failed: boolean): void => {
+  const end = (key: object | undefined, status: number | undefined, failed: boolean, err?: unknown): void => {
     if (!key) return;
     const p = pending.get(key);
     if (!p) return;
     pending.delete(key);
+    const now = performance.now();
     // A 5xx from a dependency is a failure of that dependency, the same as a connection that never answered.
-    recordCallIn(p.ctx, "http", p.target, performance.now() - p.started, failed || (status ?? 0) >= 500);
+    const isFailure = failed || (status ?? 0) >= 500;
+    recordCallIn(p.ctx, "http", p.target, now - p.started, isFailure);
+    // A failure that threw is an error beside the failed call (ERR-01); an answer, however bad, is not one,
+    // because nobody threw anything and no identity is invented for it.
+    recordErrorIn(p.ctx, deps.errors, isFailure, err, p.target, p.started, now);
   };
 
   const handlers: Array<[string, (message: unknown) => void]> = [
@@ -64,7 +75,13 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
         end(m.request, m.response?.statusCode, false);
       },
     ],
-    ["undici:request:error", (message) => end((message as { request?: object }).request, undefined, true)],
+    [
+      "undici:request:error",
+      (message) => {
+        const m = message as { request?: object; error?: unknown };
+        end(m.request, undefined, true, m.error);
+      },
+    ],
     [
       "http.client.request.start",
       (message) => {
@@ -79,7 +96,13 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
         end(m.request, m.response?.statusCode, false);
       },
     ],
-    ["http.client.request.error", (message) => end((message as { request?: object }).request, undefined, true)],
+    [
+      "http.client.request.error",
+      (message) => {
+        const m = message as { request?: object; error?: unknown };
+        end(m.request, undefined, true, m.error);
+      },
+    ],
   ];
   // Every subscriber runs behind one guard. Node calls a subscriber inside a `try` of its own and rethrows what it
   // catches on the next tick as an uncaught exception, so a throw here would end the application's process.
@@ -96,7 +119,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
   ]);
 
   for (const [name, handler] of subscriptions) diagnostics_channel.subscribe(name, handler);
-  const restoreFetch = catchFetchConnectFailures(internalError);
+  const restoreFetch = catchFetchConnectFailures(internalError, deps.errors);
   log.debug(`observing outgoing HTTP on ${subscriptions.length} channels`);
 
   return () => {
@@ -114,7 +137,10 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
  * for this request while it ran, the call is counted as a failed one. On every other path it does nothing and the
  * channels above do the work, so there is no double counting.
  */
-function catchFetchConnectFailures(internalError: (err: unknown) => void): () => void {
+function catchFetchConnectFailures(
+  internalError: (err: unknown) => void,
+  errors: ErrorFingerprintCache | undefined,
+): () => void {
   const original = globalThis.fetch;
   if (typeof original !== "function") return () => {};
 
@@ -129,7 +155,12 @@ function catchFetchConnectFailures(internalError: (err: unknown) => void): () =>
       // Best effort, as in the subscribers: had this thrown, the application would get our error and not its own.
       try {
         if (ctx.recorded === before) {
-          recordCallIn(ctx, "http", hostOfInput(input), performance.now() - started, true);
+          // The channels said nothing, so this is the one place the call is seen: the failed call and the error
+          // it threw, together, or not at all (ERR-01).
+          const now = performance.now();
+          const target = hostOfInput(input);
+          recordCallIn(ctx, "http", target, now - started, true);
+          recordErrorIn(ctx, errors, true, error, target, started, now);
         }
       } catch (failure) {
         internalError(failure);

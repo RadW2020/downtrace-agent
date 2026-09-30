@@ -131,7 +131,7 @@ export function createReferenceApp(options: ReferenceAppOptions = {}): Reference
     admin.get("/provider", (_req, res) => {
       res.json(provider.control);
     });
-    admin.put("/provider", (req, res) => {
+    admin.put("/provider", async (req, res) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
       for (const key of ["delayMs", "failureRate"] as const) {
         if (key in body) {
@@ -141,6 +141,11 @@ export function createReferenceApp(options: ReferenceAppOptions = {}): Reference
           if (key === "failureRate" && v > 1) throw new BadRequestError("failureRate must be within [0, 1]");
           provider.control[key] = v;
         }
+      }
+      if ("refuse" in body) {
+        const v = body.refuse;
+        if (typeof v !== "boolean") throw new BadRequestError("refuse must be a boolean");
+        await provider.setRefuse(v);
       }
       res.json(provider.control);
     });

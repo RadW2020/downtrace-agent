@@ -472,11 +472,11 @@ export class Agent {
     }
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
-      this.stopHttp = instrumentHttp({ log: this.log, internalError });
+      this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors });
       observers.http = "on";
     }
     if (on.has("redis")) {
-      this.stopRedis = instrumentRedis({ log: this.log, internalError });
+      this.stopRedis = instrumentRedis({ log: this.log, internalError, errors: this.errors });
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.

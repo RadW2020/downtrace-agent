@@ -7,6 +7,11 @@ export interface ProviderControl {
   delayMs: number;
   /** Fraction of responses that fail with 500. */
   failureRate: number;
+  /**
+   * When true the provider's port refuses every connection: a call to it never gets a response, which a
+   * `failureRate` of 1 cannot say — that one still answers, with a 500.
+   */
+  refuse: boolean;
 }
 
 /**
@@ -14,7 +19,7 @@ export interface ProviderControl {
  * app makes real outgoing HTTP calls whose latency and failures we control.
  */
 export class FakeProvider {
-  readonly control: ProviderControl = { delayMs: 0, failureRate: 0 };
+  readonly control: ProviderControl = { delayMs: 0, failureRate: 0, refuse: false };
   private readonly server: http.Server;
   private readonly pending = new Set<NodeJS.Timeout>();
   private port = 0;
@@ -44,6 +49,26 @@ export class FakeProvider {
     this.pending.clear();
     this.server.closeAllConnections();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+
+  /**
+   * Whether the port answers at all. Stopping the listener is what refuses a connection — a `failureRate` of
+   * 1 answers with a 500, which is a different failure, and the two must not be confused.
+   */
+  async setRefuse(refuse: boolean): Promise<void> {
+    if (refuse === this.control.refuse) return;
+    if (refuse) {
+      for (const t of this.pending) clearTimeout(t);
+      this.pending.clear();
+      this.server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => this.server.close((err) => (err ? reject(err) : resolve())));
+    } else if (!this.server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        this.server.once("error", reject);
+        this.server.listen(this.port, "127.0.0.1", () => resolve());
+      });
+    }
+    this.control.refuse = refuse;
   }
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {

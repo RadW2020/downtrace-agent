@@ -106,8 +106,14 @@ It is about queries, so it does not touch the context of an error you report.
 ## Errors your application handled, and the ones your framework turned into a 5xx
 
 Installing without touching your code stays the default, and it covers most of it: a query that fails, an
-outgoing call that fails, an exception that kills the process. Two kinds of error it cannot cover, because
-from the outside nothing went wrong, and those are what these two calls are for.
+outgoing call that fails — a connection that is refused, a socket that resets, a timeout — and a Redis
+command the driver settles as failed. Each is an error with its identity, beside the dependency's failed
+call: the type, the sanitised message and the stack signature, as for a query. An exception that kills the
+process is watched too.
+
+A 5xx the dependency **answers** is not an error for it: nobody threw anything, and an identity is not
+invented for it — it stays a failed call of that dependency, which is what it is. The kinds of error no hook
+can cover, because from the outside nothing went wrong, are what these two calls are for.
 
 **An error you handled.** A `catch` that retries, falls back or writes a warning and carries on, and an error
 you deliberately turn into a 4xx or a 2xx. No hook can see either: the request succeeded.

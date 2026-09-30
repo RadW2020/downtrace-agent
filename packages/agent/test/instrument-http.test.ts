@@ -1,7 +1,9 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { currentContext, enterRequest, type RequestContext } from "../src/context.ts";
+import { ErrorFingerprintCache } from "../src/errors.ts";
+import { Excluded } from "../src/exclude.ts";
 import { instrumentHttp } from "../src/instrument/http.ts";
 import type { Logger } from "../src/log.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -55,6 +57,12 @@ afterAll(async () => {
 async function workOf(ctx: RequestContext) {
   await new Promise((r) => setTimeout(r, 50));
   return [...(ctx.work ?? new Map())].map(([, w]) => w).filter((w) => w.kind === "http");
+}
+
+/** What a request ran, once the channels have settled. */
+async function opsOf(ctx: RequestContext) {
+  await new Promise((r) => setTimeout(r, 50));
+  return [...(ctx.operations?.values() ?? [])];
 }
 
 describe("instrumentHttp", () => {
@@ -155,6 +163,176 @@ describe("instrumentHttp", () => {
     // No enterRequest here: this call belongs to no endpoint, like a health probe at startup.
     const response = await fetch(`http://127.0.0.1:${port}/a`);
     expect(response.status).toBe(200);
+  });
+});
+
+/**
+ * ERR-01, the half this ticket adds: an outgoing call that fails inside a request is an operation with its
+ * identity, not only a failed call of the dependency. The identity is the one a failed query already had
+ * (gh-338): the same signature, the same bounds, beside the same counters.
+ */
+describe("a call that fails", () => {
+  const errors = new ErrorFingerprintCache();
+
+  beforeEach(() => {
+    // One observer at a time: the module's is still on, and two would count the same call twice.
+    stop();
+    stop = instrumentHttp({ ...deps, errors });
+  });
+
+  afterEach(() => {
+    stop();
+    stop = instrumentHttp(deps);
+  });
+
+  it("records what a fetch that never connected threw, beside the failed call", async () => {
+    const ctx = enterRequest();
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    const error = (await opsOf(ctx)).find((o) => o.kind === "error");
+    expect(error, "the rejection is identified, not only counted").toBeDefined();
+    expect(error?.errors).toBe(1);
+    // The real case the sanitising has to stand up to: undici publishes nothing for a connection that never
+    // happens, the rejection carries no cause a hook can read, and its stack is what it is. The identity is
+    // coarse — the type and the message, no place in the application's code — and this pins it, so a change
+    // in either half of it is a change in what an error is (gh-907).
+    expect(error?.text).toBe("TypeError: fetch failed");
+  });
+
+  it("records what a node:http request that was refused threw, with the host kept out of the identity", async () => {
+    const ctx = enterRequest();
+    await new Promise<void>((done) => {
+      const request = http.get({ host: "127.0.0.1", port: 1, path: "/nowhere" });
+      request.on("error", () => done());
+    });
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    const error = (await opsOf(ctx)).find((o) => o.kind === "error");
+    expect(error, "the refusal is identified, not only counted").toBeDefined();
+    expect(error?.errors).toBe(1);
+    expect(error?.text).toContain("ECONNREFUSED");
+    // Invariant 5, asked of the identity: the message the driver writes carries the host it refused, and the
+    // sanitising is what keeps it out.
+    expect(error?.text).not.toContain("127.0.0.1");
+  });
+
+  it("records what a fetch whose connection was reset threw, once", async () => {
+    const ctx = enterRequest();
+    await expect(fetch(`http://127.0.0.1:${port}/reset`)).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    // Two hooks see this failure — the `undici:request:error` subscriber and the fetch's wrapper — and the
+    // call is counted once, so the error is an operation once as well.
+    const found = (await opsOf(ctx)).filter((o) => o.kind === "error");
+    expect(found).toHaveLength(1);
+    expect(found[0]?.errors).toBe(1);
+    expect(found[0]?.text).toContain("other side closed");
+  });
+
+  it("records what the socket layer saw when a port that listened stops answering, once", async () => {
+    // The port-1 refusal above is rejected by the client before any socket, and undici publishes nothing for
+    // it. A port that has answered and stops is a refusal the socket layer reports, and the channel carries
+    // it: the identity is the driver's, not the coarse rejection the app sees (gh-907).
+    const stopped = http.createServer(() => {});
+    await new Promise<void>((ready) => stopped.listen(0, "127.0.0.1", ready));
+    const closed = (stopped.address() as AddressInfo).port;
+    await new Promise<void>((done) => stopped.close(() => done()));
+    const ctx = enterRequest();
+    await expect(fetch(`http://127.0.0.1:${closed}/nowhere`)).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    // Two hooks see this failure — the `undici:request:error` subscriber and the fetch's wrapper — and the
+    // call is counted once, so the error is an operation once as well.
+    const found = (await opsOf(ctx)).filter((o) => o.kind === "error");
+    expect(found).toHaveLength(1);
+    expect(found[0]?.errors).toBe(1);
+    expect(found[0]?.text).toContain("ECONNREFUSED");
+    expect(found[0]?.text).not.toContain("127.0.0.1");
+  });
+
+  it("does not make an error of a 5xx the dependency answers: nobody threw anything", async () => {
+    const ctx = enterRequest();
+    await fetch(`http://127.0.0.1:${port}/boom`);
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    expect(ctx.operations, "no identity is invented for an answer").toBeUndefined();
+  });
+
+  it("counts a fingerprint that throws as an internal error, and the application keeps its own", async () => {
+    const exploded = new Error("fingerprint broke");
+    stop();
+    stop = instrumentHttp({
+      ...deps,
+      errors: {
+        get: () => {
+          throw exploded;
+        },
+      } as unknown as ErrorFingerprintCache,
+    });
+    const ctx = enterRequest();
+    // The application gets exactly the rejection it would have had (invariant 2).
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    // The failed call is counted; the operation the fingerprint is for is not.
+    expect(dep?.calls).toBe(1);
+    expect(dep?.errors).toBe(1);
+    expect(ctx.operations).toBeUndefined();
+    // And the bug is the instrumentation's own, counted once (ADR 0161).
+    expect(failures.splice(0)).toEqual([exploded]);
+  });
+});
+
+/**
+ * What the operator excluded is not looked at (`product.md:104`, ADR 0101): the failed call of an excluded
+ * dependency is not counted, and neither is the error beside it, which a message of the driver writes with the
+ * name of the destination in it.
+ */
+describe("a call that fails against a dependency the operator excluded", () => {
+  const errors = new ErrorFingerprintCache();
+  const excluded = new Excluded(["127.0.0.1:1"]);
+
+  beforeEach(() => {
+    stop();
+    stop = instrumentHttp({ ...deps, errors });
+  });
+
+  afterEach(() => {
+    stop();
+    stop = instrumentHttp(deps);
+  });
+
+  it("withholds the error of a fetch that never connected, with the failed call it is beside", async () => {
+    const ctx = enterRequest(undefined, undefined, excluded);
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow();
+    expect(await workOf(ctx), "an excluded dependency is not looked at at all").toEqual([]);
+    expect(ctx.operations, "neither the identity of what it threw").toBeUndefined();
+  });
+
+  it("withholds the error of a node:http request that was refused, with the failed call it is beside", async () => {
+    const ctx = enterRequest(undefined, undefined, excluded);
+    await new Promise<void>((done) => {
+      const request = http.get({ host: "127.0.0.1", port: 1, path: "/nowhere" });
+      request.on("error", () => done());
+    });
+    expect(await workOf(ctx)).toEqual([]);
+    expect(ctx.operations).toBeUndefined();
+  });
+
+  it("is a choice and not a blindness: the same call, unexcluded, leaves its error", async () => {
+    const ctx = enterRequest();
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow();
+    const [dep] = await workOf(ctx);
+    expect(dep?.errors).toBe(1);
+    expect(
+      (await opsOf(ctx)).some((o) => o.kind === "error"),
+      "the unexcluded call is identified",
+    ).toBe(true);
   });
 });
 

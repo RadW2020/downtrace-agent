@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { AGGREGATES_SCHEMA_V0, type AggregatesBatch } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -324,10 +325,14 @@ describe("the context it carries", () => {
   });
 
   it("keeps the first one seen for a signature and not the latest", async () => {
+    // The same thrown object for both, because a signature is about the place in the code and two `new
+    // Error` on two lines are two errors, so the two reports would be two signatures and this would be
+    // asking which sorts first, not which context is kept (ADR 0083, gh-907).
+    const thrown = new Error("boom");
     const sent = start();
     inRequest("/orders/7", () => {
-      sent.agent.report({ error: new Error("boom"), context: { stage: "first" }, kind: "explicit" });
-      sent.agent.report({ error: new Error("boom"), context: { stage: "second" }, kind: "explicit" });
+      sent.agent.report({ error: thrown, context: { stage: "first" }, kind: "explicit" });
+      sent.agent.report({ error: thrown, context: { stage: "second" }, kind: "explicit" });
     });
     await flush(sent.agent);
 
@@ -371,6 +376,80 @@ describe("the context it carries", () => {
     const op = operations(sent.batch(), "/orders/:id")[0];
     expect(op?.text, "the text follows the query switch").toBeUndefined();
     expect(op?.context).toEqual({ stage: "authorize" });
+  });
+});
+
+/**
+ * ERR-01, the half gh-907 adds: an outgoing call that fails inside a request is an operation with its
+ * identity in the profile, beside the dependency's failed call. A 5xx the dependency answers is not one.
+ */
+describe("an outgoing call that fails", () => {
+  /**
+   * One request whose handler fetches a port that answers nothing, catches the rejection and carries on to a
+   * 200: the «provider is down behind a fallback» case, which no hook could see without the call being a
+   * failure of its own.
+   */
+  async function failedFetch(): Promise<void> {
+    const request = { method: "POST", url: "/checkout" };
+    channel(REQUEST_START).publish({ request });
+    await fetch("http://127.0.0.1:1/nowhere").catch(() => {});
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+  }
+
+  it("travels as an error of the route that made it, and the dependency counts it", async () => {
+    const sent = start({ instrument: new Set(["http"]) });
+    await failedFetch();
+    await flush(sent.agent);
+
+    const error = operations(sent.batch(), "/checkout").find((o) => o.kind === "error");
+    expect(error, "the rejection is identified, not only counted").toBeDefined();
+    // The type and the sanitised message of the rejection, with nothing of the machine's in it (invariant 5).
+    expect(error?.text).toContain("fetch failed");
+    expect(error?.text).not.toContain("127.0.0.1");
+    expect(error?.errors).toBe(1);
+    // Beside it, the same call as the dependency's failure: the two questions a profile answers.
+    const endpoint = sent.batch().intervals[0]?.endpoints.find((e) => e.route === "/checkout");
+    expect(endpoint?.dependencies?.find((d) => d.kind === "http")?.errors).toBe(1);
+  });
+
+  it("travels without its text in the minimal mode, and the identity survives", async () => {
+    const plain = start({ instrument: new Set(["http"]) });
+    await failedFetch();
+    await flush(plain.agent);
+    const error = operations(plain.batch(), "/checkout").find((o) => o.kind === "error");
+    expect(error, "the error travels in plain mode, which is the half the minimal mode keeps").toBeDefined();
+    const hash = error?.hash;
+
+    const sent = start({ instrument: new Set(["http"]), minimal: true });
+    await failedFetch();
+    await flush(sent.agent);
+
+    // No free text leaves the server: the message does not, and the route travels as its digest.
+    expect(sent.body()).not.toContain("fetch failed");
+    const withheld = sent.batch().profile?.endpoints[0]?.operations.find((o) => o.kind === "error");
+    expect(withheld?.hash, "the error still groups by its identity, as a query's does").toBe(hash);
+  });
+
+  it("does not make an error of a 5xx the dependency answers", async () => {
+    // The dependency answers, with a 503: from the outside the call was made and answered, and nobody threw.
+    const server = http.createServer((_req, res) => res.writeHead(503).end("no"));
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const sent = start({ instrument: new Set(["http"]) });
+      const request = { method: "POST", url: "/checkout" };
+      channel(REQUEST_START).publish({ request });
+      await fetch(`http://127.0.0.1:${port}/down`).catch(() => {});
+      channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+      await flush(sent.agent);
+
+      const error = operations(sent.batch(), "/checkout").find((o) => o.kind === "error");
+      expect(error, "no identity is invented for an answer").toBeUndefined();
+      const endpoint = sent.batch().intervals[0]?.endpoints.find((e) => e.route === "/checkout");
+      expect(endpoint?.dependencies?.find((d) => d.kind === "http")?.errors).toBe(1);
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+    }
   });
 });
 

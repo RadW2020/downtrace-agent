@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dependency, Operation } from "@downtrace/protocol";
+import type { ErrorFingerprintCache } from "./errors.ts";
 import type { FineRegister } from "./fine.ts";
 import type { QueryClass } from "./fingerprint.ts";
 
@@ -289,4 +290,44 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
       ctx.fine.operation(op.fingerprint.hash, op.startedAt - ctx.startedAt, op.endedAt - ctx.startedAt);
     }
   }
+}
+
+/**
+ * Records what a failed operation threw, beside the operation itself.
+ *
+ * A second operation rather than a field on the first, because they answer different questions and the cloud
+ * counts them separately: how often this operation runs, and how often *this error* happens. The shape is the
+ * one ADR 0017 left ready — «queries and error signatures share one shape» — so nothing new travels.
+ *
+ * `product.md:77` asks for the identity of an error and not only its count. A query that fails has recorded it
+ * since gh-338; an outgoing call and a Redis command that fail record it from gh-907, through this one place,
+ * so the three agree on what an error is.
+ *
+ * A failure that threw nothing does not come here: a 5xx a dependency answers is a failed call of that
+ * dependency, and no identity is invented for it, because nobody threw anything.
+ *
+ * What the operator excluded is not looked at either, as the call is counted (or not) above: an excluded
+ * dependency leaves neither its counters nor the identity of what it threw, which could carry the name of it
+ * (`product.md:104`, ADR 0101).
+ */
+export function recordErrorIn(
+  ctx: RequestContext,
+  errors: ErrorFingerprintCache | undefined,
+  failed: boolean,
+  err: unknown,
+  target: string,
+  startedAt: number,
+  endedAt: number,
+): void {
+  // Nothing thrown, or nobody asked for signatures: a failure with no error object still counts as a failed
+  // call above, which is what it is.
+  if (!failed || !errors || err === undefined || err === null) return;
+  if (ctx.excluded?.has(target)) return;
+  recordOperationIn(ctx, {
+    kind: "error",
+    fingerprint: errors.get(err),
+    startedAt,
+    endedAt,
+    failed: true,
+  });
 }

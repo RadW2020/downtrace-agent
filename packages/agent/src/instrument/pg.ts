@@ -4,9 +4,9 @@ import { performance } from "node:perf_hooks";
 import type { PgDepth } from "../config.ts";
 import {
   currentContext,
-  type RequestContext,
   recordCall,
   recordCallIn,
+  recordErrorIn,
   recordOperationIn,
   recordWait,
   recordWaitIn,
@@ -84,36 +84,6 @@ export interface PgArmed {
    * while the application has not loaded the driver yet.
    */
   attach: () => boolean;
-}
-
-/**
- * Records what a failed operation threw, beside the operation itself.
- *
- * A second operation rather than a field on the first, because they answer different questions and the cloud
- * counts them separately: how often this query runs, and how often *this error* happens. The shape is the one
- * the ADR 0017 left ready — «queries and error signatures share one shape» — so nothing new travels.
- *
- * `product.md:77` asks for the identity of an error and not only its count, and until gh-338 the count was
- * all there was.
- */
-function recordErrorIn(
-  ctx: RequestContext,
-  errors: ErrorFingerprintCache | undefined,
-  failed: boolean,
-  err: unknown,
-  startedAt: number,
-  endedAt: number,
-): void {
-  // Nothing thrown, or nobody asked for signatures: a failure with no error object still counts as a failed
-  // query above, which is what it is.
-  if (!failed || !errors || err === undefined || err === null) return;
-  recordOperationIn(ctx, {
-    kind: "error",
-    fingerprint: errors.get(err),
-    startedAt,
-    endedAt,
-    failed: true,
-  });
 }
 
 /**
@@ -285,7 +255,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
                 endedAt: started + ms,
                 failed,
               });
-              recordErrorIn(ctx, deps.errors, failed, err, started, started + ms);
+              recordErrorIn(ctx, deps.errors, failed, err, target, started, started + ms);
             }
           }
         } catch (err) {
@@ -316,7 +286,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
                   endedAt: started + ms,
                   failed,
                 });
-                recordErrorIn(ctx, deps.errors, failed, cbArgs[0], started, started + ms);
+                recordErrorIn(ctx, deps.errors, failed, cbArgs[0], target, started, started + ms);
               }
             } catch (err) {
               internalError(err);
