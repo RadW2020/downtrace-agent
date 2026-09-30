@@ -92,6 +92,11 @@
         },
         "shed": {
           "$ref": "#/$defs/Shed"
+        },
+        "dependenciesTruncated": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests whose list of dependencies was truncated. Their count is real and their list is not complete."
         }
       }
     },
@@ -163,6 +168,10 @@
         "detailLost": {
           "type": "boolean",
           "description": "This request's operations were overwritten before they were read. Absent means false. Its timing is still true."
+        },
+        "dependenciesTruncated": {
+          "type": "boolean",
+          "description": "This request's list of dependencies did not fit and was truncated to what the register keeps per request. A dependency not in the list is not proven not to have been used (invariant 14). Absent means false."
         }
       }
     },

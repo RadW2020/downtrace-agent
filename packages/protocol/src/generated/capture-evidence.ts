@@ -55,6 +55,10 @@ export interface CaptureCoverage {
    */
   truncated: number;
   shed?: Shed;
+  /**
+   * Requests whose list of dependencies was truncated. Their count is real and their list is not complete.
+   */
+  dependenciesTruncated?: number;
 }
 /**
  * The time inside [startedAt, endedAt] when the instrumentation was not writing the fine detail — neither the register's ring nor the reserve — because it was shedding it. Present when some part of the window was shed, absent when there was no shedding, when the shedding came from configuration (`DOWNTRACE_SHED`, the benchmark) and so the instrumentation never decided it, or when the instrumentation predates the field: a sender older than the field sends nothing, and the cloud stores the absence as such (ADR 0008). The capture is still taken, not refused: the window can end before the shedding does, the coarse register keeps measuring, and the protocol has no way for an instance to refuse an order — saying it in the evidence is what CAP-01 asks for.
@@ -99,6 +103,10 @@ export interface CapturedRequest {
    * This request's operations were overwritten before they were read. Absent means false. Its timing is still true.
    */
   detailLost?: boolean;
+  /**
+   * This request's list of dependencies did not fit and was truncated to what the register keeps per request. A dependency not in the list is not proven not to have been used (invariant 14). Absent means false.
+   */
+  dependenciesTruncated?: boolean;
 }
 /**
  * One operation inside a request. Starts and ends and not durations, because the whole reason for capturing detail is order and overlap, which a duration cannot express (ADR 0068).

@@ -200,6 +200,58 @@ describe("the capture evidence schema", () => {
     expect(validate(extraField?.[1])).toBe(false);
   });
 
+  /**
+   * gh-902: the row that entered a dependency's capture because its list of dependencies did not fit must not
+   * travel as a complete row. `truncated` means operations, and the cloud reads it as such, so the mark is a
+   * field of its own: a boolean on the request, absent means false, as with `truncated` and `detailLost`, and
+   * a counter in the coverage beside the rest.
+   */
+  it("carries the dependencies-truncated mark on the request and its count in the coverage", () => {
+    const defs = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as {
+        $defs: {
+          Coverage: { required: string[]; properties: { dependenciesTruncated: { type: string; minimum: number } } };
+          CapturedRequest: { required: string[]; properties: { dependenciesTruncated: { type: string } } };
+        };
+      }
+    ).$defs;
+    // Optional in both places: a sender older than the field sends nothing, and absence means false (ADR 0008).
+    expect(defs.Coverage.required).not.toContain("dependenciesTruncated");
+    expect(defs.CapturedRequest.required).not.toContain("dependenciesTruncated");
+    expect(defs.CapturedRequest.properties.dependenciesTruncated.type).toBe("boolean");
+    // The coverage counts, like its other coverages: an integer at zero, and one never added to the rest, for
+    // the same reason a total is refused.
+    expect(defs.Coverage.properties.dependenciesTruncated.type).toBe("integer");
+    expect(defs.Coverage.properties.dependenciesTruncated.minimum).toBe(0);
+  });
+
+  it("accepts the mark and refuses the half-written ones", async () => {
+    const valid = (await load("valid")).find(([n]) => n === "with-dependencies-truncated.json");
+    expect(valid).toBeDefined();
+    expect(validate(valid?.[1])).toBe(true);
+
+    const invalid = await load("invalid");
+    const notABoolean = invalid.find(([n]) => n === "dependencies-truncated-not-a-boolean.json");
+    expect(notABoolean).toBeDefined();
+    expect(validate(notABoolean?.[1])).toBe(false);
+    const negative = invalid.find(([n]) => n === "dependencies-truncated-negative.json");
+    expect(negative).toBeDefined();
+    expect(validate(negative?.[1])).toBe(false);
+  });
+
+  /**
+   * Criterion 3 (gh-902): the evidence of an instrumentation older than the field stays valid. Every valid
+   * fixture written before the mark lacks it — that is asserted, so this test cannot pass the day the mark is
+   * added to them or made required by accident — and every one of them still validates.
+   */
+  it("keeps an evidence without the mark valid, the way an older sender's stays", async () => {
+    for (const [name, doc] of await load("valid")) {
+      if (name === "with-dependencies-truncated.json") continue;
+      expect(JSON.stringify(doc)).not.toContain("dependenciesTruncated");
+      expect(validate(doc) || `${name}: ${ajv.errorsText(validate.errors)}`).toBe(true);
+    }
+  });
+
   it("speaks exactly the versions the batch does", () => {
     // One fact, one place: the enum lives in the batch schema and `make gen` refuses a copy that has drifted.
     const batch = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;
