@@ -147,10 +147,11 @@ export const tools: Tool[] = [
   {
     name: "read_report",
     description:
-      "The report of a finding: facts, hypotheses with their state and evidence, recommendations tied to " +
-      "the hypothesis they rest on, and everything it cannot say. Start here. It carries a `version`, and " +
-      "that is the one `close_finding`, `accept_reference` and `assess_hypothesis` take: they are decisions " +
-      "on this report, and the cloud refuses them without changing anything if the report moved since.",
+      "The report of a finding: facts, hypotheses with their state and evidence, the overall confidence " +
+      "level with the fields its reasons come from, recommendations tied to the hypothesis they rest on, and " +
+      "everything it cannot say. Start here. It carries a `version`, and that is the one `close_finding`, " +
+      "`accept_reference` and `assess_hypothesis` take: they are decisions on this report, and the cloud " +
+      "refuses them without changing anything if the report moved since.",
     inputSchema: { type: "object", properties: { project, finding }, required: ["project", "finding"] },
     method: "GET",
     path: "/api/p/{slug}/findings/{id}/report",

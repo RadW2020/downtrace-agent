@@ -409,6 +409,13 @@ describe("the version of the report a decision was read from", () => {
     for (const t of versioned) expect(description, t.name).toContain(t.name);
   });
 
+  // The agent reads the description before it reads the report, and a report now states how far its own
+  // reading reaches (product.md:158): the description names the level, or the agent stops trusting it first.
+  it("names, in the description of read_report, the overall confidence the report states", () => {
+    const description = String(toolNamed("read_report")?.description ?? "");
+    expect(description).toContain("overall confidence");
+  });
+
   it("refuses a versioned call without the version, and sends nothing", async () => {
     for (const t of versioned) {
       const { s, calls } = server();
