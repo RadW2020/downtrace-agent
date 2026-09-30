@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { dependencyKey, enterRequest, recordOperationIn } from "../src/context.ts";
@@ -11,6 +12,7 @@ import {
   FINE_MAX_BYTES,
   FineRegister,
 } from "../src/fine.ts";
+import { DEFAULT_ARMED_ROUTES, DEFAULT_REQUESTS_PER_ARMED_ROUTE } from "../src/prearm.ts";
 import { OTHER_ROUTE } from "../src/routes.ts";
 import { testConfig } from "./support/agent-config.ts";
 
@@ -287,6 +289,21 @@ describe("the fine register", () => {
     const r = new FineRegister();
     // No context: `recordOperationIn` is never reached, and the register stays empty.
     expect(r.snapshot().requests).toHaveLength(0);
+  });
+});
+
+// gh-901. A capture without a route reads the ring plus every armed route's reserve at once, and the
+// evidence may not pass the schema's `maxItems`: the cloud would refuse it whole and the capture would
+// expire without evidence. So the ring is the cap minus the reserves' room, and the three numbers are
+// read here from their sources — the constant generated from the schema, and the prearm's own — so a
+// change of any one of them without the others fails this test.
+describe("the ring against the evidence's cap", () => {
+  it("fits the ring and the reserves into the evidence's cap, and says the three when they do not", () => {
+    const reserves = DEFAULT_ARMED_ROUTES * DEFAULT_REQUESTS_PER_ARMED_ROUTE;
+    expect(
+      DEFAULT_REQUESTS + reserves,
+      `the ring's ${DEFAULT_REQUESTS} plus the reserves' ${DEFAULT_ARMED_ROUTES} x ${DEFAULT_REQUESTS_PER_ARMED_ROUTE} must equal the evidence's maxItems ${EVIDENCE_REQUESTS_MAX_ITEMS_V0}`,
+    ).toBe(EVIDENCE_REQUESTS_MAX_ITEMS_V0);
   });
 });
 

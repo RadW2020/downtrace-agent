@@ -12,11 +12,20 @@
  * Nothing leaves the process. A capture will freeze it (gh-277).
  */
 
+import { EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
 import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
+import { DEFAULT_ARMED_ROUTES, DEFAULT_REQUESTS_PER_ARMED_ROUTE } from "./prearm.ts";
 import { MAX_ROUTE_LABEL_LENGTH, METHODS, OTHER_ROUTE } from "./routes.ts";
 
-/** How many requests the ring holds. */
-export const DEFAULT_REQUESTS = 4096;
+/**
+ * How many requests the ring holds: the evidence's `maxItems`, generated from the schema, minus what the
+ * prearmed reserves hold. A capture without a route reads the ring plus every armed route's reserve at
+ * once, and the sum may not pass the cap — the cloud refuses an evidence past it whole, and a refused
+ * evidence is the capture expiring without it (gh-901). The reserves' room comes out of the prearm's own
+ * constants, not a number copied here: the two sides have to agree, and a copy is where they would drift.
+ */
+export const DEFAULT_REQUESTS =
+  EVIDENCE_REQUESTS_MAX_ITEMS_V0 - DEFAULT_ARMED_ROUTES * DEFAULT_REQUESTS_PER_ARMED_ROUTE;
 
 /** How many operations the ring holds, across all of them. */
 export const DEFAULT_OPERATIONS = 32_768;

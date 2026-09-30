@@ -1,8 +1,11 @@
+import { EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { Captures, type LiveCapture, MAX_LIVE_CAPTURES, type PrearmReserve, sliceFor } from "../src/captures.ts";
 import { dependencyKey } from "../src/context.ts";
 import type { FineRequest, FineSnapshot } from "../src/fine.ts";
+import { DEFAULT_REQUESTS, FineRegister } from "../src/fine.ts";
 import { withheldName } from "../src/minimal.ts";
+import { DEFAULT_ARMED_ROUTES, DEFAULT_REQUESTS_PER_ARMED_ROUTE, PrearmRegister } from "../src/prearm.ts";
 import type { PendingCapture } from "../src/transport.ts";
 
 const order = (id: string, over: Partial<PendingCapture> = {}): PendingCapture => ({
@@ -508,5 +511,94 @@ describe("evidence of a dependency, across the armed routes' reserves", () => {
     ]);
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_100]);
     expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 0]);
+  });
+});
+
+// gh-901. The worst case the reserve exists for: the ring full of requests of other routes that call the
+// same dependency, and the reserve full. A capture without a route reads the two at once, and the sum may
+// not pass the evidence's `maxItems` — the cloud refuses an evidence past the cap whole, and a refused
+// evidence is the capture expiring without it. At production sizes, from the registers' own constants.
+describe("a capture without a route at the registers' worst case", () => {
+  const pg = dependencyKey("postgres", "db:5432");
+  const capture = (footprint: LiveCapture["footprint"]): LiveCapture => ({
+    id: "cap-full",
+    footprint,
+    startedAt: 5_000,
+    endsAt: 9_000,
+    reported: false,
+    shedMs: 0,
+  });
+  /** A ring at its production size, full of one unarmed route's requests, all calling the dependency. */
+  const fullRingOf = (route: string): FineRegister => {
+    const fine = new FineRegister();
+    for (let i = 0; i < DEFAULT_REQUESTS; i += 1)
+      fine.request("GET", route, 200, 1_000 + i, 1, fine.openRequest(), 0, [pg]);
+    return fine;
+  };
+  /** A route armed with a full reserve: its requests, all calling the dependency. */
+  const armFull = (prearm: PrearmRegister, method: string, route: string, at: number): void => {
+    prearm.arm(`${method} ${route}`, at, 100_000);
+    for (let i = 0; i < DEFAULT_REQUESTS_PER_ARMED_ROUTE; i += 1) {
+      prearm.observe({
+        method,
+        route,
+        armRoute: route,
+        status: 200,
+        startedAt: at + 1 + i,
+        durationMs: 10,
+        operations: [],
+        dependencies: [pg],
+      });
+    }
+  };
+
+  it("keeps a dependency capture under the evidence's cap when the ring and the reserve are full", () => {
+    // The case for the reserve: the ring has lost the armed route's requests to the traffic of the others,
+    // and the capture of the dependency they all call is what reaches them through the reserve.
+    const fine = fullRingOf("/items");
+    const prearm = new PrearmRegister();
+    armFull(prearm, "GET", "/cart", 1_000);
+
+    const slice = sliceFor(
+      capture({ kind: "postgres", target: "db:5432" }),
+      fine.snapshot(),
+      (r) => r,
+      prearm.armedReserves(5_000),
+    );
+    expect(
+      slice.requests.length,
+      `the evidence's ${slice.requests.length} requests pass the schema's maxItems ${EVIDENCE_REQUESTS_MAX_ITEMS_V0}`,
+    ).toBeLessThanOrEqual(EVIDENCE_REQUESTS_MAX_ITEMS_V0);
+    // The ring at its whole size plus the reserve at its own cap: the worst case, and it is the cap's room, not one past it.
+    expect(slice.requests).toHaveLength(DEFAULT_REQUESTS + DEFAULT_REQUESTS_PER_ARMED_ROUTE);
+    // And it brings the rows the ring no longer holds: the reserve of the armed route.
+    expect(slice.requests.filter((r) => r.route === "/cart")).toHaveLength(DEFAULT_REQUESTS_PER_ARMED_ROUTE);
+  });
+
+  it("keeps an environment capture under the evidence's cap with four full reserves", () => {
+    // The matcher that matches everything, against every armed route's reserve at once.
+    const fine = fullRingOf("/items");
+    const prearm = new PrearmRegister();
+    armFull(prearm, "GET", "/cart", 1_000);
+    armFull(prearm, "POST", "/orders", 1_010);
+    armFull(prearm, "GET", "/checkout", 1_020);
+    armFull(prearm, "GET", "/account", 1_030);
+
+    const slice = sliceFor(
+      capture({ environment: "production" }),
+      fine.snapshot(),
+      (r) => r,
+      prearm.armedReserves(5_000),
+    );
+    expect(
+      slice.requests.length,
+      `the evidence's ${slice.requests.length} requests pass the schema's maxItems ${EVIDENCE_REQUESTS_MAX_ITEMS_V0}`,
+    ).toBeLessThanOrEqual(EVIDENCE_REQUESTS_MAX_ITEMS_V0);
+    // Ring full, four reserves full: the sum is the cap itself, and no more.
+    expect(slice.requests).toHaveLength(DEFAULT_REQUESTS + DEFAULT_ARMED_ROUTES * DEFAULT_REQUESTS_PER_ARMED_ROUTE);
+    // Every reserve is in the evidence, at its own cap.
+    for (const route of ["/cart", "/orders", "/checkout", "/account"]) {
+      expect(slice.requests.filter((r) => r.route === route)).toHaveLength(DEFAULT_REQUESTS_PER_ARMED_ROUTE);
+    }
   });
 });

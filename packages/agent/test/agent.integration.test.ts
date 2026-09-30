@@ -16,9 +16,9 @@ import { Agent, createAgent } from "../src/agent.ts";
 import { IntervalAggregator, type Recorder } from "../src/aggregator.ts";
 import type { AgentConfig, Instrument } from "../src/config.ts";
 import { currentContext, recordCall, recordOperationIn } from "../src/context.ts";
-import { FineRegister } from "../src/fine.ts";
+import { DEFAULT_REQUESTS, FineRegister } from "../src/fine.ts";
 import type { Logger } from "../src/log.ts";
-import { PrearmRegister } from "../src/prearm.ts";
+import { DEFAULT_REQUESTS_PER_ARMED_ROUTE, PrearmRegister } from "../src/prearm.ts";
 import { RuntimeSampler } from "../src/runtime.ts";
 import { testConfig } from "./support/agent-config.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -534,6 +534,85 @@ describe("agent v0 (integration)", () => {
     expect(body.requests.map((r) => ({ method: r.method, route: r.route }))).toEqual([
       { method: "GET", route: "/cart" },
     ]);
+  });
+
+  // gh-901, the worst case the reserve exists for, at production sizes: the ring full of requests of other
+  // routes that call the same dependency, and the armed route's reserve full. The capture of that dependency
+  // reads the two at once, and the sum may not pass the evidence's `maxItems` — before, it passed by the
+  // reserve's room and the cloud refused the evidence whole (a 400 the sender noted in debug and forgot),
+  // so the capture expired without the very evidence gh-861 put it there to carry.
+  it("keeps the evidence of a dependency capture under the schema's cap, with the ring and the reserve full", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { path: string; body: unknown }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith(AGGREGATES_PATH)) {
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-postgres-full",
+                windowSeconds: 0.05,
+                expiresAt: new Date(Date.now() + 60_000).toISOString(),
+                kind: "postgres",
+                target: "db:5432",
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const clock = testClock();
+    const prearm = new PrearmRegister();
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["http"]) }), {
+      log: quiet,
+      fetchImpl,
+      now: clock.now,
+      prearm,
+    });
+    cleanups.push(() => agent.stop());
+    // Armed before the traffic, and with the production ring at its own size: the test is about the numbers
+    // the agent is built from, so it reads the registers' own constants and nothing copied.
+    prearm.arm("GET /cart", clock.now() - 1_000, 60_000);
+    agent.start();
+
+    // The armed route, its reserve filling to the cap.
+    for (let i = 0; i < DEFAULT_REQUESTS_PER_ARMED_ROUTE; i++) {
+      const cart = { method: "GET", url: "/cart" };
+      channel(REQUEST_START).publish({ request: cart });
+      recordCall("postgres", "db:5432", 3, false);
+      channel(RESPONSE_FINISH).publish({ request: cart, response: { statusCode: 200 } });
+    }
+    // The traffic of the other routes, all calling the same dependency: enough to fill the ring and take
+    // the cart rows with it, which is where the ring's copy of them goes.
+    for (let i = 0; i < 4_200; i++) {
+      const other = { method: "GET", url: `/items/${i}` };
+      channel(REQUEST_START).publish({ request: other });
+      recordCall("postgres", "db:5432", 3, false);
+      channel(RESPONSE_FINISH).publish({ request: other, response: { statusCode: 200 } });
+    }
+    clock.here();
+    // The first batch goes out and comes back with the order to watch postgres.
+    expect(await agent.flushNow()).toBe(true);
+    clock.advance(60);
+    // The window closed: the evidence goes out.
+    expect(await agent.flushNow()).toBe(true);
+
+    expect(evidence, "no evidence was sent").toHaveLength(1);
+    expect(evidence[0]?.path).toContain("/v0/captures/cap-postgres-full/evidence");
+    const body = evidence[0]?.body as { requests: { route: string }[] };
+    // The whole of it against the contract: the failure mode this test exists for is a body the cloud
+    // refuses with a 400 and the sender drops.
+    expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+    // The ring at its size plus the reserve at its cap: the worst case is the cap's room, not one past it.
+    expect(body.requests).toHaveLength(DEFAULT_REQUESTS + DEFAULT_REQUESTS_PER_ARMED_ROUTE);
+    // And it brings the rows the ring no longer holds: the reserve of the armed route.
+    expect(body.requests.filter((r) => r.route === "/cart")).toHaveLength(DEFAULT_REQUESTS_PER_ARMED_ROUTE);
   });
 
   // `product.md:122`: «A capture is the moment when the instrumentation freezes the contents of the black box

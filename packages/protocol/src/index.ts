@@ -49,8 +49,11 @@ export {
   LATENCY_BOUNDARIES_V0,
   LATENCY_BUCKETS_V0,
 } from "./generated/boundaries.ts";
-/** The endpoint's dependency cap and the kinds it is counted against, generated from the schema (gh-776). */
-export { DEPENDENCIES_MAX_ITEMS_V0, DEPENDENCY_KINDS_V0 } from "./generated/caps.ts";
+/**
+ * The endpoint's dependency cap and the kinds it is counted against, and the most requests a capture's
+ * evidence may carry — generated from the schemas (gh-776, gh-901).
+ */
+export { DEPENDENCIES_MAX_ITEMS_V0, DEPENDENCY_KINDS_V0, EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "./generated/caps.ts";
 export type {
   CaptureCoverage,
   CapturedOperation,
