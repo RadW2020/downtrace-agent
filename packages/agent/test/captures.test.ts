@@ -512,6 +512,21 @@ describe("evidence of a dependency, across the armed routes' reserves", () => {
     expect(slice.requests.map((r) => r.startedAt)).toEqual([1_100]);
     expect([slice.observedRequests, slice.attachedRequests]).toEqual([1, 0]);
   });
+
+  it("counts the rows whose dependency list did not fit, from the ring and the reserve alike", () => {
+    // The same mark, in the two places a row can be: a ring row the ring still holds, and a reserve row the
+    // ring already gave up to someone else's traffic. The number is how many marked rows the evidence carries,
+    // not how many it matched — the ring row the reserve took is counted once, not twice (ADR 0215).
+    const slice = sliceFor(
+      capture,
+      ring([row(900, { dependencies: [redis], dependenciesTruncated: true }), row(1_100)]),
+      (r) => r,
+      [cart(1_050, [row(1_200, { dependencies: [redis], dependenciesTruncated: true }), row(1_300)])],
+    );
+    expect(slice.requests.map((r) => r.startedAt)).toEqual([900, 1_200, 1_300]);
+    expect(slice.dependenciesTruncated).toBe(2);
+    expect([slice.observedRequests, slice.attachedRequests]).toEqual([2, 1]);
+  });
 });
 
 // gh-901. The worst case the reserve exists for: the ring full of requests of other routes that call the

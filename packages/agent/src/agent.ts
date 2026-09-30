@@ -732,6 +732,10 @@ export class Agent {
           // evidence does not say» — no shedding, the configuration's floor, or a sender older than the
           // field (ADR 0210).
           ...(shedMs > 0 && shedReason !== undefined ? { shed: { ms: shedMs, reason: shedReason } } : {}),
+          // How many of the rows this evidence carries kept a dependency list that did not fit the row —
+          // counted, like the mark on each, on what the rows say (ADR 0215). Omitted at zero, as `shed` is:
+          // a counter of zero says nothing.
+          ...(slice.dependenciesTruncated > 0 ? { dependenciesTruncated: slice.dependenciesTruncated } : {}),
         },
         reference: this.referenceFor(),
         coarse: this.coarseFor(),
@@ -752,6 +756,10 @@ export class Agent {
           // false, and sending it on every request would pay for the normal case to say nothing (gh-396).
           ...(r.detailLost ? { detailLost: true } : {}),
           ...(r.truncated ? { truncated: true } : {}),
+          // The same mark the registers keep, for the same reason: a row whose list did not fit used more
+          // dependencies than it names, and passing it off as complete is the mistake invariant 14 is about.
+          // Omitted when false, as the contract asks (ADR 0215).
+          ...(r.dependenciesTruncated ? { dependenciesTruncated: true } : {}),
         })),
       };
       const delivered = await this.sender.sendEvidence(capture.id, evidence, deadline);

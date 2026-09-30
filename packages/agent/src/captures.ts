@@ -174,6 +174,8 @@ export interface CaptureSlice {
   attachedRequests: number;
   detailLost: number;
   truncated: number;
+  /** How many of the rows it carries kept a dependency list that did not fit the row (ADR 0215). */
+  dependenciesTruncated: number;
 }
 
 /**
@@ -208,12 +210,16 @@ export function sliceFor(
   let attached = 0;
   let detailLost = 0;
   let truncated = 0;
+  let dependenciesTruncated = 0;
   const requests: FineRequest[] = [];
   const count = (r: FineRequest) => {
     if (r.startedAt >= capture.startedAt) observed++;
     else attached++;
     if (r.detailLost) detailLost++;
     if (r.truncated) truncated++;
+    // Counted on the mark the row carries, not on the match: a row is counted once, from the ring or from
+    // the reserve that took it, and the evidence's number is how many marked rows it carries (ADR 0215).
+    if (r.dependenciesTruncated) dependenciesTruncated++;
   };
   for (const r of snapshot.requests) {
     if (!keep(r)) continue;
@@ -229,7 +235,14 @@ export function sliceFor(
     }
   }
   requests.sort((a, b) => a.startedAt - b.startedAt);
-  return { requests, observedRequests: observed, attachedRequests: attached, detailLost, truncated };
+  return {
+    requests,
+    observedRequests: observed,
+    attachedRequests: attached,
+    detailLost,
+    truncated,
+    dependenciesTruncated,
+  };
 }
 
 /**
