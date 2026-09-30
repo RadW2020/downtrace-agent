@@ -149,6 +149,12 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  */
 export type Deadline = number | AbortSignal;
 
+/**
+ * The way a process is leaving, as the last batch says it: one of the protocol's `ending` values (ADR 0148).
+ * Derived from the contract rather than retyped, so the two cannot drift (invariant 9).
+ */
+export type Ending = NonNullable<AggregatesBatch["ending"]>;
+
 function signalOf(deadline: Deadline): AbortSignal {
   return typeof deadline === "number" ? AbortSignal.timeout(deadline) : deadline;
 }
@@ -190,6 +196,20 @@ export class Sender {
   private triggers: LocalTrigger[] = [];
   private inflight = false;
   private warnedAuth = false;
+  /**
+   * The way the process is leaving, once a drain has declared it, and until this sender dies with it (gh-617).
+   *
+   * The first declaration wins, and this is where that is enforced: the reason a process is leaving is decided
+   * by the first drain — a signal's, `shutdown()`'s or an emptied loop's — and a drain under way when a later
+   * one declares its own reason must not rewrite it (ADR 0148).
+   */
+  private ending: Ending | undefined;
+  /**
+   * Whether a batch that carries the ending has landed. While none has, the ending by itself is something to
+   * say: a last interval with nothing else in it must still say how the process is leaving, and a batch that
+   * did not land has not said it (gh-617).
+   */
+  private endingLanded = false;
   sent = 0;
   failed = 0;
   dropped = 0;
@@ -342,6 +362,16 @@ export class Sender {
     }
   }
 
+  /**
+   * The way the process is leaving, declared by the drain that found it (gh-617, ADR 0148).
+   *
+   * The first declaration wins: a later drain — `shutdown()` after a signal, an emptied loop after either —
+   * does not rewrite the reason, and every batch from this moment on carries it.
+   */
+  declareEnding(ending: Ending): void {
+    this.ending ??= ending;
+  }
+
   /** Sends everything queued in one batch. Resolves true when the cloud accepted it. */
   /** Called with the captures the cloud asked for, when there are any. Set by the agent. */
   onCaptures: ((pending: PendingCapture[]) => void) | undefined;
@@ -407,7 +437,10 @@ export class Sender {
       this.profiles.length > 0 ||
       this.captureReports.length > 0 ||
       this.exceptions.length > 0 ||
-      this.triggers.length > 0
+      this.triggers.length > 0 ||
+      // The ending, while no batch that carries it has landed: a leaving process says how it is leaving in its
+      // last batch, even a last interval with nothing else in it (gh-617, ADR 0148).
+      (this.ending !== undefined && !this.endingLanded)
     );
   }
 
@@ -443,6 +476,8 @@ export class Sender {
         : {}),
       // 1..4 by construction, like the rest.
       ...(triggers.length > 0 ? { triggers: triggers as NonNullable<AggregatesBatch["triggers"]> } : {}),
+      // The way out says how the process is leaving, from the first drain that declared it (gh-617, ADR 0148).
+      ...(this.ending !== undefined ? { ending: this.ending } : {}),
     };
     const reported = this.captureReports.map((c) => c.id);
     const body = JSON.stringify(batch);
@@ -453,6 +488,7 @@ export class Sender {
     if (this.opts.url === "" || this.opts.token === "") {
       this.queue = this.queue.filter((iv) => !intervals.includes(iv));
       if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
+      if (this.ending !== undefined) this.endingLanded = true;
       this.inflight = false;
       return true;
     }
@@ -467,6 +503,9 @@ export class Sender {
         this.queue = this.queue.filter((iv) => !intervals.includes(iv));
         // Only on success: a profile whose batch never arrived stays queued and rides the next one.
         if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
+        // The ending is said, so it stops being something to say by itself. Only on success, like the rest:
+        // a batch that never landed has not said it (gh-617, ADR 0148).
+        if (this.ending !== undefined) this.endingLanded = true;
         this.sent += 1;
         // Said, so it is not said again. Only on success: a report whose batch never arrived has not been
         // heard, and the capture would look accepted-but-never-started for as long as that lasted.

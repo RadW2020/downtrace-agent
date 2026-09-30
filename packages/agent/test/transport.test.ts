@@ -1021,3 +1021,83 @@ describe("Sender, when a route calls more dependencies than the schema allows", 
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
 });
+
+/**
+ * The way out says in the batch how the process is leaving (gh-617, ADR 0148).
+ *
+ * From the moment an ending is declared, every batch carries it, and by itself it is something to say until a
+ * batch that carries it **lands**: a last interval with nothing else in it must still say how the process is
+ * leaving, and a batch that did not land has not said it. The first declaration wins, because the reason the
+ * process is leaving is decided by the first drain, not the last (gh-617).
+ */
+describe("Sender, saying how the process is leaving", () => {
+  const endingOf = (b: unknown): string | undefined => (b as { ending?: string } | undefined)?.ending;
+
+  it("says nothing about ending until one is declared", async () => {
+    const { s, calls } = sender([202]);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(calls[0]?.body).not.toHaveProperty("ending");
+  });
+
+  it("carries the declared ending, and it is something to say on its own", async () => {
+    // Nothing else queued: the ending is the whole batch, which is the quiet last interval of a process with
+    // no traffic in it.
+    const { s, calls } = sender([202]);
+    s.declareEnding("idle");
+    expect(await s.flush()).toBe(true);
+    expect(calls[0]?.body).toMatchObject({ ending: "idle", intervals: [] });
+  });
+
+  it("the first ending declared wins, and every batch after it carries it", async () => {
+    const { s, calls } = sender([202, 202]);
+    s.declareEnding("signal");
+    s.declareEnding("exit");
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    s.enqueue(interval(2));
+    expect(await s.flush()).toBe(true);
+    expect(calls.map((c) => endingOf(c.body))).toEqual(["signal", "signal"]);
+  });
+
+  it("the ending alone stops being something to say once a batch that carries it lands", async () => {
+    const { s, calls } = sender([202]);
+    s.declareEnding("exit");
+    expect(await s.flush()).toBe(true);
+    expect(await s.flush()).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a batch that failed to land keeps the ending to say again", async () => {
+    const { s, calls } = sender([500, 202]);
+    s.declareEnding("exit");
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(false);
+    expect(await s.flush()).toBe(true);
+    expect(calls.map((c) => endingOf(c.body))).toEqual(["exit", "exit"]);
+  });
+
+  it("a batch the cloud refused as invalid did not land the ending", async () => {
+    const { s, calls } = sender([400, 202]);
+    s.declareEnding("idle");
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(false);
+    // The interval went out with the refusal, but the ending is not one: it is said again, on its own.
+    expect(await s.flush()).toBe(true);
+    expect(calls[1]?.body).toMatchObject({ ending: "idle", intervals: [] });
+  });
+
+  it("a batch that landed without an ending did not land one declared afterwards", async () => {
+    // The process that was sending for a while and then leaves with an empty last interval: its last batch
+    // must still carry the ending, because the batches before it never carried one — only the landing of a
+    // batch that carries it ends the «something to say» (gh-617).
+    const { s, calls } = sender([202, 202]);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(calls[0]?.body).not.toHaveProperty("ending");
+    s.declareEnding("exit");
+    // Nothing else is queued: the ending is still unsaid, and on its own it goes out.
+    expect(await s.flush()).toBe(true);
+    expect(calls[1]?.body).toMatchObject({ ending: "exit", intervals: [] });
+  });
+});

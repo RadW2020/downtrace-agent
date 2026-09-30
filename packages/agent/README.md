@@ -270,9 +270,11 @@ samples — never leaves your process except inside a capture, so it always goes
 what it is for. And a send that fails on the very last flush is the one loss the instrumentation cannot
 report to you, because what it lost travels in the next batch and there is no next batch.
 
-The cloud says which of these happened, per process: one that ended in order says so in that last batch, and
-one that simply stopped is shown as having stopped, with the sentence that if it died, what it had not sent
-is lost — and that none of that is evidence that nothing went wrong.
+And the last batch of the orderly endings says how the process was leaving — `ending: "signal"` for the signal,
+`ending: "exit"` for an application that awaited `shutdown()`, `ending: "idle"` for one that ran out of work —
+and the cloud shows that per process, beside the instant the batch arrived. One that stopped without saying so
+is shown as having stopped, with the sentence that if it died, what it had not sent is lost — and that none of
+that is evidence that nothing went wrong.
 
 ## Beside your error tracker
 

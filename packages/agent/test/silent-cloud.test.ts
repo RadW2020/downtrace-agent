@@ -370,6 +370,10 @@ describe("the way out, when a flush is already under way", () => {
     // Before gh-657 only the evidence was here: `stop()` found the batch in flight, sent the evidence itself and
     // returned, and the batch was still waiting for its answer when the process would have left.
     expect(c.answered.slice(from)).toEqual([AGGREGATES_PATH, captureEvidencePath("cap-0")]);
+    // And the endings say the first reason, and only it: the signal's batch declares `signal`, and the
+    // `shutdown()` the application ran did not rewrite it to `exit`, nor did it go out as a batch of its own —
+    // the ending had already landed, and there was nothing else to say (gh-617, ADR 0148).
+    expect(c.batches.map((b) => b.ending)).toEqual([undefined, "signal"]);
   });
 });
 

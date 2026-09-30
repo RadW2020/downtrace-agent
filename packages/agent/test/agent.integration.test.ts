@@ -244,6 +244,40 @@ describe("agent v0 (integration)", () => {
     expect(await hit(app.url, "/products")).toBe(200);
   });
 
+  it("the self-disable drains what it was holding, and the batch says no ending", async () => {
+    // A process that is not leaving cannot declare an ending (ADR 0148): the self-disable is the one way out
+    // that hands over what it was holding without saying how the process is leaving, and saying `exit` there
+    // would be declaring an ending the process did not have (gh-617).
+    const sink = await startSink();
+    const app = await startApp();
+    // The first request is recorded, the next ten fail inside the recorder, and the tenth disables it.
+    const recorded = new IntervalAggregator({ now: () => 1_000 });
+    let calls = 0;
+    const faulty: Recorder = {
+      record: (method, route, status, ms, work) => {
+        if (calls++ >= 1) throw new Error("injected");
+        recorded.record(method, route, status, ms, work);
+      },
+      rotate: () => recorded.rotate(),
+    };
+    const agent = new Agent(config(sink.url), { recorder: faulty, log: quiet });
+    cleanups.push(app.close, sink.close);
+    agent.start();
+
+    for (let i = 0; i < 11; i++) expect(await hit(app.url, "/products")).toBe(200);
+    expect(agent.stats.internalErrors).toBe(10);
+    expect(agent.stats.disabled).toBe(true);
+    // The self-disable's drain is under way in the background: a second `stop()` waits for the same drain
+    // instead of starting another (gh-690), which is the barrier this test needs, and it starts no new one,
+    // because the agent has already stopped.
+    await agent.stop();
+    expect(sink.batches).toHaveLength(1);
+    expect(sink.batches[0]?.intervals[0]?.endpoints?.map((e) => e.route)).toEqual(["/products"]);
+    expect(sink.batches[0]?.ending, "a process that is not leaving cannot declare an ending").toBeUndefined();
+    // And the application went on, untouched.
+    expect(await hit(app.url, "/products")).toBe(200);
+  });
+
   it("does not subscribe or send anything when never started", async () => {
     const sink = await startSink();
     const app = await startApp();

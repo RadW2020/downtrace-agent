@@ -41,7 +41,7 @@ import { ReferenceRegister } from "./reference.ts";
 import { clientError, sanitizeContext } from "./report.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
-import { Sender } from "./transport.ts";
+import { type Ending, Sender } from "./transport.ts";
 import { ARM_FOR_MS, LocalTriggers } from "./trigger.ts";
 import { AGENT_VERSION } from "./version.ts";
 
@@ -246,7 +246,8 @@ export class Agent {
    */
   private stopping: Promise<void> | undefined;
   private readonly onBeforeExit = (): void => {
-    void this.flush(SHUTDOWN_FLUSH_MS, true);
+    // The loop is emptying and the process is leaving with it: the last batch says `idle` (gh-617, ADR 0148).
+    void this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending: "idle" } });
   };
 
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
@@ -519,8 +520,21 @@ export class Agent {
   /**
    * Unsubscribes and stops timers; attempts a last flush. Idempotent, and a second call while the first is
    * still draining waits for the same drain instead of resolving over it (gh-690).
+   *
+   * The application is leaving, and the last batch says so: `exit` (gh-617, ADR 0148).
    */
   stop(): Promise<void> {
+    return this.leave("exit");
+  }
+
+  /**
+   * What `stop()` is, for the caller that says the reason.
+   *
+   * `ending` is what the last batch says about how the process is leaving. The self-disable passes none, and
+   * that is not an omission: the process is not leaving, and a process that is not leaving cannot declare an
+   * ending — it would be exactly the lie the field exists to avoid (ADR 0148, gh-617).
+   */
+  private leave(ending: Ending | undefined): Promise<void> {
     if (this.stopping !== undefined) return this.stopping;
     if (!this.started) return Promise.resolve();
     this.started = false;
@@ -537,7 +551,9 @@ export class Agent {
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);
-    const stopping: Promise<void> = this.flush(SHUTDOWN_FLUSH_MS, true).then(() => undefined);
+    const stopping: Promise<void> = this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending } }).then(
+      () => undefined,
+    );
     this.stopping = stopping;
     const forget = (): void => {
       this.stopping = undefined;
@@ -548,7 +564,7 @@ export class Agent {
 
   /** Closes the current interval and sends everything queued. */
   async flushNow(timeoutMs?: number): Promise<boolean> {
-    return this.flush(timeoutMs, false);
+    return this.flush({ timeoutMs });
   }
 
   /**
@@ -568,11 +584,19 @@ export class Agent {
    * sender has one batch in flight at a time and says `false` to a second, so a way out that found the interval's
    * batch in flight sent nothing of its own, and the last interval left with the process (gh-657). A flush that
    * is not leaving still waits for nothing: one per interval, each waiting behind a slow cloud, would pile up.
+   *
+   * The `wayOut` is the drain itself, and it carries the reason the process is leaving when it has one to say
+   * (gh-617, ADR 0148): the signal's drain says `signal`, `shutdown()`'s says `exit`, an emptied loop's says
+   * `idle`. The self-disable is a drain that carries none — a parameter object with the ending, or without —,
+   * because the process is not leaving.
    */
-  private flush(timeoutMs: number | undefined, leaving: boolean): Promise<boolean> {
+  private flush(options: {
+    timeoutMs?: number | undefined;
+    wayOut?: { ending?: Ending | undefined } | undefined;
+  }): Promise<boolean> {
     // Read before this one joins them: the way out waits for what was already under way, never for itself.
-    const underWay = leaving ? [...this.flushing] : [];
-    const flushing = this.flushOnce(timeoutMs, leaving, underWay);
+    const underWay = options.wayOut !== undefined ? [...this.flushing] : [];
+    const flushing = this.flushOnce({ timeoutMs: options.timeoutMs, wayOut: options.wayOut, underWay });
     this.flushing.add(flushing);
     const forget = (): void => {
       this.flushing.delete(flushing);
@@ -581,19 +605,23 @@ export class Agent {
     return flushing;
   }
 
-  private async flushOnce(
-    timeoutMs: number | undefined,
-    leaving: boolean,
-    underWay: Promise<boolean>[],
-  ): Promise<boolean> {
-    const deadline = leaving ? AbortSignal.timeout(timeoutMs ?? SHUTDOWN_FLUSH_MS) : undefined;
+  private async flushOnce(params: {
+    timeoutMs?: number | undefined;
+    wayOut?: { ending?: Ending | undefined } | undefined;
+    underWay: Promise<boolean>[];
+  }): Promise<boolean> {
+    const leaving = params.wayOut !== undefined;
+    const deadline = leaving ? AbortSignal.timeout(params.timeoutMs ?? SHUTDOWN_FLUSH_MS) : undefined;
+    // Declared before the batch is built, so this drain's own batch carries the ending, and every batch after
+    // it does. The sender keeps the first one declared, and a drain with no ending says nothing (gh-617).
+    if (params.wayOut?.ending !== undefined) this.sender.declareEnding(params.wayOut.ending);
     try {
       // Before anything is taken, and not after: the batch in flight clears, when it lands, the capture reports the
       // sender holds —they are replaced and not accumulated, and the next flush would hand them over again— and a
       // process that is leaving has no next flush. The exceptions and the asks are no longer at stake: a landing
       // takes off only what it carried (gh-626). The flushes under way are not cut when the deadline passes; each
       // keeps its own timeout.
-      if (deadline) await settledWithin(underWay, deadline);
+      if (deadline) await settledWithin(params.underWay, deadline);
       // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
       const profile = leaving ? this.profile.drain() : this.profile.rotate();
       if (profile) this.sender.enqueueProfile(profile);
@@ -621,7 +649,7 @@ export class Agent {
           this.prearm.arm(label, this.now(), ARM_FOR_MS);
         }
       }
-      const sent = await this.sender.flush(deadline ?? timeoutMs);
+      const sent = await this.sender.flush(deadline ?? params.timeoutMs);
       // Said, because it is the last thing this process will say about it: nothing is queued in a process that
       // is leaving, and there is no next batch to count the loss in (gh-650).
       if (!sent && deadline?.aborted) {
@@ -1055,7 +1083,9 @@ export class Agent {
       this.log.warn(
         `instrumentation disabled after ${this.internalErrors} internal errors; your application is unaffected`,
       );
-      void this.stop();
+      // The self-disable drains by the private path and declares no ending: the process is not leaving, and a
+      // process that is not leaving cannot say how it is leaving (ADR 0148, gh-617).
+      void this.leave(undefined);
     }
   }
 
@@ -1066,8 +1096,9 @@ export class Agent {
    */
   private signalled(signal: (typeof SIGNALS)[number]): void {
     const onlyUs = process.listenerCount(signal) === 1;
-    // A signal is the process leaving, so the profile's window closes with it.
-    const flush = this.flush(SHUTDOWN_FLUSH_MS, true);
+    // A signal is the process leaving, so the profile's window closes with it — and the last batch says
+    // `signal`, the reason this drain is the way out (gh-617, ADR 0148).
+    const flush = this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending: "signal" } });
     if (!onlyUs) return;
     const resume = (): void => {
       process.removeListener(signal, this.onSignal[signal]);

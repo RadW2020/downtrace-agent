@@ -14,13 +14,29 @@ import { afterEach, describe, expect, it } from "vitest";
  * time locally, which is the other reason to pin it here rather than trust a machine to be slow enough.
  */
 
-/** Counts the batches that actually arrive. */
-async function sink(): Promise<{ url: string; batches: number; close: () => Promise<void> }> {
+/** What actually arrives: how many batches, and what each of them carries. */
+async function sink(): Promise<{
+  url: string;
+  batches: number;
+  bodies: Record<string, unknown>[];
+  close: () => Promise<void>;
+}> {
   const state = { batches: 0 };
+  const bodies: Record<string, unknown>[] = [];
   const server = http.createServer((req, res) => {
-    req.resume();
+    let body = "";
+    req.on("data", (c: Buffer) => {
+      body += c.toString();
+    });
     req.on("end", () => {
-      if (req.method === "POST") state.batches += 1;
+      if (req.method === "POST") {
+        state.batches += 1;
+        try {
+          bodies.push(JSON.parse(body) as Record<string, unknown>);
+        } catch {
+          // Not a body this side can read; the count still says it arrived.
+        }
+      }
       res.writeHead(202, { "content-type": "application/json" }).end('{"accepted":1,"inserted":1}');
     });
   });
@@ -31,6 +47,7 @@ async function sink(): Promise<{ url: string; batches: number; close: () => Prom
     get batches() {
       return state.batches;
     },
+    bodies,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
@@ -59,6 +76,42 @@ async function leaving(
     ${wait === "await" ? "await shutdown();" : wait === "again" ? "shutdown();\nawait shutdown();" : ""}
     process.exit(0);
   `;
+  return leaves(script, url, env);
+}
+
+/** The same, with no request at all: the last interval is empty, and what leaves is the ending. */
+async function leavingEmpty(url: string, env: Record<string, string> = {}): Promise<number> {
+  const script = `
+    import { shutdown } from "${agentDir}src/registered.ts";
+    await shutdown();
+    process.exit(0);
+  `;
+  return leaves(script, url, env);
+}
+
+/**
+ * The production shape: a process that had already been sending, whose last interval is empty. It waits for
+ * the interval's batch to land — on the instrumentation's own count of it, which is the event — and only then
+ * leaves, so the interval the last flush closes has nothing in it.
+ */
+async function leavingAfterFirstBatch(url: string, env: Record<string, string> = {}): Promise<number> {
+  const script = `
+    import { channel } from "node:diagnostics_channel";
+    import { registered, shutdown } from "${agentDir}src/registered.ts";
+    const request = { method: "GET", url: "/orders" };
+    channel("http.server.request.start").publish({ request });
+    channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+    while ((registered()?.stats.sent ?? 0) < 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await shutdown();
+    process.exit(0);
+  `;
+  return leaves(script, url, { DOWNTRACE_INTERVAL_MS: "1000", ...env });
+}
+
+/** Runs a real process the way a user runs one, and reports how it ended. */
+function leaves(script: string, url: string, env: Record<string, string> = {}): Promise<number> {
   const child = spawn(
     process.execPath,
     ["--import", `${agentDir}src/register.ts`, "--input-type=module", "-e", script],
@@ -98,6 +151,31 @@ describe("an application that leaves on its own", () => {
     servers.push(s.close);
     expect(await leaving(s.url, "await")).toBe(0);
     expect(s.batches).toBe(1);
+    // The last batch says how the process is leaving: an application that awaited `shutdown()` is an `exit`
+    // (gh-617, ADR 0148).
+    expect(s.bodies[0]).toMatchObject({ ending: "exit" });
+  });
+
+  it("says exit even when the last interval had no traffic", async () => {
+    // Nothing was recorded, so the last batch has no interval to carry: the ending alone is what leaves, and
+    // it has to leave on its own, or a quiet process would read as one that stopped without saying (gh-617).
+    const s = await sink();
+    servers.push(s.close);
+    expect(await leavingEmpty(s.url)).toBe(0);
+    expect(s.batches).toBe(1);
+    expect(s.bodies[0]).toMatchObject({ ending: "exit", intervals: [] });
+  });
+
+  it("says exit when it had already been sending and its last interval had no traffic", async () => {
+    // The production shape: a process that sent its intervals for a while, and whose last one is empty. The
+    // batches before it never carried an ending, and none of their landings may count as the ending said —
+    // only the landing of a batch that carries it does, or this last batch would never go out (gh-617).
+    const s = await sink();
+    servers.push(s.close);
+    expect(await leavingAfterFirstBatch(s.url)).toBe(0);
+    expect(s.batches, "the interval's batch and the last one").toBe(2);
+    expect(s.bodies[0]).not.toHaveProperty("ending");
+    expect(s.bodies[1]).toMatchObject({ ending: "exit", intervals: [] });
   });
 
   it("a second shutdown() that leaves does not cut the first drain", async () => {

@@ -26,6 +26,11 @@ import { afterEach, describe, expect, it } from "vitest";
  * The profile's window is the one line of the contract that is not here: closing it whatever the clock says
  * needs fingerprints, which need `pg`, and `profile.test.ts` («closes the window whatever the clock says») and
  * the end-to-end walk already ask it where the cost is worth paying.
+ *
+ * And since the gh-617 the batch says **how** the process is leaving, which is what these same processes now
+ * also pin: `ending: "signal"` in the last batch of a process that dies of the signal, `ending: "idle"` in the
+ * one of a loop that emptied, and **no** ending in any batch of a process an exception killed — the process
+ * that cannot say is the one the field exists to tell apart from the one that did (ADR 0148, ERR-04).
  */
 
 const agentDir = fileURLToPath(new URL("..", import.meta.url));
@@ -33,6 +38,7 @@ const agentDir = fileURLToPath(new URL("..", import.meta.url));
 interface Batch {
   intervals?: Array<{ endpoints?: Array<{ route: string; count: number }> }>;
   exceptions?: Array<{ kind: string; count: number; text?: string }>;
+  ending?: string;
 }
 
 /** Collects the batches that really arrive, so a process can be asked what left it before it died. */
@@ -141,6 +147,65 @@ describe("a process asked to stop", () => {
     expect(thrown, `the exceptions it had recorded did not travel: ${JSON.stringify(last)}`).toHaveLength(1);
     expect(thrown?.[0]?.kind).toBe("uncaught");
     expect(thrown?.[0]?.text).toContain("TypeError");
+    // The last batch says how the process is leaving: the signal reached the instrumentation's own handler,
+    // and it is the one that says so (gh-617, ADR 0148).
+    expect(last?.ending, `the last batch does not say how it left: ${JSON.stringify(last)}`).toBe("signal");
+  }, 30_000);
+
+  it("an emptied loop says idle in its last batch", async () => {
+    // The third ending: nothing asked the process to leave, it ran out of work. The only thing that sends the
+    // last batch is the loop emptying, and the batch that goes out says so rather than being read as a stop.
+    const s = await sink();
+    servers.push(s.close);
+    const script = `
+      ${ONE_REQUEST}
+      // Nothing else keeps the loop alive: no timer, no server, no work. The process leaves on its own.
+    `;
+    const { ended } = run(script, s.url);
+    const how = await ended;
+
+    expect(how.code, `it ended ${how.code}/${how.signal}`).toBe(0);
+    expect(s.batches, "the emptied loop left no batch").toHaveLength(1);
+    expect(routesOf(s.batches[0] as Batch)).toContain("/orders");
+    expect(s.batches[0]?.ending, `the last batch does not say how it left: ${JSON.stringify(s.batches[0])}`).toBe(
+      "idle",
+    );
+  }, 30_000);
+
+  it("a signal the application also hears wins when it then shuts down", async () => {
+    // The first reason wins (gh-617): the signal's drain is under way when the application's own handler runs
+    // and calls `shutdown()`, and the drain that then goes out must not rewrite the ending to `exit`. What the
+    // process is leaving for was decided by the signal, and every batch from then on says `signal`.
+    const s = await sink();
+    servers.push(s.close);
+    const script = `
+      import { shutdown } from "${agentDir}src/registered.ts";
+      ${ONE_REQUEST}
+      // What a well-behaved application does: wait for the hand-over, then leave. The process is not dead of
+      // the signal — the application heard it and went out on its own terms.
+      process.on("SIGTERM", async () => { await shutdown(); process.exit(0); });
+      // Keeps the process alive until the test sends the signal; it never fires, which is what is under test.
+      setTimeout(() => {}, 30000);
+      // Said on stdout so the test sends the signal once there is something to lose.
+      setTimeout(() => console.log("ready"), 60);
+    `;
+    const { child, ended } = run(script, s.url);
+    await new Promise<void>((resolve) => {
+      child.stdout?.on("data", (c: Buffer) => {
+        if (c.toString().includes("ready")) resolve();
+      });
+    });
+    child.kill("SIGTERM");
+    const how = await ended;
+
+    // The process is not dead of the signal: the application heard it and kept going, and when its work —and
+    // the last flush— were done it left on its own.
+    expect(how.code, `it ended ${how.code}/${how.signal}`).toBe(0);
+    // The batch that left says the signal, and no batch says anything else: the `shutdown()` the application
+    // ran did not rewrite the ending to `exit` (gh-617).
+    expect(s.batches, "nothing was handed over on the way out").toHaveLength(1);
+    expect(routesOf(s.batches[0] as Batch)).toContain("/orders");
+    expect(s.batches[0]?.ending, `the ending is not the signal's: ${JSON.stringify(s.batches[0])}`).toBe("signal");
   }, 30_000);
 });
 
@@ -181,5 +246,9 @@ describe("a process an exception kills", () => {
     await new Promise((r) => setTimeout(r, 300));
     const carried = s.batches.filter((b) => b.exceptions !== undefined);
     expect(carried, `the exception that killed the process arrived: ${JSON.stringify(carried)}`).toHaveLength(0);
+    // And no batch says how the process ended, because the process that is killed cannot say: an ending it
+    // never declared is the one the cloud reads as «stopped», and that reading is the honest one (ADR 0148).
+    const said = s.batches.filter((b) => b.ending !== undefined);
+    expect(said, `a batch declared an ending the process cannot have: ${JSON.stringify(said)}`).toHaveLength(0);
   }, 30_000);
 });
