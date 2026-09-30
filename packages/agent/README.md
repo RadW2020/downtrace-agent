@@ -535,13 +535,16 @@ you would give an application log.
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query`: it passes arguments, results and errors
   through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
-- For Express route templates the instrumentation wraps one more method — `Router.prototype.use`, or the
-  `Router` function's own `use` in Express 4, where it is the routers' prototype — to keep the pattern of
+- For Express route templates the instrumentation wraps two more methods. The first — `Router.prototype.use`, or the
+  `Router` function's own `use` in Express 4, where it is the routers' prototype — keeps the pattern of
   each mount, because Express discards it as soon as it compiles it: without the pattern, a mount with a
-  parameter would reach the template as its value. The wrapper is put in place when the instrumentation **starts** — with `--import`, before your
-  application registers anything — and not when the package is imported: an import with the instrumentation not running
-  loads no Express and touches nothing. The wrapper passes arguments and the new layers through untouched, and a failure
-  inside it runs your application anyway — the mount is then read as `:param`, which is the safe side (see Requirements).
+  parameter would reach the template as its value. The second — `Route.prototype.dispatch` — keeps the mount a
+  matched route saw, because Express restores `req.baseUrl` before an app-level error handler answers, so without
+  it a 5xx would reach the template with the wrong mount. Both wrappers are put in place when the instrumentation
+  **starts** — with `--import`, before your application registers anything — and not when the package is imported: an
+  import with the instrumentation not running loads no Express and touches nothing. They pass arguments, results and
+  errors through untouched, and a failure inside either one runs your application anyway — the mount is then read as
+  `:param`, which is the safe side (see Requirements).
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
@@ -558,7 +561,9 @@ Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 
 route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every
 tenant — one route, not one per tenant. That is also what keeps a tenant's name out of the template when it is
-a plain word the heuristic below leaves as written. When a mount's pattern cannot be recovered with confidence,
+a plain word the heuristic below leaves as written. The route a request matched keeps that template when it fails
+and the error is answered outside the router that held it: the mount is read from the dispatch that matched the
+route, not from the `baseUrl` Express leaves behind. When a mount's pattern cannot be recovered with confidence,
 its segments come out as `:param` instead of the values they carried — the requests still group under one stable
 route. That happens for a mount registered with a regular expression (there is no pattern to read), for an app
 mounted under a router (Express records no prefix in that case), for a mount registered before the instrumentation

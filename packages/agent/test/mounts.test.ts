@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import express from "express";
 import express4 from "express4";
 import { afterEach, describe, expect, it } from "vitest";
-import { armMountRecording, armMounts, mountPathOf } from "../src/mounts.ts";
+import { armDispatchRecording, armMountRecording, armMounts, matchedMountOf, mountPathOf } from "../src/mounts.ts";
 import { express4Root } from "./support/express4-root.ts";
 
 const MARK = Symbol.for("downtrace.mounts.use");
@@ -89,5 +89,84 @@ describe("armMountRecording", () => {
     );
     expect(armMountRecording(proto), "a second arm is a no-op").toBe(false);
     expect(proto.use).toBe(wrapped);
+  });
+});
+
+describe("armDispatchRecording", () => {
+  it("refuses a prototype without a dispatch function", () => {
+    expect(armDispatchRecording(null)).toBe(false);
+    expect(armDispatchRecording(undefined)).toBe(false);
+    expect(armDispatchRecording("no")).toBe(false);
+    expect(armDispatchRecording(7)).toBe(false);
+    expect(armDispatchRecording({})).toBe(false);
+    expect(armDispatchRecording({ dispatch: 42 })).toBe(false);
+  });
+
+  it("records the mount the dispatch saw, passes the call through, and arms once", () => {
+    const calls: unknown[][] = [];
+    const original = (...args: unknown[]) => {
+      calls.push(args);
+      return "dispatched";
+    };
+    const proto: Record<string, unknown> = { dispatch: original };
+    expect(armDispatchRecording(proto)).toBe(true);
+    const wrapped = proto.dispatch as typeof original;
+    expect(wrapped, "the dispatch is wrapped").not.toBe(original);
+
+    const req = { baseUrl: "/api", app: { name: "app" } };
+    const res = {};
+    const next = (): void => {};
+    const result = wrapped.call({}, req, res, next);
+    expect(result).toBe("dispatched");
+    expect(calls).toEqual([[req, res, next]]);
+    expect(matchedMountOf(req)).toEqual({ baseUrl: "/api", app: { name: "app" } });
+
+    expect(armDispatchRecording(proto), "a second arm is a no-op").toBe(false);
+    expect(proto.dispatch).toBe(wrapped);
+  });
+
+  it("lets a failed read leave the request's own values in place", () => {
+    const original = (..._args: unknown[]) => "dispatched";
+    const proto: Record<string, unknown> = { dispatch: original };
+    expect(armDispatchRecording(proto)).toBe(true);
+    const wrapped = proto.dispatch as typeof original;
+    const req = {};
+    Object.defineProperty(req, "baseUrl", {
+      get() {
+        throw new Error("the application's getter");
+      },
+      configurable: true,
+    });
+
+    expect(() => wrapped.call({}, req, {}, (): void => {})).not.toThrow();
+    expect(matchedMountOf(req)).toBeUndefined();
+  });
+
+  it("keeps the mount of the last dispatch", () => {
+    const original = (..._args: unknown[]) => "dispatched";
+    const proto: Record<string, unknown> = { dispatch: original };
+    expect(armDispatchRecording(proto)).toBe(true);
+    const wrapped = proto.dispatch as typeof original;
+    let baseUrl = "/first";
+    let app = "first-app";
+    const req = {
+      get baseUrl() {
+        return baseUrl;
+      },
+      get app() {
+        return app;
+      },
+    };
+
+    wrapped.call({}, req);
+    expect(matchedMountOf(req)).toEqual({ baseUrl: "/first", app: "first-app" });
+
+    baseUrl = "/second";
+    app = "second-app";
+    wrapped.call({}, req);
+    expect(matchedMountOf(req), "the request's own notion of the matched route").toEqual({
+      baseUrl: "/second",
+      app: "second-app",
+    });
   });
 });

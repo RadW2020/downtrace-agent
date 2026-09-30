@@ -45,10 +45,24 @@ describe("routeOf", () => {
     expect(routeOf({ url: "/x", originalUrl: 42 })).toBe("/x");
     expect(routeOf({ url: "/x", originalUrl: undefined })).toBe("/x");
     expect(routeOf({ originalUrl: "/admin/x" })).toBe("/admin/x");
-    // A matched route still wins, whatever the client asked for.
+    // A matched route still wins, whatever the client asked for. The request keeps the mount it matched
+    // (`baseUrl` and `app` at dispatch time), not the value Express restores when the router ends (gh-900).
+    armMountRecording(express.Router.prototype);
+    const items = express.Router();
+    items.get("/items/:id", () => {});
+    const adminApp = express();
+    adminApp.use("/admin", items);
+    const itemsRoute = items.stack[0]?.route;
+    if (itemsRoute === undefined) throw new Error("the route was not registered");
     expect(
-      routeOf({ url: "/items/42", originalUrl: "/admin/items/42", route: { path: "/items/:id" }, baseUrl: "" }),
-    ).toBe("/items/:id");
+      routeOf({
+        url: "/items/42",
+        originalUrl: "/admin/items/42",
+        route: itemsRoute,
+        baseUrl: "/admin",
+        app: adminApp,
+      }),
+    ).toBe("/admin/items/:id");
   });
 
   it("caps very long routes", () => {

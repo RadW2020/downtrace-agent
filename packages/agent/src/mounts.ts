@@ -20,6 +20,19 @@ export function mountPathOf(layer: object): unknown {
   return mountPaths.get(layer);
 }
 
+/** The mount a matched route saw at dispatch time, kept until the request can be garbage-collected. */
+export interface MatchedMount {
+  baseUrl: unknown;
+  app: unknown;
+}
+
+const matchedMounts = new WeakMap<object, MatchedMount>();
+
+/** What the last matched route of the request saw. `undefined` when no dispatch was recorded. */
+export function matchedMountOf(req: object): MatchedMount | undefined {
+  return matchedMounts.get(req);
+}
+
 const USE_MARK = Symbol.for("downtrace.mounts.use");
 
 /** The shape of the part of Express we touch. Anything else about the module is none of our business. */
@@ -64,6 +77,47 @@ export function armMountRecording(proto: unknown): boolean {
   return true;
 }
 
+const DISPATCH_MARK = Symbol.for("downtrace.mounts.dispatch");
+
+/** The shape of the part of Express we touch. Anything else about the module is none of our business. */
+interface RoutePrototype extends Record<string, unknown> {
+  dispatch?: unknown;
+  [DISPATCH_MARK]?: boolean;
+}
+
+/**
+ * Wraps `Route.prototype.dispatch`, so that the mount a matched route saw is recorded on the request while
+ * the route is still dispatching, before the router restores the request's `baseUrl` (or, for a sub-app,
+ * its `app`).
+ *
+ * The wrapper wraps and nothing else: the record sits in a `try` no request will ever see, and the original
+ * is called with what it was called with. A failure here degrades the route to the values the request still
+ * carries at response time (invariant 5); it never reaches the application (invariant 2).
+ *
+ * The last dispatch wins, which is the request's own notion of the matched route. Idempotent: the mark keeps
+ * a second call, or a second agent, from wrapping twice.
+ */
+export function armDispatchRecording(proto: unknown): boolean {
+  if (proto === null || (typeof proto !== "object" && typeof proto !== "function")) return false;
+  const target = proto as RoutePrototype;
+  if (target[DISPATCH_MARK] === true || typeof target.dispatch !== "function") return false;
+  const original = target.dispatch;
+  target.dispatch = function (this: unknown, ...args: unknown[]): unknown {
+    const req = args[0];
+    try {
+      if (req !== null && typeof req === "object") {
+        const request = req as Record<string, unknown>;
+        matchedMounts.set(req, { baseUrl: request.baseUrl, app: request.app });
+      }
+    } catch {
+      // The record is best effort; a failure leaves the request's own values in place.
+    }
+    return (original as (...a: unknown[]) => unknown).apply(this, args);
+  };
+  target[DISPATCH_MARK] = true;
+  return true;
+}
+
 /**
  * Resolves the express the application uses and arms the record on the `use` its routers call.
  *
@@ -91,8 +145,12 @@ export function armMountRecording(proto: unknown): boolean {
 export function armMounts(from?: string): void {
   try {
     const base = from ?? process.argv[1] ?? `${process.cwd()}/`;
-    const express = createRequire(base)("express") as { Router?: { prototype?: unknown } };
+    const express = createRequire(base)("express") as {
+      Router?: { prototype?: unknown };
+      Route?: { prototype?: unknown };
+    };
     armMountRecording(express.Router?.prototype) || armMountRecording(express.Router);
+    armDispatchRecording(express.Route?.prototype);
   } catch {
     // The application does not use express, or it is not resolvable from here.
   }

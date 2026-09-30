@@ -1,5 +1,5 @@
 import type { Endpoint } from "@downtrace/protocol";
-import { mountPathOf } from "./mounts.ts";
+import { matchedMountOf, mountPathOf } from "./mounts.ts";
 import { segmentLooksLikeValue } from "./sanitize.ts";
 
 export type Method = Endpoint["method"];
@@ -69,12 +69,18 @@ function expressTemplate(req: RouteSource): string | undefined {
   const route = req.route;
   const path = (route as { path?: unknown } | undefined)?.path;
   if (typeof path !== "string") return undefined;
-  const base = typeof req.baseUrl === "string" ? req.baseUrl : "";
+  // The mount is read where the route matched it. When the dispatch of a matched route was recorded, its
+  // `baseUrl` and `app` are the ones the request had while the route was dispatching, and not the values
+  // the routers restore before the app's error handler answers (gh-900).
+  const matched = route === undefined ? undefined : matchedMountOf(req);
+  const rawBase = matched !== undefined ? matched.baseUrl : req.baseUrl;
+  const base = typeof rawBase === "string" ? rawBase : "";
+  const app = matched !== undefined ? matched.app : req.app;
   if (base === "") return path === "" ? "/" : trimSlash(path);
   // `base` is what the mounts matched, value for value; the template needs the pattern, which is recovered
   // from the routers the request went through. Whatever cannot be recovered with confidence comes out as
   // `:param` per segment (invariant 5, gh-858), never as a value.
-  const links = mountLinks(req, route as object, base);
+  const links = mountLinks(app, route as object, base);
   return joinTemplate(links, path);
 }
 
@@ -120,16 +126,16 @@ function isLayerLike(x: unknown): x is LayerLike {
  * as patterns rather than values. The whole `baseUrl` comes back as one link without a pattern when the
  * mounts cannot be recovered with confidence, and `joinTemplate` then says `:param` for every segment.
  */
-function mountLinks(req: RouteSource, route: object, base: string): MountLink[] {
-  const anchor = anchorRouter(req.app);
+function mountLinks(app: unknown, route: object, base: string): MountLink[] {
+  const anchor = anchorRouter(app);
   if (anchor === undefined) return base === "" ? [] : [{ value: base, pattern: undefined }];
-  const app = appChain(req.app);
+  const apps = appChain(app);
   const direct = walkRouterLinks(anchor, route, base);
   if (direct !== undefined) {
     if (direct.length === 0) {
       // The anchor's own router holds the route, so nothing of `baseUrl` was matched under it: what is on
       // it is the mounts of the apps above, when Express recorded them, and `:param` when it did not.
-      if (app.length > 0 && cutFits(app, base)) return appAsLinks(app, base);
+      if (apps.length > 0 && cutFits(apps, base)) return appAsLinks(apps, base);
       return base === "" ? [] : [{ value: base, pattern: undefined }];
     }
     const tail = base.slice(direct.reduce((n, l) => n + l.value.length, 0));
@@ -138,11 +144,11 @@ function mountLinks(req: RouteSource, route: object, base: string): MountLink[] 
   // The anchor's mounts could not be lined up against `baseUrl` as it stands — the usual reason is that
   // apps mounted above the anchor put their value in front of it, and that value is as long as its
   // parameters made it. Try the walk from each cut at a segment boundary, the smallest first.
-  if (app.length > 0) {
+  if (apps.length > 0) {
     for (const cut of cutCandidates(base)) {
       const fromCut = walkRouterLinks(anchor, route, base.slice(cut));
-      if (fromCut !== undefined && cutFits(app, base.slice(0, cut))) {
-        const links = [...appAsLinks(app, base.slice(0, cut)), ...fromCut];
+      if (fromCut !== undefined && cutFits(apps, base.slice(0, cut))) {
+        const links = [...appAsLinks(apps, base.slice(0, cut)), ...fromCut];
         const tail = base.slice(cut + fromCut.reduce((n, l) => n + l.value.length, 0));
         return tail === "" ? links : [...links, { value: tail, pattern: undefined }];
       }
