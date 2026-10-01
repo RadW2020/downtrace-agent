@@ -261,6 +261,28 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
     }
   });
 
+  it("with ADMIN_TOKEN, /__admin asks for it, and nothing else does", async () => {
+    const { ref: other, base } = await boot({ adminToken: "s3cret" });
+    try {
+      expect((await fetch(`${base}/__admin/regressions`)).status).toBe(401);
+      const wrong = { headers: { authorization: "Bearer nope" } };
+      expect((await fetch(`${base}/__admin/regressions`, wrong)).status).toBe(401);
+      const right = { headers: { authorization: "Bearer s3cret" } };
+      expect((await fetch(`${base}/__admin/regressions`, right)).status).toBe(200);
+      const put = await fetch(`${base}/__admin/regressions`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ n_plus_one: { enabled: true } }),
+      });
+      expect(put.status).toBe(401);
+      expect(other.regressions.isEnabled("n_plus_one")).toBe(false);
+      expect((await fetch(`${base}/healthz`)).status).toBe(200);
+      expect((await fetch(`${base}/products`)).status).toBe(200);
+    } finally {
+      await other.stop();
+    }
+  });
+
   it("pool_leak with rate 1 and a pool of 3: the 4th checkout times out on the pool", { timeout: 30_000 }, async () => {
     const { ref: other, base } = await boot({ pgPoolMax: 3, pgConnectionTimeoutMs: 500, regressions: "pool_leak" });
     const leaky = client(base);

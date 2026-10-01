@@ -202,10 +202,11 @@ is the successor ticket's, not this package's.
 The canary is not a benchmark: it asks a **deployed** cloud whether it sees what a regression of the reference app
 should cause, with the detector's real windows and its real rule — the part no test in CI reaches.
 `canary/docker-compose.yaml` is the whole of it: a reference app reporting to that cloud, steady traffic through it
-(`load`, three requests a second), and the canary's door (`src/canary-cli.ts`). None of them has a public port, and only the canary's door joins
-the network of whatever schedules it (`CANARY_SHARED_NETWORK`, `coolify` by default; locally, any network that
-exists): `/__admin` switches regressions with no credential, so the reference app stays on the stack's own network,
-and the scheduler calls `POST /cycle` on `http://downtrace-canary:8080`, one regression a night.
+(three requests a second), and the canary's door (`src/canary-cli.ts`). None of them has a public port, but the
+network is no fence where it is deployed — Coolify puts every service of a stack on the network its stacks share —
+so the reference app's `/__admin` asks for its token (`ADMIN_TOKEN`, which the canary sends as `CANARY_APP_TOKEN`)
+and the services carry names no other stack uses. The scheduler calls `POST /cycle` on
+`http://downtrace-canary:8080`, one regression a night.
 
 A cycle (`src/canary.ts`):
 
@@ -251,6 +252,7 @@ version may not have yet. The published package is watched where its users run i
 | `CANARY_APP_URL` | — | Base URL of the reference app |
 | `CANARY_CLOUD_URL` | — | Base URL of the cloud it reports to |
 | `CANARY_TOKEN` | — | An access credential of the project, level `read` |
+| `CANARY_APP_TOKEN` | — | What the reference app's `/__admin` asks for; unset, it sends nothing |
 | `CANARY_PROJECT` | — | The project's slug |
 | `CANARY_PORT` | 8080 | Where the door listens |
 | `CANARY_POLL_SECONDS` | 60 | How often it reads the findings and the verification |

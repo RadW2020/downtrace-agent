@@ -11,7 +11,8 @@ make test-integration
 
 Configuration by environment in `.env.example`; the defaults match `docker-compose.yml`. What `.env.example` does not tell you:
 
-- `PORT=0` and `PROVIDER_PORT=0` pick a free port (which is how the bench harness starts the app). The app listens on `127.0.0.1` unless `HOST` says otherwise, because `/__admin` switches regressions with no credential: only a deployment on a private network of its own, as the canary is, sets `HOST=0.0.0.0`.
+- `PORT=0` and `PROVIDER_PORT=0` pick a free port (which is how the bench harness starts the app). The app listens on `127.0.0.1` unless `HOST` says otherwise, because `/__admin` switches regressions with no credential unless `ADMIN_TOKEN` is set.
+- `ADMIN_TOKEN=<token>` makes every `/__admin` route ask for `Authorization: Bearer <token>` (401 without it); unset, it stays open, as the bench needs it. A deployment reached from other containers sets both `HOST=0.0.0.0` and `ADMIN_TOKEN`: a network other containers share is no fence, as the canary's shows (Coolify puts every service of a stack on its shared network).
 - `STARTUP_FAILURE_MS=<ms>` simulates a cold database: product traffic gets a 503 (`ColdStartError`) for that many ms from the first request; `/__admin/*` is unaffected. 0 switches it off.
 - An unknown name in `REGRESSIONS` aborts start-up. A malformed integer in any variable falls back to the default without a warning.
 - Every 5xx leaves a JSON line on stderr (`level`, `status`, `method`, `path`, `error`, `message`); the bench copies it into the reason for its verdict.

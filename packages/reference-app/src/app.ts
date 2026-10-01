@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { performance } from "node:perf_hooks";
@@ -122,6 +123,14 @@ export function createReferenceApp(options: ReferenceAppOptions = {}): Reference
 
   if (config.adminEnabled) {
     const admin = express.Router();
+    if (config.adminToken !== "") {
+      const expected = Buffer.from(`Bearer ${config.adminToken}`);
+      admin.use((req, res, next) => {
+        const given = Buffer.from(req.get("authorization") ?? "");
+        if (given.length === expected.length && timingSafeEqual(given, expected)) return next();
+        res.status(401).json({ error: "the admin surface asks for its token: Authorization: Bearer <ADMIN_TOKEN>" });
+      });
+    }
     admin.get("/regressions", (_req, res) => {
       res.json(regressions.snapshot());
     });

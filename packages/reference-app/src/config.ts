@@ -2,7 +2,8 @@ export interface AppConfig {
   port: number;
   /**
    * Where the app listens (HOST env): the loopback unless told otherwise, because `/__admin` switches regressions
-   * with no credential. A deployment on a private network of its own, as the canary is, says `0.0.0.0`.
+   * with no credential unless `adminToken` is set. A deployment reached from another container, as the canary's
+   * is, says `0.0.0.0`, and sets `adminToken` too.
    */
   host: string;
   providerPort: number;
@@ -10,6 +11,12 @@ export interface AppConfig {
   redisUrl: string;
   appVersion: string;
   adminEnabled: boolean;
+  /**
+   * What `/__admin` asks for as `Authorization: Bearer <token>` (ADMIN_TOKEN env); empty leaves it open, as the bench
+   * and a laptop need it. A deployment whose network other containers share sets it: there, the network is no
+   * fence.
+   */
+  adminToken: string;
   /** Comma-separated regressions enabled at startup (REGRESSIONS env). */
   regressions: string;
   pgPoolMax: number;
@@ -52,6 +59,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
     redisUrl: env.REDIS_URL ?? "redis://localhost:6379",
     appVersion: env.APP_VERSION ?? "dev",
     adminEnabled: (env.ADMIN_ENABLED ?? "1") !== "0",
+    adminToken: env.ADMIN_TOKEN?.trim() ?? "",
     regressions: env.REGRESSIONS ?? "",
     pgPoolMax: integer(env.PG_POOL_MAX, 10),
     pgConnectionTimeoutMs: integer(env.PG_CONNECTION_TIMEOUT_MS, 5000),

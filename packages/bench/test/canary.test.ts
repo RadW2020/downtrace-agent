@@ -11,6 +11,7 @@ const config: CanaryConfig = {
   cloudUrl: "https://cloud.test",
   project: "canary",
   token: "dt_read",
+  appToken: "",
   pollMs: MINUTE,
   detectWithinMs: 45 * MINUTE,
   recoverWithinMs: 60 * MINUTE,
@@ -35,6 +36,7 @@ type Patch = Record<string, { enabled?: boolean; params?: Record<string, number>
 function world(
   scenario: {
     appDown?: boolean;
+    appToken?: string;
     putFails?: (patch: Patch, index: number) => boolean;
     initiallyOn?: Regression[];
     cloudDown?: (now: number) => boolean;
@@ -69,6 +71,9 @@ function world(
     calls.push({ method, url, body, authorization: headers.get("authorization"), hasSignal: init.signal != null });
     if (url.startsWith(config.appUrl)) {
       if (scenario.appDown) throw new TypeError("fetch failed");
+      if (scenario.appToken !== undefined && headers.get("authorization") !== `Bearer ${scenario.appToken}`) {
+        return json({ error: "unauthorized" }, 401);
+      }
       if (method === "PUT") {
         const index = puts++;
         if (scenario.putFails?.(body as Patch, index)) return json({ error: "boom" }, 500);
@@ -180,6 +185,27 @@ describe("runCycle", () => {
     expect(cloudCalls.length).toBeGreaterThan(0);
     for (const c of cloudCalls) expect(c.authorization).toBe("Bearer dt_read");
     for (const c of w.calls) expect(c.hasSignal, c.url).toBe(true);
+  });
+
+  it("gives the reference app its own token, and the cloud its own", async () => {
+    const w = world({ ...passing, appToken: "app-secret" });
+    const result = await runCycle("n_plus_one", { ...config, appToken: "app-secret" }, w.deps);
+
+    expect(result.outcome).toBe("pass");
+    for (const c of w.calls.filter((c) => c.url.startsWith(config.appUrl))) {
+      expect(c.authorization).toBe("Bearer app-secret");
+    }
+    for (const c of w.calls.filter((c) => c.url.startsWith(config.cloudUrl)))
+      expect(c.authorization).toBe("Bearer dt_read");
+  });
+
+  it("is unmeasurable, and switches nothing on, when the reference app refuses the canary's token", async () => {
+    const w = world({ appToken: "app-secret" });
+    const result = await runCycle("n_plus_one", { ...config, appToken: "wrong" }, w.deps);
+
+    expect(result.outcome).toBe("unmeasurable");
+    expect(result.reason).toMatch(/401/);
+    expect(result.enabledAt).toBeNull();
   });
 
   it("fails when no expected finding opens in time, saying what opened instead, and switches the regression off", async () => {

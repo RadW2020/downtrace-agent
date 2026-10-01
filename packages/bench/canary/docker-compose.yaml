@@ -1,7 +1,11 @@
 # The canary: a reference app that reports to a cloud, steady traffic through it, and the door that switches one
 # regression on, waits for the finding and its recovery, and answers whether the cloud saw what it should
-# (README of the bench, «The canary»). Nothing here has a public port, and only the door joins the network of
-# whatever schedules it: `/__admin` of the reference app switches regressions with no credential.
+# (README of the bench, «The canary»). Nothing here has a public port.
+#
+# The network is no fence: where it is deployed, Coolify puts every service of the stack on the network all its
+# stacks share, whatever this file says, so `/__admin` of the reference app asks for its token (ADMIN_TOKEN) and the
+# services carry names no other stack there uses — a shared `postgres` would be a second stack's database answering
+# to this one. The scheduler calls the door by its service's name, `downtrace-canary`.
 #
 # What it reads from the environment, set where it is deployed. Plain `${VAR}` and not `${VAR:?}`: where it is
 # deployed the image is built with the build-time variables only, and these are not build-time, so a required one
@@ -12,6 +16,7 @@
 #   DOWNTRACE_TOKEN    the ingest token of the canary's project
 #   CANARY_PROJECT     the slug of the canary's project
 #   CANARY_TOKEN       an access credential of the same project, level read
+#   CANARY_APP_TOKEN   what the reference app's /__admin asks for
 #   POSTGRES_PASSWORD  the reference app's own database
 x-image: &image
   build:
@@ -19,7 +24,7 @@ x-image: &image
     dockerfile: packages/bench/canary/Dockerfile
 
 services:
-  postgres:
+  canary-postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: canary
@@ -33,7 +38,7 @@ services:
       timeout: 3s
       retries: 20
 
-  redis:
+  canary-redis:
     image: redis:8-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -41,23 +46,23 @@ services:
       timeout: 3s
       retries: 20
 
-  app:
+  canary-app:
     <<: *image
     working_dir: /srv/packages/reference-app
     command: ["node", "--import", "@downtrace/agent/register", "src/main.ts"]
     environment:
-      DATABASE_URL: postgres://canary:${POSTGRES_PASSWORD}@postgres:5432/canary
-      REDIS_URL: redis://redis:6379
-      ADMIN_ENABLED: "1"
-      # The network is the compose's own and Coolify's internal one: no public port reaches it.
+      DATABASE_URL: postgres://canary:${POSTGRES_PASSWORD}@canary-postgres:5432/canary
+      REDIS_URL: redis://canary-redis:6379
       HOST: 0.0.0.0
+      ADMIN_ENABLED: "1"
+      ADMIN_TOKEN: ${CANARY_APP_TOKEN}
       APP_VERSION: ${SOURCE_COMMIT:-unknown}
       DOWNTRACE_URL: ${DOWNTRACE_URL}
       DOWNTRACE_TOKEN: ${DOWNTRACE_TOKEN}
     depends_on:
-      postgres:
+      canary-postgres:
         condition: service_healthy
-      redis:
+      canary-redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4000/healthz"]
@@ -69,48 +74,35 @@ services:
   # Steady traffic, so the detector always has a reference: about three requests a second, one checkout in ten,
   # which keeps a five-minute window of checkouts well above the fifty the rule asks for. An hour per run, each
   # with its own seed; a run whose requests failed (a regression is on) exits 1 and the next one starts anyway.
-  load:
+  canary-load:
     <<: *image
     working_dir: /srv/packages/bench
     command:
       - sh
       - -c
-      - while true; do node src/load-cli.ts --url http://app:4000 --rps 3 --duration 3600 --seed "$$(date +%s)" || sleep 5; done
+      - while true; do node src/load-cli.ts --url http://canary-app:4000 --rps 3 --duration 3600 --seed "$$(date +%s)" || sleep 5; done
     depends_on:
-      app:
+      canary-app:
         condition: service_healthy
 
-  canary:
+  downtrace-canary:
     <<: *image
     working_dir: /srv/packages/bench
     command: ["node", "src/canary-cli.ts"]
-    # The door, and only the door, is on the network its scheduler is on, under a name that does not change with
-    # each deployment the way a container's does.
-    networks:
-      default:
-      shared:
-        aliases: [downtrace-canary]
     environment:
-      CANARY_APP_URL: http://app:4000
+      CANARY_APP_URL: http://canary-app:4000
+      CANARY_APP_TOKEN: ${CANARY_APP_TOKEN}
       CANARY_CLOUD_URL: ${DOWNTRACE_URL}
       CANARY_PROJECT: ${CANARY_PROJECT}
       CANARY_TOKEN: ${CANARY_TOKEN}
     depends_on:
-      app:
+      canary-app:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
-
-networks:
-  # The network of whatever calls the door: Coolify's own where the canary is deployed, any existing one locally
-  # (`docker network create coolify`). The reference app and its `/__admin` are not on it: they stay on this
-  # stack's own network, which nothing outside the stack reaches.
-  shared:
-    external: true
-    name: ${CANARY_SHARED_NETWORK:-coolify}
 
 volumes:
   canary-postgres:

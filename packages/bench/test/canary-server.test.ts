@@ -122,6 +122,7 @@ describe("canaryConfigFrom", () => {
         cloudUrl: "https://cloud.test",
         project: "canary",
         token: "dt_read",
+        appToken: "",
         pollMs: 60_000,
         detectWithinMs: 45 * 60_000,
         recoverWithinMs: 60 * 60_000,
@@ -129,6 +130,10 @@ describe("canaryConfigFrom", () => {
         freshWithinMs: 2 * 60_000,
       },
     });
+  });
+
+  it("takes the reference app's admin token when there is one", () => {
+    expect(canaryConfigFrom({ ...env, CANARY_APP_TOKEN: " app-secret " }).cycle.appToken).toBe("app-secret");
   });
 
   it("refuses to start without what it cannot default", () => {

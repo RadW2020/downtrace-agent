@@ -27,6 +27,8 @@ export interface CanaryConfig {
   project: string;
   /** An access credential of the project, level `read`. */
   token: string;
+  /** What the reference app's `/__admin` asks for (its ADMIN_TOKEN); empty when it asks for nothing. */
+  appToken: string;
   pollMs: number;
   detectWithinMs: number;
   recoverWithinMs: number;
@@ -118,10 +120,11 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
     return (await res.json()) as unknown;
   };
   const regressionsUrl = `${config.appUrl}/__admin/regressions`;
+  const appAuth: Record<string, string> = config.appToken ? { authorization: `Bearer ${config.appToken}` } : {};
   const put = (patch: Record<string, unknown>) =>
     request(regressionsUrl, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...appAuth },
       body: JSON.stringify(patch),
     });
   const project = `${config.cloudUrl}/api/p/${encodeURIComponent(config.project)}`;
@@ -160,7 +163,7 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
     // The reference app: it answers, and nothing is switched on. A regression left on by an earlier night is in
     // tonight's reference window, so the night measures nothing; it is switched off for tomorrow's.
     try {
-      found = regressionStateOf(await request(regressionsUrl));
+      found = regressionStateOf(await request(regressionsUrl, { headers: appAuth }));
     } catch (err) {
       return done("unmeasurable", `the reference app did not answer: ${describe(err)}`);
     }

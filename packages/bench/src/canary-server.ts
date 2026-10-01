@@ -118,6 +118,7 @@ export function canaryConfigFrom(env: Readonly<Record<string, string | undefined
       cloudUrl: url("CANARY_CLOUD_URL"),
       project: required("CANARY_PROJECT"),
       token: required("CANARY_TOKEN"),
+      appToken: env.CANARY_APP_TOKEN?.trim() ?? "",
       pollMs: positive("CANARY_POLL_SECONDS", 60) * 1000,
       detectWithinMs: positive("CANARY_DETECT_WITHIN_MINUTES", 45) * 60_000,
       recoverWithinMs: positive("CANARY_RECOVER_WITHIN_MINUTES", 60) * 60_000,
