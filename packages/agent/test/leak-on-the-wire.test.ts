@@ -394,4 +394,65 @@ describe("what actually leaves, in the bytes", () => {
     expect(body).toContain(`"route":"/tenants/:tenant/users/:id"`);
     expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });
+
+  /**
+   * gh-899. The same door as gh-858 with no route: a middleware under `/tenants/:tenant` answers 401 before
+   * any route matched, and the route used to be the path the client asked for, tenant included. It is read
+   * here off a request a real Express answered, at the end of the response, and the bytes are swept.
+   */
+  it("carries the pattern of the mount a middleware answered under, not the tenant it matched", async () => {
+    const router = express.Router();
+    router.use((_req, res) => {
+      res.status(401).json({});
+    });
+    const app = express();
+    app.use("/tenants/:tenant", router);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const routes: string[] = [];
+    const finish = (message: unknown): void => {
+      const request = (message as { request?: unknown }).request;
+      if (request !== null && typeof request === "object") routes.push(routeOf(request as RouteSource));
+    };
+    const ch = channel("http.server.response.finish");
+    ch.subscribe(finish);
+    for (const path of ["/tenants/acme-corp/users/42", "/tenants/otro/users/7"]) {
+      const res = await fetch(base + path);
+      await res.arrayBuffer();
+    }
+    ch.unsubscribe(finish);
+    server.close();
+    expect(routes, "the two requests were read").toEqual(["/tenants/:tenant/users/:id", "/tenants/:tenant/users/:id"]);
+
+    const recorder = new IntervalAggregator({ now: () => 1_000_000 });
+    for (const route of routes) recorder.record("GET", route, 401, 1);
+    const interval = recorder.rotate();
+    expect(interval, "the interval should have rotated").not.toBeNull();
+
+    let body = "";
+    const sender = new Sender({
+      url: "http://sink.invalid",
+      token: "t",
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v0" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "test" },
+      log: quiet,
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        body = String(init.body);
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch,
+      now: () => 1_000_000,
+    });
+    if (interval) sender.enqueue(interval);
+    expect(await sender.flush()).toBe(true);
+    expect(body, "nothing was sent").not.toBe("");
+
+    for (const tenant of ["acme-corp", "otro"]) {
+      expect(body, `«${tenant}» reached the wire`).not.toContain(tenant);
+    }
+    expect(body).toContain(`"route":"/tenants/:tenant/users/:id"`);
+    expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
+  });
 });

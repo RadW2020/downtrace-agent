@@ -351,6 +351,102 @@ describe("routeOf over a real Express 4 mount (gh-898)", () => {
   });
 });
 
+describe("routeOf when a middleware answered before any route matched (gh-899)", () => {
+  beforeAll(() => {
+    armMountRecording(express.Router.prototype);
+  });
+
+  type StackLayer = { route?: unknown; handle?: unknown; matchers?: unknown; regexp?: unknown };
+
+  /** An app with one middleware under `/tenants/:tenant`, and the layer that mount is. */
+  function mounted() {
+    const app = express();
+    app.use("/tenants/:tenant", (_req, res) => {
+      res.status(401).json({});
+    });
+    const stack = (app.router as unknown as { stack: StackLayer[] }).stack;
+    const layer = stack.find((l) => l.route === undefined && l.matchers !== undefined && l.handle !== undefined);
+    if (layer === undefined) throw new Error("the mount's layer was not found");
+    return { app, stack, layer };
+  }
+
+  const request = (app: unknown) => ({ url: "/users/42", baseUrl: "/tenants/acme-corp", app });
+
+  it("names the mount by the pattern it was registered with, and the rest of the path by the heuristic", () => {
+    const { app } = mounted();
+    expect(routeOf(request(app))).toBe("/tenants/:tenant/users/:id");
+  });
+
+  it("keeps the path the client asked for when nothing is left on baseUrl", () => {
+    const { app } = mounted();
+    expect(
+      routeOf({ url: "/tenants/acme-corp/users/42", originalUrl: "/tenants/acme-corp/users/42", baseUrl: "", app }),
+    ).toBe("/tenants/acme-corp/users/:id");
+  });
+
+  it("says :param for the stretch when a matcher of the mount throws, and throws nothing", () => {
+    const { app, layer } = mounted();
+    layer.matchers = [
+      () => {
+        throw new Error("the matcher is gone");
+      },
+    ];
+    expect(() => routeOf(request(app))).not.toThrow();
+    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+  });
+
+  it("says :param for the stretch when the layer's handle cannot be read, and throws nothing", () => {
+    const { app, layer } = mounted();
+    Object.defineProperty(layer, "handle", {
+      configurable: true,
+      get() {
+        throw new Error("the handle is gone");
+      },
+    });
+    expect(() => routeOf(request(app))).not.toThrow();
+    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+  });
+
+  it("does not take the other mount's word for a stretch when one of the two cannot be read", () => {
+    const { app, stack, layer } = mounted();
+    app.use("/tenants/:tenant", (_req, res) => {
+      res.status(401).json({});
+    });
+    expect(stack.length).toBeGreaterThan(1);
+    Object.defineProperty(layer, "handle", {
+      configurable: true,
+      get() {
+        throw new Error("the handle is gone");
+      },
+    });
+    expect(() => routeOf(request(app))).not.toThrow();
+    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+  });
+
+  it("does not run the matcher of a mount registered with a regular expression that keeps state", () => {
+    const stateful = /^\/ping/g;
+    const app = express();
+    app.use(stateful, (_req, res) => {
+      res.status(200).end("pong");
+    });
+    stateful.lastIndex = 0;
+    expect(routeOf({ url: "/x", baseUrl: "/ping", app })).toBe("/:param/x");
+    expect(stateful.lastIndex, "the application's own regexp is left where it was").toBe(0);
+  });
+
+  it("says :param for the stretch when the router's stack cannot be read, and throws nothing", () => {
+    const { app } = mounted();
+    Object.defineProperty(app.router, "stack", {
+      configurable: true,
+      get() {
+        throw new Error("the stack is gone");
+      },
+    });
+    expect(() => routeOf(request(app))).not.toThrow();
+    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+  });
+});
+
 describe("normalizeMethod", () => {
   it("uppercases known methods and folds the rest into OTHER", () => {
     expect(normalizeMethod("get")).toBe("GET");

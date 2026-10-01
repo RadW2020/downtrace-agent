@@ -68,7 +68,7 @@ export const PARAM_SEGMENT = ":param";
 function expressTemplate(req: RouteSource): string | undefined {
   const route = req.route;
   const path = (route as { path?: unknown } | undefined)?.path;
-  if (typeof path !== "string") return undefined;
+  if (typeof path !== "string") return unmatchedTemplate(req);
   // The mount is read where the route matched it. When the dispatch of a matched route was recorded, its
   // `baseUrl` and `app` are the ones the request had while the route was dispatching, and not the values
   // the routers restore before the app's error handler answers (gh-900).
@@ -82,6 +82,25 @@ function expressTemplate(req: RouteSource): string | undefined {
   // `:param` per segment (invariant 5, gh-858), never as a value.
   const links = mountLinks(app, route as object, base);
   return joinTemplate(links, path);
+}
+
+/**
+ * The template of a request that no route matched, when a mount still carries it: a middleware answered
+ * before any route matched, and `baseUrl` is what the mounts it went through took of the path (gh-899).
+ *
+ * The mount comes out as the patterns it was registered with, and what is left of the path, `url`, goes
+ * through the heuristic. With nothing on `baseUrl` there is no mount to name, and the path the client asked
+ * for stands, as gh-766 decided: a 404 of finalhandler, a middleware of the first level. Where an error
+ * answered by the app's handler has already put `baseUrl` back to nothing, this does not reach it.
+ */
+function unmatchedTemplate(req: RouteSource): string | undefined {
+  const base = typeof req.baseUrl === "string" ? req.baseUrl : "";
+  if (base === "") return undefined;
+  const asked = typeof req.url === "string" ? req.url : "/";
+  // A read of the application's objects that throws is a walk the request cannot be trusted to: the whole
+  // stretch is a parameter, and the request is recorded all the same (invariant 2).
+  const links = safeRead(() => baseLinks(req.app, base)) ?? [{ value: base, pattern: undefined }];
+  return joinTemplate(links, heuristicTemplate(asked));
 }
 
 /** A router as the walk sees it: the layers, in registration order. Express calls it `stack`. */
@@ -250,6 +269,142 @@ function walkRouterLinks(anchor: RouterLike, route: object, remaining: string): 
   return undefined;
 }
 
+/**
+ * The mounts `baseUrl` is made of when no route matched, outermost first: the apps above the one that
+ * answered, whose patterns Express records, and then the mounts of its own router that the walk can line up.
+ * Whatever cannot be said with confidence is one link without a pattern, and comes out as `:param` per
+ * segment (invariant 5, gh-899).
+ */
+function baseLinks(app: unknown, base: string): MountLink[] {
+  const anchor = anchorRouter(app);
+  const unknown: MountLink[] = [{ value: base, pattern: undefined }];
+  if (anchor === undefined) return unknown;
+  const apps = appChain(app);
+  if (apps.length === 0) return walkBaseLinks(anchor, base).links;
+  // The apps above took the first segments of `baseUrl`, as many as their patterns have; a pattern with a
+  // wildcard or an optional part has no count to give, and then nothing of the stretch is said.
+  let taken = 0;
+  for (const pattern of apps) {
+    const count = plainSegmentCount(pattern);
+    if (count === undefined) return unknown;
+    taken += count;
+  }
+  const prefix = new RegExp(`^(?:/[^/]+){${taken}}`).exec(base)?.[0];
+  if (prefix === undefined) return unknown;
+  // The chain of apps is only what Express records, and an app mounted under a router leaves it short: the
+  // prefix is believed only when what is left lines up with the answering app's own mounts.
+  const below = walkBaseLinks(anchor, base.slice(prefix.length));
+  if (!below.exact) return unknown;
+  return [...apps.map((pattern) => ({ value: "", pattern })), ...below.links];
+}
+
+/** How many segments a mount pattern takes of a path, when it can be known: plain words and `:name`s only. */
+function plainSegmentCount(pattern: string | undefined): number | undefined {
+  if (pattern === undefined || /[*()?+{}[\]\\]/.test(pattern)) return undefined;
+  return pattern.split("/").filter((s) => s !== "").length;
+}
+
+/** A mount of a router that could be the one `baseUrl` went through: what it matched, and what it was. */
+interface MountCandidate {
+  value: string;
+  pattern: string | undefined;
+  /** The router it carries, when it carries one: the only kind of mount `baseUrl` can go on through. */
+  router: RouterLike | undefined;
+}
+
+/**
+ * The mounts of this router whose compiled matchers take a stretch of `remaining`. The caller keeps the ones
+ * that can account for all of it: a mount that took less than all and carries no router cannot be where
+ * `baseUrl` ended.
+ *
+ * A router mounted with no path, `app.use(api)`, takes nothing of `baseUrl`, and the mounts it carries are
+ * where the stretch is: it is looked through, to the depth the walk allows. A matcher that throws is a mount
+ * that does not match, as in the walk of a route; any other read that throws is not absorbed here, because a
+ * layer that cannot be read might be the one that answered, and the caller makes the whole stretch a parameter.
+ */
+function mountCandidates(router: RouterLike, remaining: string, depth = 0): MountCandidate[] {
+  const out: MountCandidate[] = [];
+  for (const layer of router.stack) {
+    if (!isLayerLike(layer) || layer.route !== undefined) continue;
+    const matched = matchedValue(layer, remaining);
+    if (matched === undefined || !remaining.startsWith(matched.value)) continue;
+    const handle = layer.handle;
+    const carried = isRouterLike(handle) ? handle : undefined;
+    if (matched.value === "") {
+      if (carried !== undefined && depth < MAX_MOUNT_DEPTH) out.push(...mountCandidates(carried, remaining, depth + 1));
+      continue;
+    }
+    out.push({ value: matched.value, pattern: candidatePattern(layer, matched.index), router: carried });
+  }
+  return out;
+}
+
+/**
+ * The pattern a candidate was registered with. Express 4 keeps one regexp for a mount registered with several
+ * paths and no matcher per path, so which of them matched cannot be told: no pattern, and `:param` follows.
+ */
+function candidatePattern(layer: LayerLike, index: number): string | undefined {
+  const raw = mountPathOf(layer);
+  if (Array.isArray(raw) && raw.length > 1 && !Array.isArray(layer.matchers)) return undefined;
+  return linkPattern(layer, index);
+}
+
+/** What the walk lined up of a stretch, and whether it was all of it. */
+interface BaseWalk {
+  links: MountLink[];
+  exact: boolean;
+}
+
+/**
+ * The mounts between this router and the middleware that answered, from what `baseUrl` is made of: each
+ * level takes the mounts that matched the stretch, as the patterns they were registered with, and goes on
+ * through the routers they carry.
+ *
+ * Every mount that could be the one is followed down, and what counts is what accounts for the whole
+ * stretch. If those all say the same, that is the answer — however many mounts say it (`app.use("/api",
+ * auth)` and `app.use("/api", router)`), and whichever of several routers on the same prefix is the one that
+ * carries the rest. If they say different things, the walk keeps what they all agree on at the start and the
+ * rest is a parameter per segment; when none accounts for the whole stretch, the same.
+ *
+ * Reads only what the routers keep from registration, like `walkRouterLinks`, and never writes.
+ */
+function walkBaseLinks(router: RouterLike, remaining: string, depth = 0): BaseWalk {
+  if (remaining === "") return { links: [], exact: true };
+  const unknown: BaseWalk = { links: [{ value: remaining, pattern: undefined }], exact: false };
+  if (depth >= MAX_MOUNT_DEPTH) return unknown;
+  const explanations: BaseWalk[] = [];
+  for (const c of mountCandidates(router, remaining)) {
+    const link: MountLink = { value: c.value, pattern: c.pattern };
+    const rest = remaining.slice(c.value.length);
+    if (rest === "") {
+      explanations.push({ links: [link], exact: true });
+    } else if (c.router !== undefined) {
+      const below = walkBaseLinks(c.router, rest, depth + 1);
+      explanations.push({ links: [link, ...below.links], exact: below.exact });
+    }
+  }
+  const whole = explanations.filter((e) => e.exact);
+  const pool = whole.length > 0 ? whole : explanations;
+  const first = pool[0];
+  if (first === undefined) return unknown;
+  if (pool.every((e) => sameLinks(e.links, first.links))) return first;
+  // They disagree: only a start they all share is believed.
+  const head = first.links[0];
+  if (head !== undefined && pool.every((e) => sameLink(e.links[0], head))) {
+    const rest = remaining.slice(head.value.length);
+    return { links: rest === "" ? [head] : [head, { value: rest, pattern: undefined }], exact: false };
+  }
+  return unknown;
+}
+
+function sameLink(a: MountLink | undefined, b: MountLink | undefined): boolean {
+  return a !== undefined && b !== undefined && a.value === b.value && a.pattern === b.pattern;
+}
+
+function sameLinks(a: MountLink[], b: MountLink[]): boolean {
+  return a.length === b.length && a.every((link, i) => sameLink(link, b[i]));
+}
+
 /** Whether the route's own layer is in this router, and not in a router mounted in it. */
 function directlyOwns(router: RouterLike, route: object): boolean {
   return router.stack.some((layer) => isLayerLike(layer) && layer.route === route);
@@ -276,6 +431,9 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
   if (layer.slash === true) return { value: "", index: 0 };
   const matchers = layer.matchers;
   if (Array.isArray(matchers)) {
+    // The matcher of a mount registered with a regular expression runs that very regexp, and one with state
+    // (`g`, `y`) moves its `lastIndex` on every call: asking it would change what the application answers.
+    if (registeredWithState(layer)) return undefined;
     for (let i = 0; i < matchers.length; i += 1) {
       const matcher = matchers[i];
       if (typeof matcher !== "function") continue;
@@ -308,6 +466,12 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
     if (match) return { value: match[0], index: 0 };
   }
   return undefined;
+}
+
+/** Whether the mount was registered with a regular expression that keeps state between calls (`g`, `y`). */
+function registeredWithState(layer: LayerLike): boolean {
+  const raw = mountPathOf(layer);
+  return (Array.isArray(raw) ? raw : [raw]).some((p) => p instanceof RegExp && /[gy]/.test(p.flags));
 }
 
 /**

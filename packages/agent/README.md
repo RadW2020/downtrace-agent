@@ -568,9 +568,14 @@ its segments come out as `:param` instead of the values they carried — the req
 route. That happens for a mount registered with a regular expression (there is no pattern to read), for an app
 mounted under a router (Express records no prefix in that case), for a mount registered before the instrumentation
 started — start the agent before the routes are registered, and `--import` does that for you — and for routes
-registered on a copy of Express different from the one the agent wrapped (a duplicated dependency). Without a framework — and for whatever Express
-answers before a route matched, a middleware's 401 or a 404, read as the path the client asked for, the prefix of
-the mount it passed through and all — a segment that carries a value is collapsed into `:id`: anything with
+registered on a copy of Express different from the one the agent wrapped (a duplicated dependency). A middleware that
+answers under a mount before any route matched — a 401 from `app.use("/tenants/:tenant", auth)` — keeps the mount's
+pattern too: the mount is read from the routers the request went through, and the rest of the path goes through the
+heuristic below. Where the same stretch is matched by two mounts registered with different patterns, or by routers the
+walk cannot tell apart, the stretch comes out as `:param` per segment — and so does a mount registered with several paths on Express 4, which keeps no matcher per path. A middleware whose error the app's handler
+answers after Express has put `baseUrl` back to nothing is not reached by this yet. Without a framework — and for
+whatever Express answers when nothing is left of the mount, a 404 or a first-level middleware, read as the path the
+client asked for — a segment that carries a value is collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
 version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
 A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a
