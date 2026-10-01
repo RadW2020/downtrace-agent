@@ -258,4 +258,4 @@ version may not have yet. The published package is watched where its users run i
 | `CANARY_RECOVER_WITHIN_MINUTES` | 60 | How long the recovery has to be observed |
 
 The compose file adds the reference app's own: `DOWNTRACE_URL`, `DOWNTRACE_TOKEN` (the project's ingest token) and
-`POSTGRES_PASSWORD`. What is missing stops the start, and so does a number that is not a positive integer.
+`POSTGRES_PASSWORD`. What is missing stops the canary's start, and so does a number that is not a positive integer.

@@ -3,7 +3,11 @@
 # (README of the bench, «The canary»). Nothing here has a public port, and only the door joins the network of
 # whatever schedules it: `/__admin` of the reference app switches regressions with no credential.
 #
-# What it reads from the environment, set where it is deployed:
+# What it reads from the environment, set where it is deployed. Plain `${VAR}` and not `${VAR:?}`: where it is
+# deployed the image is built with the build-time variables only, and these are not build-time, so a required one
+# would stop the build. A missing one stops the start instead: the canary exits 2 without its URL, project or
+# credential, Postgres does not start without its password, and the reference app without its ingest token sends
+# nothing, which the canary reads as a night it cannot measure.
 #   DOWNTRACE_URL      the cloud the reference app reports to and the canary asks
 #   DOWNTRACE_TOKEN    the ingest token of the canary's project
 #   CANARY_PROJECT     the slug of the canary's project
@@ -19,7 +23,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: canary
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: canary
     volumes:
       - canary-postgres:/var/lib/postgresql/data
@@ -42,14 +46,14 @@ services:
     working_dir: /srv/packages/reference-app
     command: ["node", "--import", "@downtrace/agent/register", "src/main.ts"]
     environment:
-      DATABASE_URL: postgres://canary:${POSTGRES_PASSWORD:?}@postgres:5432/canary
+      DATABASE_URL: postgres://canary:${POSTGRES_PASSWORD}@postgres:5432/canary
       REDIS_URL: redis://redis:6379
       ADMIN_ENABLED: "1"
       # The network is the compose's own and Coolify's internal one: no public port reaches it.
       HOST: 0.0.0.0
       APP_VERSION: ${SOURCE_COMMIT:-unknown}
-      DOWNTRACE_URL: ${DOWNTRACE_URL:?}
-      DOWNTRACE_TOKEN: ${DOWNTRACE_TOKEN:?}
+      DOWNTRACE_URL: ${DOWNTRACE_URL}
+      DOWNTRACE_TOKEN: ${DOWNTRACE_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,9 +92,9 @@ services:
         aliases: [downtrace-canary]
     environment:
       CANARY_APP_URL: http://app:4000
-      CANARY_CLOUD_URL: ${DOWNTRACE_URL:?}
-      CANARY_PROJECT: ${CANARY_PROJECT:?}
-      CANARY_TOKEN: ${CANARY_TOKEN:?}
+      CANARY_CLOUD_URL: ${DOWNTRACE_URL}
+      CANARY_PROJECT: ${CANARY_PROJECT}
+      CANARY_TOKEN: ${CANARY_TOKEN}
     depends_on:
       app:
         condition: service_healthy
