@@ -1,0 +1,10 @@
+# What the canary's image is built from, and nothing else: the workspace's root files and its packages.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!packages
+**/node_modules
+**/dist
+**/.env

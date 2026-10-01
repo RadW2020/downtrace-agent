@@ -109,9 +109,18 @@ export class Db {
     }
   }
 
-  async close(): Promise<void> {
+  /**
+   * Gives the pool back the clients `pool_leak` kept, destroying them rather than reusing them: switching a
+   * regression off undoes it, or a pool emptied by the leak would fail every route that uses the database from then
+   * on, with nothing to say why.
+   */
+  releaseLeaked(): void {
     for (const client of this.leaked) client.release(true);
     this.leaked.clear();
+  }
+
+  async close(): Promise<void> {
+    this.releaseLeaked();
     await this.pool.end();
   }
 }

@@ -196,3 +196,66 @@ because a doubt about a row of the summary is read out of the profile, not measu
 decides — whether there is margin to recover, and from which part, or that it does not pay — is written from
 the kept report, when the mirror runs it: that writing is a step the campaign exists to make possible, and it
 is the successor ticket's, not this package's.
+
+## The canary
+
+The canary is not a benchmark: it asks a **deployed** cloud whether it sees what a regression of the reference app
+should cause, with the detector's real windows and its real rule — the part no test in CI reaches.
+`canary/docker-compose.yaml` is the whole of it: a reference app reporting to that cloud, steady traffic through it
+(`load`, three requests a second), and the canary's door (`src/canary-cli.ts`). None of them has a public port, and only the canary's door joins
+the network of whatever schedules it (`CANARY_SHARED_NETWORK`, `coolify` by default; locally, any network that
+exists): `/__admin` switches regressions with no credential, so the reference app stays on the stack's own network,
+and the scheduler calls `POST /cycle` on `http://downtrace-canary:8080`, one regression a night.
+
+A cycle (`src/canary.ts`):
+
+1. checks that the reference app answers with every regression off, that the project's batches are arriving (the
+   last one within two minutes) and that no finding like the expected one is already open — any of those, and the
+   night is `unmeasurable`; a regression found on is switched off for the next night;
+2. switches the regression on, with whatever it needs to show at all (`aggressive_retries` only retries what fails,
+   so its night also slows the provider past its timeout), and reads the project's findings and its freshness every
+   minute until the expected one opens;
+3. reads the pattern its report recognises;
+4. switches it off, giving back the parameters it found, and reads the finding's verification since that instant
+   until it says `recovery-observed`.
+
+It answers once the cycle is over: `pass`, `fail` (the cloud answered, and not as expected) or `unmeasurable` (the
+app or the cloud did not answer, or the data was not arriving, before the night or at any moment of a wait that
+ended without the answer: no data is not no errors), with one sentence saying why, the instants, the minutes it took
+to detect and to recover, the finding and its report, and what opened instead. The regression is switched off on
+every path, three times if it has to be; when even that fails, the outcome is `fail` and the reason says it first. A
+failure of the canary's own is an answer too, `unmeasurable`. One cycle at a time: a second request while one runs
+is a 409 naming it.
+
+A finding the cloud had seen once but not yet confirmed when the night began, and confirms during it, counts as
+new; with every regression off before the night that is a degradation of its own, and the night says which finding
+it was. And a project too young for the detector's history is not told apart from a detector that misses: give the
+stack its half day before reading its first night.
+
+What each regression should cause is `src/canary-expectations.ts`, in the cloud's own names: the trigger that may
+open the finding, where it is (a route, or a dependency of the project as a whole) and the patterns its report may
+recognise. `n_plus_one` is the shape the end-to-end walk of a real regression already proves; the other four are
+read off the detector, and the canary's nights confirm them or say which finding came instead.
+
+It is slow because the detector is: a five-minute window against a two-hour reference and twelve hours of history,
+two sightings to open a finding, two clean checks to observe a recovery. The stack has to run for half a day before
+its first night means anything, and a cycle lasts up to the two limits together, an hour and three quarters by
+default.
+
+The image is built from the repository's root with its lockfile, and the instrumentation it loads is the
+workspace's: the reference app of this tree calls what this tree's instrumentation exports, which a published
+version may not have yet. The published package is watched where its users run it.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `CANARY_APP_URL` | — | Base URL of the reference app |
+| `CANARY_CLOUD_URL` | — | Base URL of the cloud it reports to |
+| `CANARY_TOKEN` | — | An access credential of the project, level `read` |
+| `CANARY_PROJECT` | — | The project's slug |
+| `CANARY_PORT` | 8080 | Where the door listens |
+| `CANARY_POLL_SECONDS` | 60 | How often it reads the findings and the verification |
+| `CANARY_DETECT_WITHIN_MINUTES` | 45 | How long the expected finding has to open |
+| `CANARY_RECOVER_WITHIN_MINUTES` | 60 | How long the recovery has to be observed |
+
+The compose file adds the reference app's own: `DOWNTRACE_URL`, `DOWNTRACE_TOKEN` (the project's ingest token) and
+`POSTGRES_PASSWORD`. What is missing stops the start, and so does a number that is not a positive integer.

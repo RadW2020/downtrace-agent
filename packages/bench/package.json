@@ -9,6 +9,7 @@
   },
   "scripts": {
     "load": "node src/load-cli.ts",
+    "canary": "node src/canary-cli.ts",
     "bench": "node src/bench-cli.ts",
     "test": "vitest run",
     "test:integration": "DOWNTRACE_REQUIRE_DB=1 vitest run integration",

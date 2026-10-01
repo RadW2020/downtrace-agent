@@ -1,5 +1,10 @@
 export interface AppConfig {
   port: number;
+  /**
+   * Where the app listens (HOST env): the loopback unless told otherwise, because `/__admin` switches regressions
+   * with no credential. A deployment on a private network of its own, as the canary is, says `0.0.0.0`.
+   */
+  host: string;
   providerPort: number;
   databaseUrl: string;
   redisUrl: string;
@@ -41,6 +46,7 @@ export type TrackerErrorHandlerPosition = (typeof TRACKER_ERROR_HANDLER_POSITION
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: integer(env.PORT, 4000),
+    host: env.HOST?.trim() || "127.0.0.1",
     providerPort: integer(env.PROVIDER_PORT, 4001),
     databaseUrl: env.DATABASE_URL ?? "postgres://downtrace:downtrace@localhost:5432/downtrace",
     redisUrl: env.REDIS_URL ?? "redis://localhost:6379",

@@ -126,7 +126,9 @@ export function createReferenceApp(options: ReferenceAppOptions = {}): Reference
       res.json(regressions.snapshot());
     });
     admin.put("/regressions", (req, res) => {
-      res.json(regressions.update(req.body));
+      const state = regressions.update(req.body);
+      if (!state.pool_leak.enabled) db.releaseLeaked();
+      res.json(state);
     });
     admin.get("/provider", (_req, res) => {
       res.json(provider.control);
@@ -229,7 +231,7 @@ export function createReferenceApp(options: ReferenceAppOptions = {}): Reference
       await cache.connect();
       const providerPort = await provider.listen(config.providerPort);
       const port = await new Promise<number>((resolve, reject) => {
-        const listening = app.listen(config.port, "127.0.0.1");
+        const listening = app.listen(config.port, config.host);
         server = listening;
         listening.once("error", reject);
         listening.once("listening", () => resolve((listening.address() as AddressInfo).port));

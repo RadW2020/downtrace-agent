@@ -11,7 +11,7 @@ make test-integration
 
 Configuration by environment in `.env.example`; the defaults match `docker-compose.yml`. What `.env.example` does not tell you:
 
-- `PORT=0` and `PROVIDER_PORT=0` pick a free port (which is how the bench harness starts the app); the app listens only on `127.0.0.1`.
+- `PORT=0` and `PROVIDER_PORT=0` pick a free port (which is how the bench harness starts the app). The app listens on `127.0.0.1` unless `HOST` says otherwise, because `/__admin` switches regressions with no credential: only a deployment on a private network of its own, as the canary is, sets `HOST=0.0.0.0`.
 - `STARTUP_FAILURE_MS=<ms>` simulates a cold database: product traffic gets a 503 (`ColdStartError`) for that many ms from the first request; `/__admin/*` is unaffected. 0 switches it off.
 - An unknown name in `REGRESSIONS` aborts start-up. A malformed integer in any variable falls back to the default without a warning.
 - Every 5xx leaves a JSON line on stderr (`level`, `status`, `method`, `path`, `error`, `message`); the bench copies it into the reason for its verdict.
@@ -39,7 +39,7 @@ They are switched on at start-up with `REGRESSIONS=n_plus_one,slow_dependency`, 
 | `n_plus_one` | checkout makes 4 queries per line instead of 3 for the whole order | — |
 | `slow_dependency` | the provider takes `delayMs` longer | `delayMs` (3000) |
 | `aggressive_retries` | provider calls with a short timeout and retries without backoff | `timeoutMs` (500), `retries` (3) |
-| `pool_leak` | a fraction of checkouts does not return its connection to the pool | `rate` (0.2) |
+| `pool_leak` | a fraction of checkouts does not return its connection to the pool; switching it off gives the pool back what it leaked | `rate` (0.2) |
 | `new_error` | a fraction of `GET /products/:id` throws `InventoryMismatchError` | `rate` (0.1) |
 
 The provider calls happen inside the transaction on purpose: it is a common shape in production, and it is what turns a slow dependency into pressure on the pool.

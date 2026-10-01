@@ -276,6 +276,23 @@ describe.skipIf(!DATABASE_URL)("reference app (integration)", () => {
       await other.stop();
     }
   });
+
+  it("switching pool_leak off gives the pool back what it leaked: the next checkout succeeds", {
+    timeout: 30_000,
+  }, async () => {
+    const { ref: other, base } = await boot({ pgPoolMax: 3, pgConnectionTimeoutMs: 500, regressions: "pool_leak" });
+    const leaky = client(base);
+    try {
+      other.regressions.update({ pool_leak: { params: { rate: 1 } } });
+      for (let i = 0; i < 3; i++) expect((await leaky.checkout()).status).toBe(201);
+      expect((await leaky.checkout()).status).toBe(503);
+
+      expect((await leaky.setRegressions({ pool_leak: { enabled: false } })).status).toBe(200);
+      expect((await leaky.checkout()).status).toBe(201);
+    } finally {
+      await other.stop();
+    }
+  });
 });
 
 describe.skipIf(!DATABASE_URL)("checkout under concurrency", () => {
