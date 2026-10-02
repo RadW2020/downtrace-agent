@@ -785,6 +785,34 @@ describe("a retry of an operation", () => {
     expect(only(calls, 1).headers["idempotency-key"]).toBe("key-1");
   });
 
+  // A close is a decision with an author, and the cloud does not let a second one rewrite it: closing a
+  // finding that is already closed is a 409 that changes nothing. The agent reads that in the description
+  // before it calls, and in the refusal after, with how the finding stands closed.
+  it("says in close_finding's description what the 409 of a closed finding means", () => {
+    const description = toolNamed("close_finding")?.description ?? "";
+    for (const what of ["already closed", "409", "changes nothing", "closedBy", "closedNote", "closedAt"]) {
+      expect(description, what).toContain(what);
+    }
+    expect(description).toContain("same `idempotencyKey`");
+  });
+
+  it("hands the 409 of a closed finding back with how it stands, and sends exactly one request", async () => {
+    const standing =
+      `{"error":"this finding is already closed, so nothing was changed","finding":7,"state":"closed",` +
+      `"closedReason":"expected","closedBy":"ana","closedNote":"the planned migration",` +
+      `"closedAt":"2026-10-02T09:00:00Z"}`;
+    const { s, calls } = server([{ status: 409, body: standing }]);
+    const out = (await s.handle("tools/call", {
+      name: "close_finding",
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    for (const what of ["409", "already closed", `"closedBy":"ana"`, `"closedNote":"the planned migration"`]) {
+      expect(said(out), what).toContain(what);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
   // Enumerated from the source, not from a list here (repo rule): an operation added later that does not
   // declare the key would make the README false again, and this is the test that says so.
   it("declares the idempotency key in every operation, and in no read", () => {
