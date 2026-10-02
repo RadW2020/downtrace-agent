@@ -29,7 +29,17 @@ The token is read from the environment and never from an argument: an argument e
 
 ## What it speaks
 
-Standard input and output, JSON-RPC 2.0, MCP revision `2024-11-05`. Tools only — no resources, no prompts.
+Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts.
+
+**MCP revisions `2025-11-25`, `2025-06-18` and `2024-11-05`, and the client's `initialize` chooses.** A revision this server speaks is answered with that same one. Any other is answered with the newest one this server speaks that is not later than it; one earlier than all three, a value that is not a revision, or none at all, with `2025-11-25`. So a client that asks for `2025-03-26` gets `2024-11-05`: that revision obliges a server to accept JSON-RPC batches, which the next one withdrew, and this server does not implement it. A `2024-11-05` session gets exactly the messages it always got.
+
+**From `2025-06-18`, every tool carries its hints** (`annotations`). A read says `readOnlyHint: true`. An operation says `readOnlyHint: false` and `idempotentHint: false` —without its key, repeating an operation is another operation— and `destructiveHint: true` when it can take back or overwrite what somebody decided: closing a finding, accepting a reference, annotating a finding (which can reopen it), resolving, ignoring or unignoring an error, a silence and its lifting. The ones that only add a record beside the others —a rating, an assessment, a note on an error, a regression, a capture request— say `destructiveHint: false`. No tool reaches beyond the cloud, so none is open-world. They are hints: what a credential may do is still decided by the cloud, by its level.
+
+**From `2025-06-18`, a result carries `structuredContent`** beside its text: the JSON object the cloud answered, parsed as it came, so anything under `fromService` is still wrapped. There is no `outputSchema`, because declaring one obliges a server to keep to it and the shape belongs to the API. A refusal, or an answer that is not a JSON object, carries only its text.
+
+**In every revision, the schemas say what the API accepts.** A closed set of values is an `enum`, an instant a `date-time`, and the length of the errors list a whole number from 1 to 200; identifiers are strings. The values of each `enum` are written here, because this package does not read the cloud's code, and an end-to-end walk compares them with the cloud's in both directions.
+
+A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own.
 
 **No dependencies.** The protocol a tools-only server needs is three methods, and it is written out here. See ADR 0078 for the argument and for the risk.
 

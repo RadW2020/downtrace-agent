@@ -11,9 +11,36 @@ import { type Tool, toolNamed, tools } from "./tools.ts";
  * (ADR 0078, gh-281).
  */
 
-/** The MCP revision this server implements. A constant because the protocol is written out here, not
- * imported: if it moves, this is the line that has to move with it. */
-export const PROTOCOL_VERSION = "2024-11-05";
+/**
+ * The MCP revisions this server speaks, newest first. A constant because the protocol is written out here,
+ * not imported: if it moves, this is the line that has to move with it, and the tests say what else (ADR 0078).
+ *
+ * `2025-03-26` is not among them. It is the revision that brought the hints, and it also obliges a server to
+ * accept JSON-RPC batches, which `2025-06-18` withdrew: a client that asks for it gets `2024-11-05`, which is
+ * what it got before this server spoke anything newer (DT-9).
+ */
+export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2024-11-05"] as const;
+
+export type ProtocolVersion = (typeof PROTOCOL_VERSIONS)[number];
+
+/** The newest revision, and the one a client that names none, or none this server can step back to, gets. */
+export const PROTOCOL_VERSION: ProtocolVersion = PROTOCOL_VERSIONS[0];
+
+/**
+ * The first revision whose tools carry `annotations` and whose results carry `structuredContent`. A session
+ * of an earlier one gets neither, and its messages are the ones it always got.
+ */
+const ANNOTATED_SINCE: ProtocolVersion = "2025-06-18";
+
+/**
+ * The revision a session speaks, from the one its client asked for: that one when this server speaks it;
+ * otherwise the newest this server speaks that is not later; and the newest of all when none is earlier or
+ * what came is not a revision. A revision is a date, so «not later» is the order of the strings.
+ */
+function negotiate(requested: unknown): ProtocolVersion {
+  if (typeof requested !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(requested)) return PROTOCOL_VERSION;
+  return PROTOCOL_VERSIONS.find((v) => v <= requested) ?? PROTOCOL_VERSION;
+}
 
 export const SERVER_NAME = "downtrace";
 
@@ -27,16 +54,39 @@ export interface ServerOptions {
   timeoutMs?: number;
 }
 
-/** What a tool call answers with. `isError` is MCP's way of saying "this failed and the session is fine". */
+/**
+ * What a tool call answers with. `isError` is MCP's way of saying "this failed and the session is fine";
+ * `structuredContent`, from 2025-06-18, is the object the cloud answered, beside its text.
+ */
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
+}
+
+/**
+ * What a tool says about itself from 2025-06-18. Hints, as the protocol calls them, and not authority: the
+ * cloud still decides by the credential's level. Nothing here reaches beyond the cloud this server talks
+ * to, so no tool is open-world.
+ */
+interface ToolAnnotations {
+  readOnlyHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint: boolean;
 }
 
 export function createServer(opts: ServerOptions) {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const newKey = opts.newKey ?? (() => crypto.randomUUID());
   const timeoutMs = opts.timeoutMs ?? 30_000;
+  /**
+   * The revision this session speaks, which `initialize` negotiates. One process is one session over stdio.
+   * Before a client initializes, the newest: the protocol has it initialize first, and a client that names
+   * no revision gets that one anyway.
+   */
+  let revision: ProtocolVersion = PROTOCOL_VERSION;
+  const annotated = () => revision >= ANNOTATED_SINCE;
 
   async function call(tool: Tool, args: Record<string, unknown>): Promise<ToolResult> {
     if (tool.operates && opts.config.token === "") {
@@ -94,14 +144,22 @@ export function createServer(opts: ServerOptions) {
     if (!res.ok) {
       return text(`the cloud answered ${res.status}: ${payload}`, true);
     }
-    return text(payload);
+    const result = text(payload);
+    if (annotated()) {
+      // The object as the cloud wrote it, parsed and not rebuilt: whatever is under `fromService` stays
+      // under it, still wrapped (invariant 12). The text stays beside it, for whoever reads the text.
+      const structured = jsonObject(payload);
+      if (structured !== undefined) result.structuredContent = structured;
+    }
+    return result;
   }
 
   async function handle(method: string, params: unknown): Promise<unknown> {
     switch (method) {
       case "initialize":
+        revision = negotiate(isObject(params) ? params.protocolVersion : undefined);
         return {
-          protocolVersion: PROTOCOL_VERSION,
+          protocolVersion: revision,
           capabilities: { tools: {} },
           serverInfo: { name: SERVER_NAME, version: opts.version },
           instructions:
@@ -120,7 +178,13 @@ export function createServer(opts: ServerOptions) {
       case "ping":
         return {};
       case "tools/list":
-        return { tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
+        return {
+          tools: tools.map(({ name, description, inputSchema, ...tool }) =>
+            annotated()
+              ? { name, description, inputSchema, annotations: annotationsOf(tool) }
+              : { name, description, inputSchema },
+          ),
+        };
       case "tools/call": {
         const p = (params ?? {}) as { name?: unknown; arguments?: unknown };
         const tool = typeof p.name === "string" ? toolNamed(p.name) : undefined;
@@ -174,6 +238,40 @@ export function createServer(opts: ServerOptions) {
 
 function text(body: string, isError = false): ToolResult {
   return { content: [{ type: "text", text: body }], ...(isError ? { isError: true } : {}) };
+}
+
+/**
+ * The hints of a tool. A read only reads. An operation is not idempotent by itself —without its key,
+ * repeating one is another operation (RES-01)— and says whether it is destructive; one that did not say
+ * would be published as the protocol's default for a missing hint, destructive.
+ */
+function annotationsOf(tool: Pick<Tool, "operates" | "destructive">): ToolAnnotations {
+  if (!tool.operates) return { readOnlyHint: true, openWorldHint: false };
+  return {
+    readOnlyHint: false,
+    destructiveHint: tool.destructive ?? true,
+    idempotentHint: false,
+    openWorldHint: false,
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The answer as an object, when it is one. `structuredContent` is an object by the protocol, so an answer
+ * that is empty, not JSON, or JSON of another shape has none: that is the whole of handling it, because the
+ * text beside it still carries every byte the cloud sent.
+ */
+function jsonObject(payload: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  return isObject(parsed) ? parsed : undefined;
 }
 
 /**

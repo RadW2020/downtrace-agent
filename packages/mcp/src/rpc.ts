@@ -5,7 +5,8 @@
  * Written out rather than pulled in. The official SDK is the conventional choice and brings a dependency tree
  * for what is, on a tools-only server, three methods; the two published packages of this repo have zero
  * runtime dependencies and that is worth keeping. The risk is real and named in ADR 0078: the protocol could
- * move under us. What holds it is that `PROTOCOL_VERSION` is a constant and every message shape has a test.
+ * move under us. What holds it is that the revisions it speaks, `PROTOCOL_VERSIONS`, are a constant list and
+ * every message shape has a test in each revision it differs in.
  */
 
 /** A request or a notification arriving from the client. */

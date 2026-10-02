@@ -6,12 +6,32 @@
  * capability missing here is a bug and not an omission (gh-281).
  */
 
+/**
+ * One argument, in the part of JSON Schema a client can act on before it calls: the type, the closed set of
+ * values when there is one, the format of an instant and the bounds of a count (DT-9). The same in every
+ * revision this server speaks.
+ */
+export interface Property {
+  type: "string" | "number" | "integer";
+  description: string;
+  /**
+   * The values the cloud accepts, when it accepts a closed set. Written here because this package cannot
+   * read the cloud (invariant 10); the end-to-end walk compares each one with the cloud's enumerator, in both
+   * directions.
+   */
+  enum?: readonly string[];
+  /** An RFC 3339 instant. */
+  format?: "date-time";
+  minimum?: number;
+  maximum?: number;
+}
+
 export interface Tool {
   name: string;
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<string, Property>;
     required?: string[];
   };
   /** How to reach it. `path` may carry `{slug}`, `{id}` and `{hypothesis}`. */
@@ -21,6 +41,13 @@ export interface Tool {
   query?: string[];
   /** True when this changes something: the caller sends an idempotency key and, sometimes, a version. */
   operates?: boolean;
+  /**
+   * For an operation: whether it can take back or overwrite what somebody decided —close, accept, reopen,
+   * move a triage state, silence or lift a silence— rather than only add a record beside the others. Every
+   * operation says which, and it is published as `destructiveHint` (DT-9): a hint for the client, while the
+   * cloud still decides by the credential's level.
+   */
+  destructive?: boolean;
   /** True when RES-01 names this as depending on the report a decision was read from (ADR 0074). */
   versioned?: boolean;
 }
@@ -37,6 +64,9 @@ const error = {
  * end-to-end walk checks that this names every one of them.
  */
 export const errorOrders = ["last-seen", "first-seen", "occurrences"] as const;
+
+/** The two directions every ordered list takes. */
+const directions = ["desc", "asc"] as const;
 
 const why = {
   type: "string",
@@ -112,16 +142,18 @@ export const tools: Tool[] = [
         project,
         sort: {
           type: "string",
+          enum: ["environment", "endpoint", "requests", "errors", "p50", "p95", "p99", "max"],
           description:
-            "What to order the endpoints by: `environment`, `endpoint`, `requests` (the default), `errors` " +
-            "(the share of requests that returned 5xx), `p50`, `p95`, `p99` or `max`. By the measurement, " +
-            "not by the text it is printed as, and a route with no requests is last on every measurement.",
+            "What to order the endpoints by. `requests` is the default, and `errors` is the share of requests " +
+            "that returned 5xx. By the measurement, not by the text it is printed as, and a route with no " +
+            "requests is last on every measurement.",
         },
         order: {
           type: "string",
+          enum: directions,
           description:
-            "`desc` or `asc`. By default the worst first for a measurement and alphabetical for a name, " +
-            "which is what the page does on the first click.",
+            "Which way. By default the worst first for a measurement and alphabetical for a name, which is " +
+            "what the page does on the first click.",
         },
       },
       required: ["project"],
@@ -175,7 +207,11 @@ export const tools: Tool[] = [
       properties: {
         project,
         finding,
-        since: { type: "string", description: "RFC 3339 instant of the intervention. Required." },
+        since: {
+          type: "string",
+          format: "date-time",
+          description: "RFC 3339 instant of the intervention. Required.",
+        },
       },
       required: ["project", "finding", "since"],
     },
@@ -197,16 +233,18 @@ export const tools: Tool[] = [
       type: "object",
       properties: {
         project,
-        from: { type: "string", description: "RFC 3339 instant." },
-        to: { type: "string", description: "RFC 3339 instant." },
+        from: { type: "string", format: "date-time", description: "RFC 3339 instant." },
+        to: { type: "string", format: "date-time", description: "RFC 3339 instant." },
         baselineFrom: {
           type: "string",
+          format: "date-time",
           description:
             "RFC 3339 instant: the start of the other window, the one to compare against. Goes with " +
             "`baselineTo`, both or neither.",
         },
         baselineTo: {
           type: "string",
+          format: "date-time",
           description:
             "RFC 3339 instant: the end of the other window, the one to compare against. Goes with " +
             "`baselineFrom`, both or neither.",
@@ -234,9 +272,10 @@ export const tools: Tool[] = [
       type: "object",
       properties: {
         project,
-        limit: { type: "number", description: "How many to return, 1 to 200. Fifty by default." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "How many to return. Fifty by default." },
         sort: {
           type: "string",
+          enum: errorOrders,
           description:
             `What to order them by: ${errorOrders.map((o) => `\`${o}\``).join(", ")}. The first is when ` +
             "each was last seen, and the default; then when it was first seen, which puts first what arrived " +
@@ -246,14 +285,16 @@ export const tools: Tool[] = [
         },
         order: {
           type: "string",
-          description: "`desc` (the default: the newest or the most first) or `asc`.",
+          enum: directions,
+          description: "Which way. `desc` is the default: the newest or the most first.",
         },
         state: {
           type: "string",
+          enum: ["waiting", "open", "resolved", "ignored", "reappeared", "all"],
           description:
-            "Which triage states to list: `waiting` (the default — open and reappeared, the ones waiting " +
-            "for somebody), `open`, `resolved`, `ignored`, `reappeared` or `all`. Whatever you ask for, the " +
-            "answer says which filter it applied and how many errors it is not showing.",
+            "Which triage states to list. `waiting` is the default: open and reappeared, the ones waiting for " +
+            "somebody; `all` is every state. Whatever you ask for, the answer says which filter it applied and " +
+            "how many errors it is not showing.",
         },
       },
       required: ["project"],
@@ -296,6 +337,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/errors/{id}/resolve",
     operates: true,
+    destructive: true,
   },
   {
     name: "ignore_error",
@@ -309,7 +351,11 @@ export const tools: Tool[] = [
       properties: {
         project,
         error,
-        until: { type: "string", description: "RFC 3339 instant, at most thirty days away. Required." },
+        until: {
+          type: "string",
+          format: "date-time",
+          description: "RFC 3339 instant, at most thirty days away. Required.",
+        },
         why,
         idempotencyKey,
       },
@@ -318,6 +364,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/errors/{id}/ignore",
     operates: true,
+    destructive: true,
   },
   {
     name: "unignore_error",
@@ -330,6 +377,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/errors/{id}/unignore",
     operates: true,
+    destructive: true,
   },
   {
     name: "annotate_error",
@@ -351,6 +399,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/errors/{id}/annotations",
     operates: true,
+    destructive: false,
   },
   {
     name: "list_captures",
@@ -392,7 +441,7 @@ export const tools: Tool[] = [
         route: { type: "string", description: "Route template, when watching a route." },
         kind: { type: "string", description: "Dependency kind, when watching a dependency." },
         target: { type: "string", description: "Dependency target, when watching a dependency." },
-        windowSeconds: { type: "number", description: "How long to watch for." },
+        windowSeconds: { type: "integer", description: "How long to watch for, in whole seconds." },
         why,
         idempotencyKey,
       },
@@ -401,6 +450,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/captures",
     operates: true,
+    destructive: false,
   },
   {
     name: "close_finding",
@@ -413,7 +463,13 @@ export const tools: Tool[] = [
       properties: {
         project,
         finding,
-        reason: { type: "string", description: "expected | noise | resolved-without-telemetry" },
+        reason: {
+          type: "string",
+          enum: ["expected", "noise", "resolved-without-telemetry"],
+          description:
+            "Which of the three: it was expected, it was noise, or you resolved it and there is no telemetry " +
+            "to confirm it.",
+        },
         why,
         version,
         idempotencyKey,
@@ -423,6 +479,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/close",
     operates: true,
+    destructive: true,
     versioned: true,
   },
   {
@@ -436,6 +493,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/accept-reference",
     operates: true,
+    destructive: true,
     versioned: true,
   },
   {
@@ -448,7 +506,11 @@ export const tools: Tool[] = [
         project,
         finding,
         hypothesis: { type: "string", description: "The hypothesis' stable id." },
-        state: { type: "string", description: "supported | weakened | discarded | not-assessed" },
+        state: {
+          type: "string",
+          enum: ["supported", "weakened", "discarded", "not-assessed"],
+          description: "Your reading, in the same four states Downtrace's own evaluation uses.",
+        },
         why,
         version,
         idempotencyKey,
@@ -458,6 +520,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/hypotheses/{hypothesis}/assessment",
     operates: true,
+    destructive: false,
     versioned: true,
   },
   {
@@ -473,8 +536,16 @@ export const tools: Tool[] = [
       properties: {
         project,
         finding,
-        accuracy: { type: "string", description: "correct | partial | incorrect | not-assessable" },
-        usefulness: { type: "string", description: "useful | unnecessary" },
+        accuracy: {
+          type: "string",
+          enum: ["correct", "partial", "incorrect", "not-assessable"],
+          description: "Was the diagnosis right.",
+        },
+        usefulness: {
+          type: "string",
+          enum: ["useful", "unnecessary"],
+          description: "Was the alert worth having.",
+        },
         note: { type: "string", description: "The justification of the rating, when you have one." },
         idempotencyKey,
       },
@@ -483,6 +554,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/feedback",
     operates: true,
+    destructive: false,
   },
   {
     name: "annotate_finding",
@@ -495,7 +567,13 @@ export const tools: Tool[] = [
       properties: {
         project,
         finding,
-        kind: { type: "string", description: "note | acknowledge | unacknowledge | reopen. Default note." },
+        kind: {
+          type: "string",
+          enum: ["note", "acknowledge", "unacknowledge", "reopen"],
+          description:
+            "What it is: a note, the default; acknowledging the finding, or taking that back; or reopening a " +
+            "finding that was closed by hand.",
+        },
         note: { type: "string", description: "What you know. Required." },
         idempotencyKey,
       },
@@ -504,6 +582,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/findings/{id}/annotations",
     operates: true,
+    destructive: true,
   },
   {
     name: "record_regression",
@@ -519,6 +598,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/regressions",
     operates: true,
+    destructive: false,
   },
   {
     name: "silence_alerts",
@@ -530,7 +610,11 @@ export const tools: Tool[] = [
       type: "object",
       properties: {
         project,
-        scope: { type: "string", description: "project | footprint" },
+        scope: {
+          type: "string",
+          enum: ["project", "footprint"],
+          description: "`project` silences every alert of the project; `footprint`, those of one finding's footprint.",
+        },
         finding: {
           type: "string",
           description:
@@ -538,7 +622,7 @@ export const tools: Tool[] = [
             "footprint from it, so nothing is typed by hand and a finding without a route is silenced too. " +
             "Refused with `project`. The detector keeps running: the finding still opens and still counts.",
         },
-        until: { type: "string", description: "RFC 3339 instant, at most thirty days away." },
+        until: { type: "string", format: "date-time", description: "RFC 3339 instant, at most thirty days away." },
         why,
         idempotencyKey,
       },
@@ -547,6 +631,7 @@ export const tools: Tool[] = [
     method: "POST",
     path: "/api/p/{slug}/silences",
     operates: true,
+    destructive: true,
   },
   {
     name: "lift_silence",
@@ -559,6 +644,7 @@ export const tools: Tool[] = [
     method: "DELETE",
     path: "/api/p/{slug}/silences/{id}",
     operates: true,
+    destructive: true,
   },
 ];
 
