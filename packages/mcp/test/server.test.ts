@@ -508,6 +508,23 @@ describe("calling a tool", () => {
     );
   });
 
+  // A window with more routes than one read carries is read to its busiest, and a route past that cut is not one
+  // that appeared or went away: a coding agent that reads `new` or `gone` there concludes what nobody measured.
+  it("says in read_history's description what an unevaluable row past a window's cut means", () => {
+    const description = toolNamed("read_history")?.description ?? "";
+    for (const said of [
+      "`baseline.routes`",
+      "`unevaluable`",
+      "`why`",
+      "past that cut",
+      "`change` is `unknown`, not `new` or `gone`",
+      "null rather than zero",
+      "`limits` names the window that was cut",
+    ]) {
+      expect(description, said).toContain(said);
+    }
+  });
+
   it("puts what belongs in the query string there and the rest in the body", async () => {
     const { s, calls } = server([{}, {}]);
     await s.handle("tools/call", {

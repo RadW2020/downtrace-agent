@@ -254,7 +254,11 @@ export const tools: Tool[] = [
       "it, and `comparison`, one row per endpoint and metric with before, after, the change and whether it " +
       "got worse — the same table the page shows. One of the two alone is refused with the reason the page " +
       "gives for the same selection, and a side with nothing in the series comes back as `comparison: []` " +
-      "with `limits` naming the side.",
+      "with `limits` naming the side. Each window is read to its 200 busiest routes, and `routes` and " +
+      "`baseline.routes` say how many each has. A row that is `unevaluable` says why in `why`: its route is " +
+      "in one window only (`change` is `new` or `gone`), or one window had more routes than it read and this " +
+      "route was past that cut — then `change` is `unknown`, not `new` or `gone`, the requests of that window " +
+      "are null rather than zero, and `limits` names the window that was cut.",
     inputSchema: {
       type: "object",
       properties: {
