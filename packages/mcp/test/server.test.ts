@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ConfigError, configFrom } from "../src/config.ts";
 import { type Handler, linesOf, serve } from "../src/rpc.ts";
 import { createServer, PROTOCOL_VERSION, PROTOCOL_VERSIONS, SERVER_NAME } from "../src/server.ts";
-import { errorOrders, toolNamed, tools } from "../src/tools.ts";
+import { errorOrders, type Tool, toolNamed, tools } from "../src/tools.ts";
 
 /**
  * `product.md:196`: «an agent must be able to operate the product, not only read what somebody else extracted»
@@ -30,7 +30,13 @@ interface Call {
   body: unknown;
 }
 
-function server(answers: Array<{ status?: number; body?: string } | Error> = []) {
+/**
+ * What the cloud answers each call with, in order: a status and a body, an error `fetch` throws before any
+ * answer came, or a `Response` as it is, for an answer whose body is what the test is about.
+ */
+type Answered = { status?: number; body?: string } | Error | Response;
+
+function server(answers: Answered[] = []) {
   const calls: Call[] = [];
   const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({
@@ -41,6 +47,7 @@ function server(answers: Array<{ status?: number; body?: string } | Error> = [])
     });
     const next = answers.shift() ?? { status: 200, body: "{}" };
     if (next instanceof Error) throw next;
+    if (next instanceof Response) return next;
     return new Response(next.body ?? "{}", { status: next.status ?? 200 });
   }) as unknown as typeof fetch;
   const s = createServer({
@@ -326,17 +333,18 @@ describe("the structured result", () => {
 
   // A refusal is read as the sentence it is, whoever refused: the cloud, the network or the server itself.
   it("is absent when the call failed, wherever it failed", async () => {
-    const failures: Array<{ answers: Array<{ status?: number; body?: string } | Error>; name: string; args: object }> =
-      [
-        {
-          answers: [{ status: 409, body: `{"error":"already closed"}` }],
-          name: "close_finding",
-          args: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
-        },
-        { answers: [new Error("connect ECONNREFUSED")], name: "project_status", args: { project: "tienda" } },
-        { answers: [], name: "verify_recovery", args: { project: "tienda", finding: "7" } },
-        { answers: [], name: "make_it_faster", args: {} },
-      ];
+    const failures: Array<{ answers: Answered[]; name: string; args: object }> = [
+      {
+        answers: [{ status: 409, body: `{"error":"already closed"}` }],
+        name: "close_finding",
+        args: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
+      },
+      { answers: [new Error("connect ECONNREFUSED")], name: "project_status", args: { project: "tienda" } },
+      // The status came and the body did not, whole: its first bytes are no object to hand back (DT-61).
+      { answers: [cutShort(new TypeError("terminated"))], name: "list_findings", args: { project: "tienda" } },
+      { answers: [], name: "verify_recovery", args: { project: "tienda", finding: "7" } },
+      { answers: [], name: "make_it_faster", args: {} },
+    ];
     for (const f of failures) {
       const { s } = server(f.answers);
       await opened(s, "2025-11-25");
@@ -1791,6 +1799,187 @@ describe("a cancellation", () => {
     r.end();
     await r.served;
     expect(r.answers()).toEqual([{ jsonrpc: "2.0", id: 7, result: { first: true } }]);
+  });
+});
+
+/** The first bytes of an answer cut short: enough that reading it has begun, and not a whole JSON value. */
+const firstBytes = new TextEncoder().encode(`{"findings":[{"id":7,`);
+
+/**
+ * An answer whose status and headers came and whose body fails partway, the way `fetch` hands one over when
+ * the connection drops after the headers: its first bytes, and then reading it rejects with what cut it.
+ */
+function cutShort(cut: Error, status = 200): Response {
+  let sent = false;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.error(cut);
+          return;
+        }
+        sent = true;
+        controller.enqueue(firstBytes);
+      },
+    }),
+    { status },
+  );
+}
+
+/**
+ * A server whose cloud sends its status, its headers and its first bytes at once, and then nothing, until the
+ * request's signal ends the body with its reason: that is how `fetch` ends a body still being read, whether
+ * the timeout or a cancellation aborted it. `reading` holds the signal of every request whose body the server
+ * has begun to read and is still waiting on.
+ */
+function stalledCloud(timeoutMs?: number) {
+  const reading: AbortSignal[] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) throw new Error("a request to the cloud without a signal");
+    let sent = false;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(firstBytes);
+            return;
+          }
+          reading.push(signal);
+          // Nothing more comes: what ends this read is the abort above, with its reason.
+          return new Promise<void>(() => undefined);
+        },
+      }),
+    );
+  }) as unknown as typeof fetch;
+  const s = createServer({
+    config: { url: "https://cloud.test", token: "tok" },
+    version: "0.0.0",
+    fetchImpl,
+    newKey: () => "key-1",
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+  return { s, reading };
+}
+
+/** The arguments every tool requires, each given as a string, which is all these tests need of them. */
+function required(t: Tool): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const k of t.inputSchema.required ?? []) args[k] = "x";
+  return args;
+}
+
+/**
+ * DT-61: an answer whose status came and whose body did not, whole — the connection dropped after the
+ * headers, or the timeout ran out while the body was being read. It is a result the agent reads, as an API
+ * error and an unreachable cloud are (ADR 0078), and not a JSON-RPC error. It does not say the cloud could
+ * not be reached, because it was; and for an operation, which the cloud may then have applied, it names the
+ * key the operation was sent with, so the retry with that key is not a second one (RES-01).
+ */
+describe("an answer cut short", () => {
+  const listFindings = (id: string | number) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name: "list_findings", arguments: { project: "tienda" } },
+  });
+
+  it("is a result that says the status came and the body did not, and not a JSON-RPC error", async () => {
+    const { s } = server([cutShort(new TypeError("terminated"))]);
+    const r = running(s.handle);
+    r.send(listFindings(1));
+    r.end();
+    await r.served;
+    const [answer] = r.answers();
+    expect(answer).not.toHaveProperty("error");
+    expect(answer).toMatchObject({ id: 1, result: { isError: true } });
+    expect(said(answer?.result as Called)).toBe("the cloud answered 200, but its answer was cut short: terminated");
+  });
+
+  it("gives the status it came with, a refusal's too", async () => {
+    const { s } = server([cutShort(new TypeError("terminated"), 503)]);
+    const out = (await s.handle("tools/call", { name: "list_findings", arguments: { project: "tienda" } })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toBe("the cloud answered 503, but its answer was cut short: terminated");
+  });
+
+  // The timeout bounds the whole wait, the body's read included: a body that stalls is cut at the same 30
+  // seconds as a cloud that never answers, and said apart from it.
+  it("is what the timeout leaves when it runs out while the body is being read", async () => {
+    const { s, reading } = stalledCloud(20);
+    const r = running(s.handle);
+    r.send(listFindings(1));
+    r.end();
+    await r.served;
+    expect(reading).toHaveLength(1);
+    const reason = reading[0]?.reason as unknown;
+    expect(reason).toMatchObject({ name: "TimeoutError" });
+    const [answer] = r.answers();
+    expect(answer).not.toHaveProperty("error");
+    expect(answer).toMatchObject({ id: 1, result: { isError: true } });
+    expect(said(answer?.result as Called)).toBe(
+      `the cloud answered 200, but its answer was cut short: ${reason instanceof Error ? reason.message : ""}`,
+    );
+    expect(said(answer?.result as Called)).not.toContain("could not reach the cloud");
+  });
+
+  // Enumerated from the source (repo rule): an operation added later is one whose answer can be cut short too.
+  it("names, for every operation, the key it was sent with, the generated one or the caller's", async () => {
+    const operating = tools.filter((t) => t.operates);
+    expect(operating.length).toBeGreaterThan(0);
+    for (const t of operating) {
+      for (const given of [undefined, "retry-of-mine"]) {
+        const { s, calls } = server([cutShort(new TypeError("terminated"))]);
+        const args = required(t);
+        if (given !== undefined) args.idempotencyKey = given;
+        const out = (await s.handle("tools/call", { name: t.name, arguments: args })) as Called;
+        const key = given ?? "key-1";
+        expect(only(calls, 0).headers["idempotency-key"], t.name).toBe(key);
+        expect(out.isError, t.name).toBe(true);
+        expect(said(out), t.name).toBe(
+          "the cloud answered 200, but its answer was cut short: terminated. The operation may or may not " +
+            "have been applied: call it again with the same arguments and the `idempotencyKey` " +
+            `"${key}", and the cloud will not apply it a second time.`,
+        );
+      }
+    }
+  });
+
+  it("names no key for a read, which is sent with none", async () => {
+    const reads = tools.filter((t) => !t.operates);
+    expect(reads.length).toBeGreaterThan(0);
+    for (const t of reads) {
+      const { s, calls } = server([cutShort(new TypeError("terminated"))]);
+      const out = (await s.handle("tools/call", { name: t.name, arguments: required(t) })) as Called;
+      expect(only(calls, 0).headers["idempotency-key"], t.name).toBeUndefined();
+      expect(out.isError, t.name).toBe(true);
+      expect(said(out), t.name).toBe("the cloud answered 200, but its answer was cut short: terminated");
+    }
+  });
+
+  // DT-39's rule holds whatever the read had reached: a cancelled request is never answered, not even an
+  // operation's whose sentence would have named its key.
+  it("leaves a request cancelled while its body was being read unanswered", async () => {
+    const { s, reading } = stalledCloud();
+    const r = running(s.handle);
+    r.send({
+      jsonrpc: "2.0",
+      id: "op-1",
+      method: "tools/call",
+      params: { name: "annotate_finding", arguments: { project: "tienda", finding: "7", note: "reverted" } },
+    });
+    await vi.waitFor(() => expect(reading).toHaveLength(1));
+    r.send(cancel({ requestId: "op-1" }));
+    await vi.waitFor(() => expect(reading[0]?.aborted).toBe(true));
+    r.send(ping(2));
+    r.end();
+    await r.served;
+    expect(reading[0]?.reason).toMatchObject({ name: "AbortError" });
+    expect(r.ids()).toEqual([2]);
   });
 });
 

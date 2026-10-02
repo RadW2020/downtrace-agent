@@ -113,6 +113,8 @@ export function createServer(opts: ServerOptions) {
       headers["content-type"] = "application/json";
       body = JSON.stringify(bodyOf(tool, args));
     }
+    // The key an operation is sent with, kept because an answer cut short names it back (DT-61).
+    let key: string | undefined;
     if (tool.operates) {
       // Every operation carries one, always. The caller's key when the agent says this call is the retry of
       // one it already made — the operations declare it, so the agent knows to pass it (gh-747) — and a
@@ -120,8 +122,8 @@ export function createServer(opts: ServerOptions) {
       // without a key that retry is a second operation (RES-01). A key that is not a usable string is treated
       // as absent rather than sent: an empty one would reach the cloud as an empty header, and its gate does
       // nothing for that.
-      headers["idempotency-key"] =
-        typeof args.idempotencyKey === "string" && args.idempotencyKey !== "" ? args.idempotencyKey : newKey();
+      key = typeof args.idempotencyKey === "string" && args.idempotencyKey !== "" ? args.idempotencyKey : newKey();
+      headers["idempotency-key"] = key;
     }
     if (tool.versioned && typeof args.version === "string" && args.version !== "") {
       headers["if-match"] = args.version;
@@ -137,14 +139,24 @@ export function createServer(opts: ServerOptions) {
         ...(body === undefined ? {} : { body }),
         // Whichever comes first: the client cancelling the request, or the cloud taking longer than the
         // timeout. A cancelled call is never answered, so what it returns then is read by nobody; one the
-        // timeout ends is answered with the cloud it could not reach.
+        // timeout ends is answered with the cloud it could not reach or, once the status came, with an
+        // answer cut short.
         signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
       });
     } catch (err) {
       // A cloud that is unreachable is a result, not a crash: the session survives and the agent is told.
-      return text(`could not reach the cloud: ${err instanceof Error ? err.message : String(err)}`, true);
+      return text(`could not reach the cloud: ${messageOf(err)}`, true);
     }
-    const payload = await res.text();
+    let payload: string;
+    try {
+      // The body comes after the status, and reading it can fail too: the connection drops partway, or the
+      // same signal ends it — the timeout bounds the whole wait, the read included. Thrown, it would reach the
+      // client as a JSON-RPC error and not as a result it can read (DT-61, ADR 0078). A call cancelled during
+      // the read is still never answered: `serve` writes nothing for it, whatever this returns.
+      payload = await res.text();
+    } catch (err) {
+      return text(cutShort(res.status, err, key), true);
+    }
     if (!res.ok) {
       return text(`the cloud answered ${res.status}: ${payload}`, true);
     }
@@ -253,6 +265,26 @@ export function createServer(opts: ServerOptions) {
 
 function text(body: string, isError = false): ToolResult {
   return { content: [{ type: "text", text: body }], ...(isError ? { isError: true } : {}) };
+}
+
+/** What a failure says of itself, whether it was thrown as an `Error` or as anything else. */
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * What an answer cut short says: the status came and the body did not, whole (DT-61). Not «could not reach
+ * the cloud», because it was reached. An operation may then have been applied, and its key may be one this
+ * server generated, which the caller has no other way to learn: so the sentence names it, because the retry
+ * with that key is the one that is not a second operation (RES-01).
+ */
+function cutShort(status: number, err: unknown, key: string | undefined): string {
+  const said = `the cloud answered ${status}, but its answer was cut short: ${messageOf(err)}`;
+  if (key === undefined) return said;
+  return (
+    `${said}. The operation may or may not have been applied: call it again with the same arguments and ` +
+    `the \`idempotencyKey\` ${JSON.stringify(key)}, and the cloud will not apply it a second time.`
+  );
 }
 
 /**

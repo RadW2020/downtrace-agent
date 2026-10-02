@@ -47,6 +47,8 @@ Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts
 
 A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own. A credential refused for its level is told which: the cloud answers 403 with the `level` the credential has and the level the operation `needs` —or `access credential`, to the administration password at a tool about a project—, while a token that is not a usable credential —invented, expired or revoked— gets the 401, the same one for the three.
 
+An answer cut short is a result with `isError` too: its status came, and then the connection dropped or the 30 seconds ran out before the whole body did. It says the status the cloud answered, that its answer was cut short, and what cut it. An operation's then says it may or may not have been applied, and names the `idempotencyKey` it was sent with, the one this server generated when the call passed none: called again with the same arguments and that key, it is not applied a second time.
+
 **No dependencies.** The protocol a tools-only server needs is three methods, and it is written out here. See ADR 0078 for the argument and for the risk.
 
 ## The tools
