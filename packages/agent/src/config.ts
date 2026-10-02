@@ -1,3 +1,4 @@
+import { preservesSymlinksMain } from "./entry.ts";
 import { patternsOf } from "./exclude.ts";
 import { Sheddable, type SheddableLevel } from "./overhead.ts";
 import { PROFILE_WINDOW_MS } from "./profile.ts";
@@ -66,6 +67,13 @@ export interface AgentConfig {
    * arithmetic of ADR 0067 is about the registers, and no level touches one.
    */
   pgDepth: PgDepth;
+  /**
+   * Whether Node keeps the main module's symlinks: `--preserve-symlinks-main`, on the command line or in
+   * `NODE_OPTIONS`. Not a setting of the instrumentation but of the process it runs in, read here because this
+   * is where the environment is read: `pg` and Express are resolved from where Node runs the application, which
+   * is the realpath of its entry unless this says otherwise (DT-34).
+   */
+  preserveSymlinksMain: boolean;
 }
 
 /**
@@ -125,7 +133,10 @@ export const VERSION_ENV_VARS = [
   "RAILWAY_GIT_COMMIT_SHA",
 ] as const;
 
-export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResult {
+export function configFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  execArgv: readonly string[] = process.execArgv,
+): ConfigResult {
   const token = env.DOWNTRACE_TOKEN?.trim() ?? "";
   const rawUrl = env.DOWNTRACE_URL?.trim() ?? "";
   const inspect = env.DOWNTRACE_INSPECT?.trim();
@@ -175,6 +186,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ConfigResul
       minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
       shed: parseShed(env.DOWNTRACE_SHED),
       pgDepth: parsePgDepth(env.DOWNTRACE_PG_DEPTH),
+      preserveSymlinksMain: preservesSymlinksMain(execArgv, env.NODE_OPTIONS),
       excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,

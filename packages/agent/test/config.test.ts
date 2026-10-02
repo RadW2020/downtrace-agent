@@ -56,6 +56,27 @@ describe("configFromEnv", () => {
   });
 });
 
+describe("whether Node keeps the main module's symlinks (DT-34)", () => {
+  const inspecting = { DOWNTRACE_INSPECT: "stderr" };
+  function preserves(env: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
+    const r = configFromEnv(env, execArgv);
+    if (!r.ok) throw new Error(r.reason);
+    return r.config.preserveSymlinksMain;
+  }
+
+  it("is off by default, which is Node's default: the main module runs from its realpath", () => {
+    expect(preserves(inspecting, [])).toBe(false);
+  });
+
+  it("is read from NODE_OPTIONS and from the command line, which comes after it", () => {
+    expect(preserves({ ...inspecting, NODE_OPTIONS: "--preserve-symlinks-main" }, [])).toBe(true);
+    expect(preserves(inspecting, ["--preserve-symlinks-main"])).toBe(true);
+    expect(
+      preserves({ ...inspecting, NODE_OPTIONS: "--preserve-symlinks-main" }, ["--no-preserve-symlinks-main"]),
+    ).toBe(false);
+  });
+});
+
 describe("which observers to run", () => {
   it("runs everything by default, and when asked for all", () => {
     expect([...parseInstruments(undefined)].sort()).toEqual([...INSTRUMENTS].sort());

@@ -561,8 +561,15 @@ you would give an application log.
 
 ## Requirements
 
-Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI. Express
-route templates are used when present, and for a mounted router the template is the mount **as it was
+Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
+
+`pg` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+application loads. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
+(on the command line or in `NODE_OPTIONS`), as it is for Node too. A `pg` that cannot be resolved from there is
+reported as `unavailable` in the batch's observers, which `DOWNTRACE_INSPECT` shows you.
+
+Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every
 tenant — one route, not one per tenant. That is also what keeps a tenant's name out of the template when it is
 a plain word the heuristic below leaves as written. The route a request matched keeps that template when it fails

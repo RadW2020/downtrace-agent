@@ -46,20 +46,48 @@ const SYNC = /\b[A-Za-z_$][A-Za-z0-9_$]*Sync\b/;
  */
 const WAIT = /\bAtomics\.wait\b/;
 
-/** The lines of a piece of code that carry a finding, numbered from one as they are in the file. */
-function offendingLines(code: string): string[] {
+/**
+ * The decisions this guard has been given: a synchronous call the start-up needs, the one file it may be
+ * written in, and why. An allowance excuses that name in that file and nothing else — another `*Sync` beside
+ * it is still a finding, and so is the same name in any other file — and an allowance nothing uses any more is
+ * a finding too, so that none outlives its reason.
+ *
+ * - `realpathSync`, in `entry.ts` (DT-34). Node runs the main module from its realpath, and `pg` and Express
+ *   have to be resolved from the same place: from the symlinked binary a process may be started through,
+ *   nothing of the application resolves. It has to happen at start-up, before the application registers
+ *   anything, because a mount registered before Express is armed cannot be read after — there is no later
+ *   moment, and no promise to wait for. It runs once per process, from `Agent.start()`, never in a request:
+ *   invariant 1 is about the path of a request, and this is not in it. Nor is it the start-up's first
+ *   synchronous I/O: resolving `pg` and loading Express go through the module loader, which reads the disk
+ *   synchronously under names this guard cannot see.
+ */
+const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [{ file: "entry.ts", name: "realpathSync" }];
+
+/** Every name of the convention on a line, where `SYNC` stops at the first. */
+const SYNC_ALL = new RegExp(SYNC.source, "g");
+
+/**
+ * The lines of a piece of code that carry a finding, numbered from one as they are in the file. `allowed` is
+ * what `ALLOWED` gives the file the code comes from, and nothing by default.
+ */
+function offendingLines(code: string, allowed: readonly string[] = []): string[] {
   const lines: string[] = [];
   code.split("\n").forEach((line, index) => {
-    if (SYNC.test(line) || WAIT.test(line)) lines.push(`${index + 1}: ${line.trim()}`);
+    const blocking = (line.match(SYNC_ALL) ?? []).some((name) => !allowed.includes(name));
+    if (blocking || WAIT.test(line)) lines.push(`${index + 1}: ${line.trim()}`);
   });
   return lines;
+}
+
+function allowedIn(file: string): string[] {
+  return ALLOWED.filter((allowance) => allowance.file === file).map((allowance) => allowance.name);
 }
 
 function findings(): string[] {
   const all: string[] = [];
   for (const file of sources()) {
     const code = codeOf(readFileSync(join(SRC, file), "utf8"));
-    for (const line of offendingLines(code)) all.push(`${file} ${line}`);
+    for (const line of offendingLines(code, allowedIn(file))) all.push(`${file} ${line}`);
   }
   return all;
 }
@@ -83,9 +111,10 @@ describe("synchronous I/O in the agent", () => {
   // of a request». The guard reads that path as the **whole of src/**: which line is in the path of a request
   // is not something a test that reads files can decide — the sender is built at start-up and flushed from a
   // request, `agent.ts` holds both, and a file that is start-up today is shared with the request path tomorrow
-  // — and the start-up performs no synchronous I/O today: it reads the environment, a hostname and a uuid, and
-  // wires the components. The rule is stricter than the invariant and simpler to keep; if the start-up ever
-  // needs a `readFileSync`, this test is discussed, not weakened.
+  // — and the start-up performs no synchronous I/O of its own but the calls in `ALLOWED`: it reads the
+  // environment, a hostname and a uuid, resolves the application's entry, and wires the components. The rule
+  // is stricter than the invariant and simpler to keep; if the start-up ever needs another `readFileSync`,
+  // this test is discussed, not weakened — and what the discussion decided goes in `ALLOWED`, with its reason.
   it("performs no synchronous I/O and stops no thread, anywhere in the source", () => {
     expect(
       findings(),
@@ -105,6 +134,7 @@ describe("synchronous I/O in the agent", () => {
     ["a reference handed over", "const read = fs.readFileSync;"],
     ["a homegrown name of the same convention", "function flushSync() { write(fd, buffer); }"],
     ["a blocking wait", "Atomics.wait(shared, 0, 0);"],
+    ["a realpath in a file that was not allowed one", "return realpathSync(given);"],
   ])("sees the blocking form %s", (_what, text) => {
     expect(offendingLines(codeOf(text))).not.toEqual([]);
   });
@@ -119,6 +149,22 @@ describe("synchronous I/O in the agent", () => {
     ["a block comment", "/** Not an Atomics.wait, only a load. */\nconst flag = Atomics.load(shared, 0);"],
   ])("does not mistake %s for one", (_what, text) => {
     expect(offendingLines(codeOf(text))).toEqual([]);
+  });
+
+  it("excuses an allowed name and nothing beside it", () => {
+    expect(offendingLines(codeOf("return realpathSync(given);"), ["realpathSync"])).toEqual([]);
+    expect(offendingLines(codeOf("realpathSync(a); readFileSync(b);"), ["realpathSync"])).toEqual([
+      "1: realpathSync(a); readFileSync(b);",
+    ]);
+    expect(offendingLines(codeOf("Atomics.wait(shared, 0, 0);"), ["realpathSync"])).not.toEqual([]);
+  });
+
+  it("keeps no allowance its file no longer uses", () => {
+    for (const { file, name } of ALLOWED) {
+      expect(sources(), `${file} is not in the source`).toContain(file);
+      const code = codeOf(readFileSync(join(SRC, file), "utf8"));
+      expect(code.match(SYNC_ALL) ?? [], `${file} no longer uses ${name}: remove the allowance`).toContain(name);
+    }
   });
 
   it("points at the line it found it on", () => {

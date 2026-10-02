@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { applicationEntry } from "./entry.ts";
 
 /**
  * The mount path a layer was registered with, kept from the moment of registration until the process ends.
@@ -138,14 +139,17 @@ export function armDispatchRecording(proto: unknown): boolean {
  * two has it, the mark keeps the record from being armed twice, and a `Router` without either leaves the
  * application as it was.
  *
+ * Express is resolved from `from`, the application's entry as Node runs it: the start passes the one it
+ * resolved with the process's own flags, and absent it is `applicationEntry()`, Node's default — the realpath,
+ * not the symlinked binary the process may have been started through (DT-34).
+ *
  * Best effort: no express, or an express that is not resolvable from the application's root, leaves the
  * `:param` fallback in place, which is the safe side (invariant 5). It cannot throw, and `start()` relies on
  * that (invariant 2).
  */
 export function armMounts(from?: string): void {
   try {
-    const base = from ?? process.argv[1] ?? `${process.cwd()}/`;
-    const express = createRequire(base)("express") as {
+    const express = createRequire(from ?? applicationEntry())("express") as {
       Router?: { prototype?: unknown };
       Route?: { prototype?: unknown };
     };

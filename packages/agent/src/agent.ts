@@ -23,6 +23,7 @@ import {
   type RequestContext,
   recordOperationIn,
 } from "./context.ts";
+import { applicationEntry } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
@@ -429,12 +430,16 @@ export class Agent {
   start(): void {
     if (this.started || this.disabled) return;
     this.started = true;
+    // Where the application's own modules resolve from: its entry where Node runs it — the realpath, unless the
+    // process keeps the main module's symlinks — and not the symlinked binary it may have been started through
+    // (DT-34). Once, here, at start-up: never in a request. It cannot throw (invariant 2).
+    const entry = applicationEntry({ preserveSymlinksMain: this.config.preserveSymlinksMain });
     // The mount record arms here and not at the load of `mounts.ts`: an import of the package must not load
     // express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
     // and `register` calls `start()` during `--import`, before the application registers anything, so no
     // pattern is lost. `armMounts` cannot throw; a failure to arm leaves the `:param` fallback, and the
     // application goes on (invariant 2).
-    armMounts();
+    armMounts(entry);
     const on = this.config.instrument;
     // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
     // which is a configuration and not a fault; `unavailable` is «asked for and could not attach», which is
@@ -472,6 +477,7 @@ export class Agent {
           fingerprints: this.fingerprints,
           errors: this.errors,
           depth: this.config.pgDepth,
+          from: entry,
         });
         // The only observer that resolves a module, so the only one that can be asked for and not attach.
         observers.pg = armed.state;
