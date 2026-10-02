@@ -41,6 +41,12 @@ export interface CanaryDeps {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Aborted when the canary is being stopped — a deployment replacing it, say. The cycle ends at its next wait,
+   * switches the regression off and answers `unmeasurable`, so whoever asked gets a night and not a broken
+   * connection.
+   */
+  signal?: AbortSignal;
 }
 
 export interface CycleResult {
@@ -106,6 +112,12 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
     openedInstead: [],
     lastVerification: null,
     switchedOff: true,
+  };
+  /** A wait of the cycle, which is also where a stop is noticed. */
+  const wait = async (ms: number): Promise<void> => {
+    deps.signal?.throwIfAborted();
+    await deps.sleep(ms);
+    deps.signal?.throwIfAborted();
   };
   const done = (outcome: Outcome, reason: string): CycleResult => {
     result.outcome = outcome;
@@ -233,7 +245,7 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
     // Detection: the first open finding the canary did not see before, that the expectation names.
     let finding: FindingSummary | undefined;
     while (finding === undefined && deps.now().getTime() < enabledAt + config.detectWithinMs) {
-      await deps.sleep(config.pollMs);
+      await wait(config.pollMs);
       try {
         const { fresh, last } = await freshness();
         if (!fresh) notSeen(`the project's data stopped arriving (last at ${last ?? "never"})`);
@@ -290,7 +302,7 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
     const verificationPath = `/findings/${finding.id}/verification?since=${encodeURIComponent(result.disabledAt)}`;
     blind = undefined;
     while (deps.now().getTime() < disabledAt + config.recoverWithinMs) {
-      await deps.sleep(config.pollMs);
+      await wait(config.pollMs);
       try {
         const { fresh, last } = await freshness();
         if (!fresh) notSeen(`the project's data stopped arriving (last at ${last ?? "never"})`);
@@ -323,6 +335,12 @@ export async function runCycle(regression: Regression, config: CanaryConfig, dep
       `no recovery observed within ${minutes(config.recoverWithinMs)} min of switching ${regression} off: the verification of #${finding.id} still says ${result.lastVerification?.conclusion ?? "nothing"}`,
     );
   } catch (err) {
+    if (deps.signal?.aborted) {
+      return done(
+        "unmeasurable",
+        `the canary was stopped before the cycle ended (${String(deps.signal.reason)}): this night measures nothing`,
+      );
+    }
     // Something of the canary's own — its clock, its sleep — and not an answer from either side.
     return done("unmeasurable", `the canary itself failed: ${describe(err)}`);
   } finally {

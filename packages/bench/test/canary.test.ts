@@ -45,8 +45,10 @@ function world(
     pattern?: string | null;
     verification?: (now: number, off: number) => { conclusion: string; because?: string; waitingCouldHelp: boolean };
     sleepThrowsAt?: number;
+    stopAt?: number;
   } = {},
 ) {
+  const stopping = new AbortController();
   let now = START;
   let onAt: number | null = null;
   let offAt: number | null = null;
@@ -112,8 +114,11 @@ function world(
       sleep: async (ms: number) => {
         if (scenario.sleepThrowsAt !== undefined && now >= scenario.sleepThrowsAt) throw new Error("the clock broke");
         now += ms;
+        if (scenario.stopAt !== undefined && now >= scenario.stopAt) stopping.abort("SIGTERM");
       },
+      signal: stopping.signal,
     },
+    nowMs: () => now,
     state,
     calls,
     puts: () => calls.filter((c) => c.method === "PUT").map((c) => c.body),
@@ -374,6 +379,19 @@ describe("runCycle", () => {
     expect(result.reason).toMatch(/the canary itself failed: the clock broke/);
     expect(w.state.n_plus_one.enabled).toBe(false);
     expect(result.switchedOff).toBe(true);
+  });
+
+  it("ends at its next wait when it is stopped, switches the regression off and says the night measured nothing", async () => {
+    const w = world({ ...passing, stopAt: START + 3 * MINUTE });
+    const result = await runCycle("n_plus_one", config, w.deps);
+
+    expect(result.outcome).toBe("unmeasurable");
+    expect(result.reason).toMatch(/stopped before the cycle ended \(SIGTERM\)/);
+    expect(w.state.n_plus_one.enabled).toBe(false);
+    expect(result.switchedOff).toBe(true);
+    // Nothing asked of the cloud once it was stopped: the wait it was in was its last.
+    const afterStop = w.calls.filter((c) => c.url.startsWith(config.cloudUrl)).length;
+    expect(afterStop).toBeLessThanOrEqual(2 + 3 * 2);
   });
 
   it("names the regression and the instants of the cycle whatever the outcome", async () => {

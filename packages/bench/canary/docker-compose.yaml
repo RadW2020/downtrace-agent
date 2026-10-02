@@ -89,6 +89,8 @@ services:
     <<: *image
     working_dir: /srv/packages/bench
     command: ["node", "src/canary-cli.ts"]
+    # Time to end a cycle it is in when it is stopped: switch the regression off and answer (README of the bench).
+    stop_grace_period: 30s
     environment:
       CANARY_APP_URL: http://canary-app:4000
       CANARY_APP_TOKEN: ${CANARY_APP_TOKEN}

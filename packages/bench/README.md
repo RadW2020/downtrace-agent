@@ -225,7 +225,7 @@ app or the cloud did not answer, or the data was not arriving, before the night 
 ended without the answer: no data is not no errors), with one sentence saying why, the instants, the minutes it took
 to detect and to recover, the finding and its report, and what opened instead. The regression is switched off on
 every path, three times if it has to be; when even that fails, the outcome is `fail` and the reason says it first. A
-failure of the canary's own is an answer too, `unmeasurable`. One cycle at a time: a second request while one runs
+failure of the canary's own is an answer too, `unmeasurable`. So is being stopped: a deployment that replaces the canary mid-cycle sends it SIGTERM, the cycle ends at its next wait, switches the regression off and answers `unmeasurable` with the signal, and the compose file gives it thirty seconds to. One cycle at a time: a second request while one runs
 is a 409 naming it.
 
 A finding the cloud had seen once but not yet confirmed when the night began, and confirms during it, counts as

@@ -15,8 +15,17 @@ try {
   process.exit(2);
 }
 
+// Stopping — a deployment replacing the container — aborts the cycle at its next wait: it switches the regression off
+// and answers the request it was serving, and then the process exits. The compose file gives it the time to.
+const stopping = new AbortController();
 const server = createCanaryServer({
-  run: (regression) => runCycle(regression, config.cycle, { fetch, now: () => new Date(), sleep: (ms) => sleep(ms) }),
+  run: (regression) =>
+    runCycle(regression, config.cycle, {
+      fetch,
+      now: () => new Date(),
+      sleep: (ms) => sleep(ms, undefined, { signal: stopping.signal }),
+      signal: stopping.signal,
+    }),
   log: (line) => console.log(line),
   now: () => new Date(),
 });
@@ -31,4 +40,11 @@ server.listen(config.port, () => {
     }),
   );
 });
-for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => server.close(() => process.exit(0)));
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    stopping.abort(signal);
+    server.close(() => process.exit(0));
+    // A request that will not end on its own does not hold the stop for ever.
+    setTimeout(() => process.exit(0), 20_000).unref();
+  });
+}
