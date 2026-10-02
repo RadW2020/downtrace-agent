@@ -84,7 +84,8 @@ Either import the instrumentation from an entry point you own, as above, or make
 
 `DOWNTRACE_MINIMAL=1` withholds everything you wrote. Route templates, dependency targets, your hostname
 and your deployed version travel as stable digests of themselves — same name, same digest, every time, so
-the analysis still groups — and query text, error messages and exception signatures do not travel at all.
+the analysis still groups — and query text, the labels of outgoing calls and Redis commands, error messages and
+exception signatures do not travel at all. A call's or a command's identity is then a digest of its withheld name.
 
 The digest is of what the route is called: for a route the framework did not template, that is the collapsed
 route, so a value the heuristic folds — an email, a token, a file name with a number — never enters the
@@ -413,10 +414,22 @@ exception: when a `fetch` cannot connect at all, undici publishes nothing, and t
 dependency is down. For that, and only that, the instrumentation wraps `globalThis.fetch`: if a call rejects and nothing was
 recorded for it, it counts as a failed call. On every other path the wrapper does nothing.
 
+Each call is also an **operation** of the route that made it, beside its counter: in the route's profile and in the
+black box, with when it started and when it ended. It is named by its method and the host it asked for —
+`POST api.stripe.com` — and never by its path or its query string. Two calls to the same provider that overlapped are
+two operations that overlap in a capture, which is what tells «three calls one after another» from «three calls at
+once». The name is made once per method and host and kept, so a call costs a lookup, not a hash.
+
 ### Redis
 
 The commands each request issues are reported the same way, per server: how many per request, how long they took and
 how many failed. ioredis publishes on a tracing channel, so nothing is patched.
+
+Each command is also an **operation**, in the profile and in the black box, named by the command and its server —
+`HGETALL cache:6379` — and never by its key or its arguments, which ioredis puts on the channel and the
+instrumentation does not read. A Redis reached through a unix socket has a path for its server, which no label may
+carry, so its commands travel with their hash alone; a command the channel does not name is counted and is not an
+operation.
 
 Every dependency carries a **target** saying which instance of its kind it is, taken from the driver: the host for
 outgoing HTTP, host and port for Postgres and Redis. A read replica and a primary are two dependencies, not one.
@@ -434,7 +447,8 @@ anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
 
 ### What each route normally runs
 
-With `pg` on, the instrumentation also builds a **profile**: not only that a route made 4 queries, but which ones.
+The instrumentation also builds a **profile**: not only that a route made 4 queries, but which ones — and which
+outgoing calls and Redis commands it made, as above.
 Each query text is reduced to its shape — `SELECT id FROM products WHERE id = ?` — and hashed. The hash is the
 identity the cloud groups and compares by; the text is only the label you read. That is what lets Downtrace say
 *«this route went from 2 executions of this query to 53»* instead of *«this route makes more queries now»*.
@@ -462,8 +476,9 @@ not the one you wrote, and the profile rows you pay are not the ones you asked f
 
 **No value from your database ever leaves your server.** Literals, parameters, quoted bodies and comments are
 replaced before anything is stored or sent, and that happens in your process, not ours. If you would still rather
-not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it and changes nothing else — the hash is
-the identity, so you keep the whole analysis and only lose the readable label.
+not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it — with every other label of the profile,
+the calls' and the commands' included — and changes nothing else: the hash is the identity, so you keep the whole
+analysis and only lose the readable label.
 
 ### When someone asks for detail: a capture
 
@@ -474,7 +489,8 @@ in the answer to a batch, or **the instrumentation asks for one itself** when a 
 trouble (today: the event loop running more than 250 ms late, at the p99, for two intervals in a row).
 
 What travels then is the same kind of thing as an aggregate, one level finer: for each request, its **route template**,
-method, status, when it started and how long it took, and the operations it ran as **hashes** with their starts and ends.
+method, status, when it started and how long it took, and the operations it ran as **hashes** with their kind — a
+query, a call, a command, or an error beside them — and their starts and ends.
 Never the query text, never a value, never a path. Order and overlap are the whole point — they are what separates «this
 request spent 400 ms waiting on the database» from «it ran three queries at once».
 
@@ -554,7 +570,7 @@ you would give an application log.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
 - At most 500 distinct routes per interval; the rest fold into `(other)`.
 - At most 60 distinct dependencies per route per interval; the rest fold into one `(other)` row of their kind that keeps their calls, time and errors, so the batch never outgrows the schema's 64 and a busy route cannot sink the interval of every route.
-- At most 63 query fingerprints per route in a profile; the rest fold into an `(other)` bucket that says how many it merges, so a cap never hides work that happened.
+- At most 63 operations per route in a profile, queries, calls and commands alike; the rest fold into `(other)` buckets, one per kind they merge, that say how many each merges, so a cap never hides work that happened and never counts a call as a query. What a route ran is kept by the time it took; the errors beside it are kept first.
 - Query texts are normalised once per distinct text and cached, so repeating the same query costs a map lookup, not a re-parse.
 - Measured overhead budget: < 1 ms added at p99, < 3 percentage points of CPU, < 64 MiB. Measured after every merge that can move it, on a machine with nothing else on it, and by hand with `make bench`; never as a gate before a merge.
 - Nothing has to be taken on trust: `DOWNTRACE_INSPECT` writes the exact batch, and needs no account.

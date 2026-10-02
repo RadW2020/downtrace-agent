@@ -134,6 +134,35 @@ describe("the reference samples", () => {
     }
   });
 
+  // DT-17. A sample has the shape of a captured request, and the evidence names the kind of every operation
+  // (ADR 0219): the samples a capture compares against must say it as the captured requests do.
+  it("keeps the kind of each operation of a sample", () => {
+    const r = new ReferenceRegister({ samplesPerRoute: 1 });
+    r.consider("GET", "/orders", 200, 1_000, 10, () => [
+      { hash: "q", kind: "query", startMs: 0, endMs: 5 },
+      { hash: "c", kind: "call", startMs: 1, endMs: 9 },
+      { hash: "f", kind: "framework", startMs: 9, endMs: 9 },
+      { hash: "x", startMs: 9, endMs: 9 },
+    ]);
+
+    const operations = r.snapshot().samples[0]?.operations ?? [];
+    expect(operations.map((o) => [o.hash, o.kind])).toEqual([
+      ["q", "query"],
+      ["c", "call"],
+      ["f", "framework"],
+      ["x", undefined],
+    ]);
+    expect(operations[3]).not.toHaveProperty("kind");
+  });
+
+  // ADR 0067: the kind rides in the fingerprint's slot, so a sample's operations cost what they did.
+  it("costs the samples no column: three numbers per operation, as before", () => {
+    const small = new ReferenceRegister({ operationsPerSample: 10 });
+    const large = new ReferenceRegister({ operationsPerSample: 20 });
+    const slots = DEFAULT_REFERENCE_ROUTES * DEFAULT_SAMPLES_PER_ROUTE;
+    expect(large.reservedBytes() - small.reservedBytes()).toBe(slots * 10 * 3 * Float64Array.BYTES_PER_ELEMENT);
+  });
+
   it("truncates a sample that ran more operations than it keeps, and says so", () => {
     const many = Array.from({ length: DEFAULT_REFERENCE_OPERATIONS_PER_SAMPLE + 5 }, (_, i) => ({
       hash: `h${i}`,

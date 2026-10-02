@@ -1,8 +1,10 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { afterEach, describe, expect, it } from "vitest";
+import { CallFingerprints } from "../src/calls.ts";
 import { currentContext, enterRequest, type RequestContext } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { Excluded } from "../src/exclude.ts";
+import { FineRegister } from "../src/fine.ts";
 import { instrumentRedis } from "../src/instrument/redis.ts";
 import type { Logger } from "../src/log.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -228,6 +230,93 @@ describe("a failure while recording never reaches the application", () => {
     expect(seen.error).toBe(bare.error);
     expect(escaped, "escaped as an uncaught exception").toEqual([]);
     // Handed to the agent's count of internal errors once, by whichever handler ended the command.
+    expect(failures.splice(0)).toEqual([broken]);
+  });
+});
+
+/**
+ * DT-17, `product.md:142`: the detail of a request keeps its Redis commands with their timings and overlaps.
+ * Each command is an operation `command` — its name and its server — beside the counter of its dependency.
+ * Never its key nor its arguments: ioredis puts them on the message, and nothing here reads them (invariant 5).
+ */
+describe("a Redis command is an operation", () => {
+  const observingCommands = (calls = new CallFingerprints("command")): void => {
+    stops.push(instrumentRedis({ ...deps, commands: calls }));
+  };
+  const commandsOf = (ctx: RequestContext) => [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "command");
+
+  it("records each command by its name and its server, and never its key or its arguments", async () => {
+    observingCommands();
+    const fine = new FineRegister();
+    const ctx = enterRequest(fine, performance.now());
+    await command({ command: "get", args: ["session:ana@cliente.com"], serverAddress: "127.0.0.1", serverPort: 6379 });
+    await command({
+      command: "hgetall",
+      args: ["cart:4821"],
+      serverAddress: "127.0.0.1",
+      serverPort: 6379,
+    });
+    const operations = commandsOf(ctx);
+    expect(operations.map((o) => o.text)).toEqual(["GET 127.0.0.1:6379", "HGETALL 127.0.0.1:6379"]);
+    expect(operations.map((o) => o.count)).toEqual([1, 1]);
+    // The sweep: nothing of the key or the arguments in any field of what was recorded.
+    const recorded = JSON.stringify(operations);
+    for (const secret of ["session", "ana@cliente.com", "cart", "4821"]) expect(recorded).not.toContain(secret);
+    fine.request("GET", "/cart", 200, 0, 10, ctx.fineFrom, ctx.fineOps);
+    expect(fine.snapshot().requests[0]?.operations.map((o) => o.kind)).toEqual(["command", "command"]);
+    // And the counter is still there, as it was.
+    expect(redisWork(ctx)[0]?.calls).toBe(2);
+  });
+
+  it("counts a command that failed as an execution that failed", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await command({ command: "eval", serverAddress: "127.0.0.1", serverPort: 6379 }, true);
+    expect(commandsOf(ctx)).toMatchObject([{ text: "EVAL 127.0.0.1:6379", count: 1, errors: 1 }]);
+  });
+
+  it("records no operation when the channel does not say which command, and keeps the counter", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await command({ serverAddress: "127.0.0.1", serverPort: 6379 });
+    expect(ctx.operations).toBeUndefined();
+    expect(redisWork(ctx)[0]?.calls).toBe(1);
+  });
+
+  // The decision on the unix socket (DT-17): its place is a path, and a label with a slash in it is a 400 of the
+  // whole batch. It travels with its hash alone.
+  it("records a command over a unix socket with its identity and without a label", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await command({ command: "get", serverAddress: "/tmp/redis.sock" });
+    const [operation] = commandsOf(ctx);
+    expect(operation?.hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(operation?.text).toBe("");
+  });
+
+  it("records nothing of a server the operator excluded: neither the command nor its counter", async () => {
+    observingCommands();
+    const ctx = enterRequest(undefined, undefined, new Excluded(["127.0.0.1:6379"]));
+    await command({ command: "get", serverAddress: "127.0.0.1", serverPort: 6379 });
+    expect(redisWork(ctx)).toEqual([]);
+    expect(ctx.operations).toBeUndefined();
+  });
+
+  // Invariant 2: what fails while recording the operation is the instrumentation's own, counted once, and the
+  // command settles exactly as it would have.
+  it("counts a register that throws as an internal error, and the command settles as it would", async () => {
+    observingCommands();
+    const broken = new Error("the ring broke");
+    const fine = new FineRegister();
+    fine.operation = () => {
+      throw broken;
+    };
+    enterRequest(fine, performance.now());
+    const { value: seen, escaped } = await escapedFrom(() =>
+      channel.tracePromise(async () => "OK", { command: "get", serverAddress: "127.0.0.1", serverPort: 6379 }),
+    );
+    expect(seen).toBe("OK");
+    expect(escaped).toEqual([]);
     expect(failures.splice(0)).toEqual([broken]);
   });
 });

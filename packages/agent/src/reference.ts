@@ -17,7 +17,7 @@
  */
 
 import type { FineOperation } from "./fine.ts";
-import { FINGERPRINT_LABEL_MAX_LENGTH, LabelTable, labelBytes } from "./labels.ts";
+import { FINGERPRINT_LABEL_MAX_LENGTH, kindOf, LabelTable, labelBytes, labelOf, packOperation } from "./labels.ts";
 import { MAX_ROUTE_LABEL_LENGTH, OTHER_ROUTE } from "./routes.ts";
 
 /** How many endpoints it keeps samples for. */
@@ -82,6 +82,7 @@ const S_TRUNCATED = 5;
 const S_FILLED = 6;
 const S_FIELDS = 7;
 
+/** The fingerprint's label and the operation's kind, packed into one number as the fine register packs them. */
 const O_FINGERPRINT = 0;
 const O_START = 1;
 const O_END = 2;
@@ -314,11 +315,16 @@ export class ReferenceRegister {
       const operations: FineOperation[] = [];
       for (let i = 0; i < count; i += 1) {
         const opAt = (slot * this.perSample + i) * O_FIELDS;
-        operations.push({
-          hash: this.fingerprintLabels.labels[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
+        const packed = this.operations[opAt + O_FINGERPRINT] ?? 0;
+        const operation: FineOperation = {
+          hash: this.fingerprintLabels.labels[labelOf(packed)] ?? "",
           startMs: this.operations[opAt + O_START] ?? 0,
           endMs: this.operations[opAt + O_END] ?? 0,
-        });
+        };
+        // Only when it was written with one: absent is «did not say», never a guess (ADR 0219).
+        const kind = kindOf(packed);
+        if (kind !== undefined) operation.kind = kind;
+        operations.push(operation);
       }
       const label = this.routes[this.samples[at + S_ROUTE] ?? 0] ?? " ";
       const space = label.indexOf(" ");
@@ -363,7 +369,7 @@ export class ReferenceRegister {
       const op = operations[i];
       if (op === undefined) continue;
       const opAt = (slot * this.perSample + i) * O_FIELDS;
-      this.operations[opAt + O_FINGERPRINT] = this.fingerprintLabels.intern(op.hash);
+      this.operations[opAt + O_FINGERPRINT] = packOperation(this.fingerprintLabels.intern(op.hash), op.kind);
       if (this.fingerprintLabels.folded) this.labelsFolded += 1;
       this.operations[opAt + O_START] = op.startMs;
       this.operations[opAt + O_END] = op.endMs;

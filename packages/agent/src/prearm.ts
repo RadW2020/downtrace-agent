@@ -15,8 +15,15 @@
  */
 
 import type { PrearmReserve } from "./captures.ts";
-import type { FineRequest } from "./fine.ts";
-import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
+import type { FineOperation, FineRequest } from "./fine.ts";
+import {
+  DEPENDENCY_LABEL_MAX_LENGTH,
+  FINGERPRINT_LABEL_MAX_LENGTH,
+  kindOf,
+  LabelTable,
+  labelOf,
+  packOperation,
+} from "./labels.ts";
 import { OTHER_ROUTE } from "./routes.ts";
 
 /** How many routes may be armed at once. Four, like the captures a process may be observing (`captures.ts`). */
@@ -81,6 +88,7 @@ const R_FIELDS = 9;
  */
 const DEPS_PER_REQUEST = 4;
 
+/** The fingerprint's label and the operation's kind, packed into one number as the fine register packs them. */
 const O_FINGERPRINT = 0;
 const O_START = 1;
 const O_END = 2;
@@ -95,7 +103,7 @@ export interface PrearmRequest {
   startedAt: number;
   durationMs: number;
   poolWaitMs?: number;
-  operations: { hash: string; startMs: number; endMs: number }[];
+  operations: FineOperation[];
   dependencies: string[];
   /** True when it touched more distinct dependencies than the row holds. Absent means false. */
   dependenciesTruncated?: boolean;
@@ -112,7 +120,8 @@ export interface ObservedRequest {
   startedAt: number;
   durationMs: number;
   poolWaitMs?: number;
-  operations: { hash: string; startMs: number; endMs: number }[];
+  /** As the ring gave them, kind included: the evidence names the kind of every operation (ADR 0219). */
+  operations: FineOperation[];
   dependencies: string[];
 }
 
@@ -254,7 +263,7 @@ export class PrearmRegister {
     for (const op of r.operations) {
       if (kept >= this.opCapacity) break;
       const o = (this.opCursor % this.opCapacity) * O_FIELDS;
-      this.operations[o + O_FINGERPRINT] = this.fingerprintLabels.intern(op.hash);
+      this.operations[o + O_FINGERPRINT] = packOperation(this.fingerprintLabels.intern(op.hash), op.kind);
       if (this.fingerprintLabels.folded) this.labelsFolded += 1;
       this.operations[o + O_START] = op.startMs;
       this.operations[o + O_END] = op.endMs;
@@ -366,14 +375,19 @@ export class PrearmRegister {
       const at = index * R_FIELDS;
       const from = this.requests[at + R_OP_FROM] ?? 0;
       const count = this.requests[at + R_OP_COUNT] ?? 0;
-      const operations = [];
+      const operations: FineOperation[] = [];
       for (let i = 0; i < count; i++) {
         const o = ((from + i) % this.opCapacity) * O_FIELDS;
-        operations.push({
-          hash: this.fingerprintLabels.labels[this.operations[o + O_FINGERPRINT] ?? 0] ?? "",
+        const packed = this.operations[o + O_FINGERPRINT] ?? 0;
+        const operation: FineOperation = {
+          hash: this.fingerprintLabels.labels[labelOf(packed)] ?? "",
           startMs: this.operations[o + O_START] ?? 0,
           endMs: this.operations[o + O_END] ?? 0,
-        });
+        };
+        // Only when it was written with one: absent is «did not say», never a guess (ADR 0219).
+        const kind = kindOf(packed);
+        if (kind !== undefined) operation.kind = kind;
+        operations.push(operation);
       }
       const wait = this.requests[at + R_POOL_WAIT] ?? Number.NaN;
       const depFrom = this.requests[at + R_DEP_FROM] ?? 0;

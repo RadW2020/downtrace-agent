@@ -102,6 +102,41 @@ describe("the prearm reserve", () => {
     expect(r.requestsFor("GET /cart", 1_000).length).toBe(0);
   });
 
+  // DT-17. The reserve hands a capture the same rows the ring would, and the evidence names the kind of every
+  // operation (ADR 0219): a reserve that dropped it would make an armed route's calls read as «did not say».
+  it("keeps the kind of each operation it holds", () => {
+    const r = new PrearmRegister({ routes: 1, requestsPerRoute: 4 });
+    r.arm("GET /cart", 1_000, 60_000);
+    r.observe({
+      ...request("/cart", 1_100),
+      operations: [
+        { hash: "q", kind: "query", startMs: 1, endMs: 2 },
+        { hash: "c", kind: "call", startMs: 2, endMs: 9 },
+        { hash: "r", kind: "command", startMs: 3, endMs: 4 },
+        { hash: "e", kind: "error", startMs: 9, endMs: 9 },
+        // Written without one, it is read back without one: absent is «did not say», never a guess.
+        { hash: "x", startMs: 9, endMs: 9 },
+      ],
+    });
+
+    const [row] = r.reserveFor("GET", "/cart", 1_200)?.requests ?? [];
+    expect(row?.operations.map((o) => [o.hash, o.kind])).toEqual([
+      ["q", "query"],
+      ["c", "call"],
+      ["r", "command"],
+      ["e", "error"],
+      ["x", undefined],
+    ]);
+    expect(row?.operations[4]).not.toHaveProperty("kind");
+  });
+
+  // ADR 0067: the kind rides in the fingerprint's slot, so a thousand operations more cost what they did.
+  it("costs the reserve no column: three numbers per operation, as before", () => {
+    const small = new PrearmRegister({ operations: 1_000 });
+    const large = new PrearmRegister({ operations: 2_000 });
+    expect(large.reservedBytes() - small.reservedBytes()).toBe(1_000 * 3 * Float64Array.BYTES_PER_ELEMENT);
+  });
+
   // Preallocated and bounded by construction, like the other three registers (ADR 0067).
   it("fits its budget with every slot full", () => {
     const r = new PrearmRegister();

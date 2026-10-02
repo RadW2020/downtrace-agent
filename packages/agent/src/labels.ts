@@ -1,3 +1,46 @@
+import type { Operation } from "@downtrace/protocol";
+
+/**
+ * The code each kind of operation is packed as, beside the label of its fingerprint.
+ *
+ * Every operation a register keeps says its kind, because the evidence has to: an absent kind is «the sender
+ * did not say», never a query (ADR 0219). A column of its own would cost a number per operation in three rings
+ * whose budgets have no room for one, and the slot that holds the label's index has room to spare: an index is
+ * a small integer and a `Float64Array` holds integers exactly up to 2^53. So the slot holds both, at no cost.
+ *
+ * Zero is no kind at all, which a register reads back as absent rather than guessing one. A `Record` over the
+ * protocol's own type, so a kind the schema gains and this table lacks is a compile error, not a silent zero.
+ */
+const KIND_CODES: Record<Operation["kind"], number> = {
+  query: 1,
+  error: 2,
+  framework: 3,
+  explicit: 4,
+  call: 5,
+  command: 6,
+};
+
+/** How many codes one slot leaves room for: the kinds, and zero for none. */
+const KIND_SLOTS = 8;
+
+const KINDS_BY_CODE: (Operation["kind"] | undefined)[] = new Array(KIND_SLOTS).fill(undefined);
+for (const [kind, code] of Object.entries(KIND_CODES)) KINDS_BY_CODE[code] = kind as Operation["kind"];
+
+/** The label's index and the operation's kind, as the one number a register's slot holds. */
+export function packOperation(label: number, kind: Operation["kind"] | undefined): number {
+  return label * KIND_SLOTS + (kind === undefined ? 0 : KIND_CODES[kind]);
+}
+
+/** The label's index out of a packed slot. */
+export function labelOf(packed: number): number {
+  return Math.floor(packed / KIND_SLOTS);
+}
+
+/** The kind out of a packed slot, or undefined when the operation was written without one. */
+export function kindOf(packed: number): Operation["kind"] | undefined {
+  return KINDS_BY_CODE[packed % KIND_SLOTS];
+}
+
 /**
  * What one interned label costs, in bytes, at its worst.
  *

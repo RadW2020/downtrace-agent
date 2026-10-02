@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import {
   type AgentInfo,
   type AgentResources,
+  type CapturedOperation,
   type CaptureEvidence,
   type DeployInfo,
   type InstanceInfo,
@@ -11,6 +12,7 @@ import {
   PROTOCOL_VERSION,
 } from "@downtrace/protocol";
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
+import { CallFingerprints } from "./calls.ts";
 import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
 import type { AgentConfig } from "./config.ts";
@@ -27,7 +29,7 @@ import { applicationEntry } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
-import { FineRegister } from "./fine.ts";
+import { type FineOperation, FineRegister } from "./fine.ts";
 import { type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
@@ -195,6 +197,15 @@ export class Agent {
   private readonly fingerprints: FingerprintCache | undefined;
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
   private readonly errors: ErrorFingerprintCache;
+  /**
+   * What a dependency's target is called outside this process: the withheld name in minimal mode, the target
+   * itself otherwise. One field for both readers — the request's counters and the fingerprints of its calls and
+   * commands — so the two cannot name one dependency in two ways (ADR 0105).
+   */
+  private readonly named: ((target: string) => string) | undefined;
+  /** Where an outgoing call and a Redis command become operations, once per destination (DT-17). */
+  private readonly calls: CallFingerprints;
+  private readonly commands: CallFingerprints;
   private readonly profile: ProfileAggregator;
   /** The captures the cloud has asked this process for. Empty until one arrives (gh-379). */
   private readonly captures = new Captures();
@@ -307,6 +318,9 @@ export class Agent {
     // reported error, and the cost of always having them is two empty maps and no work on the hot path.
     if (config.instrument.has("pg") && config.pgDepth === "full") this.fingerprints = new FingerprintCache();
     this.errors = new ErrorFingerprintCache();
+    this.named = config.minimal ? withheldName : undefined;
+    this.calls = new CallFingerprints("call", { named: this.named });
+    this.commands = new CallFingerprints("command", { named: this.named });
     // Minimal mode is the stronger of the two: `DOWNTRACE_QUERY_TEXT=off` stays as the finer control —
     // «send my routes but not my queries» is a real thing to want — and this turns it off as well. The
     // context of a reported error is not a query, so only the minimal mode withholds it (ADR 0105).
@@ -486,11 +500,16 @@ export class Agent {
     }
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
-      this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors });
+      this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors, calls: this.calls });
       observers.http = "on";
     }
     if (on.has("redis")) {
-      this.stopRedis = instrumentRedis({ log: this.log, internalError, errors: this.errors });
+      this.stopRedis = instrumentRedis({
+        log: this.log,
+        internalError,
+        errors: this.errors,
+        commands: this.commands,
+      });
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.
@@ -756,7 +775,7 @@ export class Agent {
           // Omitted when the request asked no pool, which the contract reads as «this one did not queue» and
           // not as «it queued for nothing» (gh-471).
           ...(r.poolWaitMs === undefined ? {} : { poolWaitMs: r.poolWaitMs }),
-          operations: r.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
+          operations: capturedOperations(r.operations),
           // On the request and not only in the totals, because an empty list without a mark reads as a
           // request that ran nothing (invariant 14). Omitted when false: the contract says absent means
           // false, and sending it on every request would pay for the normal case to say nothing (gh-396).
@@ -797,7 +816,7 @@ export class Agent {
         status: s.status,
         startedAt: new Date(s.startedAt).toISOString(),
         durationMs: s.durationMs,
-        operations: s.operations.map((o) => ({ hash: o.hash, startMs: o.startMs, endMs: o.endMs })),
+        operations: capturedOperations(s.operations),
         ...(s.truncated ? { truncated: true } : {}),
       })),
     };
@@ -979,7 +998,7 @@ export class Agent {
           fine,
           startedAt,
           this.excludedDependencies.configured ? this.excludedDependencies : undefined,
-          this.config.minimal ? withheldName : undefined,
+          this.named,
         ),
       );
     }
@@ -1162,6 +1181,28 @@ function described(err: unknown): string {
   } catch {
     return "(a thrown value that cannot be described)";
   }
+}
+
+/**
+ * A request's operations as the evidence carries them: each with its hash, its kind and its start and end, never
+ * its text, and in the order they **started**, which is what the contract says the list is.
+ *
+ * The kind on every one, queries and errors included (ADR 0219): absent in the evidence means «the sender did not
+ * say», and the instrumentations before this wrote the error signatures there without one. A register gives it
+ * back for every operation recorded since; absent only for one written without it, which then says so.
+ *
+ * The registers write an operation when it ends, and two outgoing calls in flight end in whatever order the
+ * network decides (DT-17), so the order is put right here, once per capture and not once per request. The sort is
+ * stable: operations that started at the same instant keep the order they were written in.
+ */
+function capturedOperations(operations: readonly FineOperation[]): CapturedOperation[] {
+  return operations
+    .map((o): CapturedOperation => {
+      const captured: CapturedOperation = { hash: o.hash, startMs: o.startMs, endMs: o.endMs };
+      if (o.kind !== undefined) captured.kind = o.kind;
+      return captured;
+    })
+    .sort((a, b) => a.startMs - b.startMs);
 }
 
 /** How many calls a request made across every dependency. Zero when nothing was instrumented. */

@@ -40,6 +40,12 @@ export interface OperationWork {
   totalMs: number;
   errors: number;
   /**
+   * What tells it apart from the other operations of the request, as `operationKey` makes it, kept here so the
+   * profile groups by it and does not make it again on every request (invariant 3). Absent only on a work built
+   * by hand; `recordOperationIn` always sets it.
+   */
+  key?: string;
+  /**
    * The structural context the application attached to an error it reported, already sanitised and bounded
    * (ERR-02). Only the two kinds an application produces ever carry one; a query never does. The **first**
    * one seen for this signature in this window, because what travels is per signature and not per occurrence.
@@ -221,8 +227,20 @@ export function recordWait(kind: DependencyKind, target: string, ms: number): vo
  */
 export interface FinishedOperation {
   kind: OperationWork["kind"];
-  /** Never the values: the text is normalised before it reaches here (`fingerprint.ts`, invariant 5). */
-  fingerprint: { hash: string; text: string; class?: QueryClass };
+  /**
+   * Never the values: the text is normalised before it reaches here (`fingerprint.ts`, invariant 5).
+   *
+   * `key` is what `operationKey` would make of the kind and the hash, when the cache that made the fingerprint
+   * made it too. An outgoing call and a Redis command are recorded on every call, not once per failure, and a
+   * concatenation per call is the cost invariant 3 bounds (`calls.ts`, DT-17).
+   */
+  fingerprint: { hash: string; text: string; class?: QueryClass; key?: string };
+  /**
+   * The dependency it ran against, when there is one: what the operator excluded is not looked at, here as well
+   * as in the counters (`product.md:104`, ADR 0101). Absent for what is not a dependency's, an error the
+   * application reported.
+   */
+  target?: string;
   /** `performance.now()` when it started and when it finished. */
   startedAt: number;
   endedAt: number;
@@ -241,8 +259,10 @@ export interface FinishedOperation {
  *
  * **A query keeps its hash as its key**, which is what it was before this existed, so the path that runs once
  * per query per request allocates nothing (invariant 3, ADR 0003). The three kinds of error pay one
- * concatenation each, and they happen once per *failure* rather than once per call. A hash is sixteen hex
- * characters, so no query's key can ever read as one of theirs.
+ * concatenation each, and they happen once per *failure* rather than once per call. An outgoing call and a
+ * Redis command happen once per call, so theirs is made once per destination, in the cache that makes their
+ * fingerprint (`calls.ts`), and handed over with it. A hash is sixteen hex characters, so no query's key can
+ * ever read as one of theirs.
  */
 export function operationKey(kind: OperationKind, hash: string): string {
   return kind === "query" ? hash : `${kind}\n${hash}`;
@@ -255,9 +275,12 @@ export function operationKey(kind: OperationKind, hash: string): string {
  * much a request talked to Postgres is one number per dependency, and what it ran is one entry per fingerprint.
  */
 export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): void {
+  // Excluding is not observing: an excluded dependency leaves neither its counters nor what it ran, in the profile
+  // or in the black box (`product.md:104`, ADR 0101).
+  if (op.target !== undefined && ctx.excluded?.has(op.target)) return;
   const ms = op.endedAt - op.startedAt;
   ctx.operations ??= new Map();
-  const key = operationKey(op.kind, op.fingerprint.hash);
+  const key = op.fingerprint.key ?? operationKey(op.kind, op.fingerprint.hash);
   let entry = ctx.operations.get(key);
   if (!entry) {
     entry = {
@@ -267,6 +290,7 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
       count: 0,
       totalMs: 0,
       errors: 0,
+      key,
     };
     if (op.fingerprint.class !== undefined) entry.class = op.fingerprint.class;
     // The first context for this signature, and only the first: this map counts occurrences and does not
@@ -287,7 +311,8 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
   if (ctx.fine) {
     ctx.fineOps += 1;
     if (ctx.fineOps <= ctx.fine.operationsPerRequest) {
-      ctx.fine.operation(op.fingerprint.hash, op.startedAt - ctx.startedAt, op.endedAt - ctx.startedAt);
+      // With its kind, which the evidence names for every operation: absent there is «did not say» (ADR 0219).
+      ctx.fine.operation(op.fingerprint.hash, op.kind, op.startedAt - ctx.startedAt, op.endedAt - ctx.startedAt);
     }
   }
 }

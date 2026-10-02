@@ -388,3 +388,104 @@ describe("the window a profile stays open", () => {
     expect(p.rotate()).not.toBeNull();
   });
 });
+
+/**
+ * DT-17. Calls and commands share the cap of 63 with the queries, and the cap has to drop something. What it
+ * keeps first is decided by the schema's own `x-error`: an error is an identity nothing else carries (ERR-01);
+ * a query, a call and a command are what the route ran, and rank among themselves by the time they took.
+ */
+describe("ProfileAggregator, with calls and commands sharing the cap", () => {
+  const call = (hash: string, over: Partial<OperationWork> = {}) =>
+    work(hash, { kind: "call", text: `POST ${hash}.example.com`, ...over });
+
+  it("ranks a call and a command with the queries, by time, and an error still ahead of them", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now, maxOperations: 3 });
+    profile.record("POST", "/checkout", [
+      work("cheap-query", { totalMs: 1 }),
+      call("slow-call", { totalMs: 200 }),
+      work("cache", { kind: "command", text: "GET cache:6379", totalMs: 50 }),
+      work("mid-query", { totalMs: 10 }),
+      work("failed", { kind: "error", text: "Error: boom", totalMs: 0, errors: 1 }),
+    ]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+    // Not «everything that is not a query is an error»: the call and the command did not push the error out, and
+    // the cheapest query went, not the call that took two hundred milliseconds.
+    expect(operations.map((o) => o.hash)).toEqual(["failed", "slow-call", "cache", OTHER_OPERATION]);
+    expect(operations.at(-1)).toMatchObject({ kind: "query", distinct: 2, totalMs: 11 });
+  });
+
+  // The decision on `(other)`: one bucket per kind it merges, so a bucket of calls is never counted as queries
+  // (the cloud judges `operation-multiplication` kind by kind, ADR 0219). The buckets share the schema's 64.
+  it("labels what it merges by its kind, one bucket per kind, inside the schema's 64", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    const queries = Array.from({ length: 50 }, (_, i) => work(`q${i}`, { totalMs: 1_000 + i }));
+    const calls = Array.from({ length: 30 }, (_, i) => call(`c${i}`, { totalMs: 10 + i }));
+    const commands = Array.from({ length: 5 }, (_, i) => work(`r${i}`, { kind: "command", totalMs: 1 + i }));
+    profile.record("POST", "/checkout", [...queries, ...calls, ...commands]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+
+    expect(operations.length).toBeLessThanOrEqual(DEFAULT_MAX_OPERATIONS + 1);
+    const buckets = operations.filter((o) => o.hash === OTHER_OPERATION);
+    expect(buckets.map((b) => b.kind)).toEqual(["call", "command"]);
+    // Nothing that ran is missing from the totals, kind by kind.
+    for (const [kind, all] of [
+      ["query", queries],
+      ["call", calls],
+      ["command", commands],
+    ] as const) {
+      const sent = operations.filter((o) => o.kind === kind);
+      expect(
+        sent.reduce((a, o) => a + o.count, 0),
+        kind,
+      ).toBe(all.length);
+      expect(
+        sent.reduce((a, o) => a + o.totalMs, 0),
+        kind,
+      ).toBe(all.reduce((a, o) => a + o.totalMs, 0));
+      const bucket = buckets.find((b) => b.kind === kind);
+      expect(sent.length - (bucket ? 1 : 0) + (bucket?.distinct ?? 0), kind).toBe(all.length);
+    }
+    for (const operation of operations) {
+      expect(validateOperation?.(operation), JSON.stringify(validateOperation?.errors)).toBe(true);
+    }
+    expect(
+      validateProfileWindow({
+        start: 0,
+        durationMs: 1,
+        endpoints: [{ method: "POST", route: "/checkout", operations }],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the one bucket of before when everything it merges is of one kind", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now, maxOperations: 2 });
+    profile.record(
+      "GET",
+      "/a",
+      ["q1", "q2", "q3", "q4"].map((h) => work(h)),
+    );
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+    expect(operations).toHaveLength(3);
+    expect(operations.at(-1)).toMatchObject({ kind: "query", hash: OTHER_OPERATION, distinct: 2 });
+  });
+
+  // Invariant 3: the key that tells a call apart from a query of the same hash was made once, in the cache, and
+  // the profile groups a request's operations by it rather than concatenating it again on every request. So the
+  // key it is handed is the one it groups by: two keys are two entries, whatever their hashes say.
+  it("groups a request's operations by the key they carry", () => {
+    const time = clock();
+    const profile = new ProfileAggregator({ now: time.now });
+    profile.record("POST", "/checkout", [call("stripe", { key: "made-once", count: 1 })]);
+    profile.record("POST", "/checkout", [call("stripe", { key: "made-once", count: 2 })]);
+    profile.record("POST", "/checkout", [call("stripe", { key: "made-elsewhere", count: 4 })]);
+    time.advance(PROFILE_WINDOW_MS);
+    const operations = profile.rotate()?.endpoints[0]?.operations ?? [];
+    expect(operations.map((o) => o.count).sort()).toEqual([3, 4]);
+  });
+});

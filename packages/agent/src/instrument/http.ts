@@ -1,6 +1,7 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { currentContext, type RequestContext, recordCallIn, recordErrorIn } from "../context.ts";
+import type { CallFingerprints } from "../calls.ts";
+import { currentContext, type RequestContext, recordCallIn, recordErrorIn, recordOperationIn } from "../context.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { Logger } from "../log.ts";
 
@@ -9,6 +10,8 @@ interface Pending {
   ctx: RequestContext;
   started: number;
   target: string;
+  /** The method as the client put it on its request: `unknown` until the fingerprint cache reads it. */
+  method: unknown;
 }
 
 const MAX_TARGET_LENGTH = 256;
@@ -25,6 +28,11 @@ export interface InstrumentHttpDeps {
    * is what this observer did until gh-907: a failure was a number of the dependency's, and nothing more.
    */
   errors?: ErrorFingerprintCache | undefined;
+  /**
+   * Where a call becomes an operation `call` of the request, by its method and its host (DT-17). Absent means a
+   * call is counted against its dependency and is not an operation, which is what this observer did before.
+   */
+  calls?: CallFingerprints | undefined;
 }
 
 /**
@@ -39,11 +47,11 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
   const { log, internalError } = deps;
   const pending = new WeakMap<object, Pending>();
 
-  const begin = (key: object | undefined, target: string): void => {
+  const begin = (key: object | undefined, target: string, method: unknown): void => {
     if (!key) return;
     const ctx = currentContext();
     if (!ctx) return; // a call outside a request belongs to no endpoint
-    pending.set(key, { ctx, started: performance.now(), target: clamp(target) });
+    pending.set(key, { ctx, started: performance.now(), target: clamp(target), method });
   };
 
   const end = (key: object | undefined, status: number | undefined, failed: boolean, err?: unknown): void => {
@@ -55,6 +63,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
     // A 5xx from a dependency is a failure of that dependency, the same as a connection that never answered.
     const isFailure = failed || (status ?? 0) >= 500;
     recordCallIn(p.ctx, "http", p.target, now - p.started, isFailure);
+    recordCall(p.ctx, deps.calls, p.method, p.target, p.started, now, isFailure);
     // A failure that threw is an error beside the failed call (ERR-01); an answer, however bad, is not one,
     // because nobody threw anything and no identity is invented for it.
     recordErrorIn(p.ctx, deps.errors, isFailure, err, p.target, p.started, now);
@@ -64,8 +73,8 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
     [
       "undici:request:create",
       (message) => {
-        const request = (message as { request?: { origin?: unknown; [k: string]: unknown } }).request;
-        begin(request, hostOf(request?.origin));
+        const request = (message as { request?: { origin?: unknown; method?: unknown; [k: string]: unknown } }).request;
+        begin(request, hostOf(request?.origin), request?.method);
       },
     ],
     [
@@ -86,7 +95,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
       "http.client.request.start",
       (message) => {
         const request = (message as { request?: HttpClientRequest }).request;
-        begin(request, hostOfClientRequest(request));
+        begin(request, hostOfClientRequest(request), request?.method);
       },
     ],
     [
@@ -119,7 +128,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
   ]);
 
   for (const [name, handler] of subscriptions) diagnostics_channel.subscribe(name, handler);
-  const restoreFetch = catchFetchConnectFailures(internalError, deps.errors);
+  const restoreFetch = catchFetchConnectFailures(internalError, deps.errors, deps.calls);
   log.debug(`observing outgoing HTTP on ${subscriptions.length} channels`);
 
   return () => {
@@ -140,6 +149,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
 function catchFetchConnectFailures(
   internalError: (err: unknown) => void,
   errors: ErrorFingerprintCache | undefined,
+  calls: CallFingerprints | undefined,
 ): () => void {
   const original = globalThis.fetch;
   if (typeof original !== "function") return () => {};
@@ -160,6 +170,7 @@ function catchFetchConnectFailures(
           const now = performance.now();
           const target = hostOfInput(input);
           recordCallIn(ctx, "http", target, now - started, true);
+          recordCall(ctx, calls, methodOfInput(input, init), target, started, now, true);
           recordErrorIn(ctx, errors, true, error, target, started, now);
         }
       } catch (failure) {
@@ -174,6 +185,33 @@ function catchFetchConnectFailures(
     // Only put it back if nobody wrapped it after us.
     if (globalThis.fetch === wrapped) globalThis.fetch = original;
   };
+}
+
+/**
+ * One finished call as an operation `call` of the request (DT-17): what it ran, beside the counter of its
+ * dependency. Nothing when nobody handed this observer a cache, or the method is not one the label can carry.
+ * The target is the one the counter was recorded under, so an excluded host leaves neither (ADR 0101).
+ */
+function recordCall(
+  ctx: RequestContext,
+  calls: CallFingerprints | undefined,
+  method: unknown,
+  target: string,
+  startedAt: number,
+  endedAt: number,
+  failed: boolean,
+): void {
+  if (!calls) return;
+  const fingerprint = calls.get(method, target);
+  if (!fingerprint) return;
+  recordOperationIn(ctx, { kind: "call", fingerprint, startedAt, endedAt, failed, target });
+}
+
+/** The method of a `fetch` the channels never saw: the one it was given, or the default `fetch` uses. */
+function methodOfInput(input: unknown, init: RequestInit | undefined): unknown {
+  if (init?.method !== undefined) return init.method;
+  if (input instanceof Request) return input.method;
+  return "GET";
 }
 
 function hostOfInput(input: unknown): string {
@@ -205,6 +243,7 @@ function hostOf(origin: unknown): string {
 
 interface HttpClientRequest {
   host?: unknown;
+  method?: unknown;
   getHeader?: (name: string) => unknown;
 }
 

@@ -541,7 +541,9 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
       "POST /capture": { count: 1, errors: 0, serverError: 0, clientError: 0 },
     });
     expect(base?.operations["GET /products/:id"]).toEqual({ query: 3, error: 1, framework: 1 });
-    expect(base?.operations["POST /checkout"]).toEqual({ query: 21, explicit: 1, framework: 1 });
+    // The three calls to the provider and the three cache commands are operations of the route too, since DT-17:
+    // the same calls and commands `outgoing` and `redis` count below, one operation per execution.
+    expect(base?.operations["POST /checkout"]).toEqual({ query: 21, call: 3, command: 3, explicit: 1, framework: 1 });
     // And the shape of the request, which is what «queries per request» is: the two checkouts fall in two
     // different buckets of the histogram, because one ran the whole twelve and the other rolled back at nine.
     expect(base?.postgres["POST /checkout"]).toEqual({ callsPerRequest: [0, 0, 0, 0, 1, 1, 0, 0], errors: 0 });

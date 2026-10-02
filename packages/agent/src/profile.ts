@@ -1,4 +1,4 @@
-import type { Operation, Profile, ProfileEndpoint } from "@downtrace/protocol";
+import { AGGREGATES_SCHEMA_V0, type Operation, type Profile, type ProfileEndpoint } from "@downtrace/protocol";
 import { DEFAULT_MAX_ROUTES } from "./aggregator.ts";
 import { type OperationWork, operationKey } from "./context.ts";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
@@ -25,13 +25,27 @@ export const DEFAULT_MAX_OPERATIONS = 63;
 export const OTHER_OPERATION = "(other)";
 
 /**
- * What survives the per-endpoint cap first. An error outranks a query, and the three kinds of error rank
- * alike: telling them apart here would be a claim about which way of seeing an error matters more, and
- * nothing has measured one.
+ * Which kinds are errors, as the schema says it beside the enum (`x-error`, ADR 0219), and not as «everything
+ * but a query»: that reading ranked the first outgoing call as an error.
+ */
+const IS_ERROR: Record<OperationWork["kind"], boolean> =
+  AGGREGATES_SCHEMA_V0.$defs.Operation.properties.kind["x-error"];
+
+/**
+ * What survives the per-endpoint cap first. An error outranks what the route ran, and the three kinds of error
+ * rank alike: telling them apart here would be a claim about which way of seeing an error matters more, and
+ * nothing has measured one. A query, an outgoing call and a Redis command rank alike too, by the time they took
+ * (DT-17): they are what the route spent its time on, which is what the person reading the profile came for.
  */
 function rank(kind: OperationWork["kind"]): number {
-  return kind === "query" ? 0 : 1;
+  return IS_ERROR[kind] ? 1 : 0;
 }
+
+/**
+ * The order the `(other)` buckets are written in, one per kind they merge: the schema's own, so two windows
+ * that merge the same kinds write them in the same order.
+ */
+const KINDS_IN_ORDER = AGGREGATES_SCHEMA_V0.$defs.Operation.properties.kind.enum as readonly OperationWork["kind"][];
 
 export interface ProfileOptions {
   /**
@@ -101,7 +115,8 @@ export class ProfileAggregator {
       }
     }
     for (const operation of operations) {
-      const key = operationKey(operation.kind, operation.hash);
+      // The key the request already made, once per destination for a call or a command (invariant 3).
+      const key = operation.key ?? operationKey(operation.kind, operation.hash);
       const existing = acc.operations.get(key);
       if (existing) {
         existing.count += operation.count;
@@ -177,18 +192,26 @@ export class ProfileAggregator {
       if (b.totalMs !== a.totalMs) return b.totalMs - a.totalMs;
       return a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0;
     });
-    const kept = sorted.slice(0, this.maxOperations).map((work) => this.operationOf(work));
-    const rest = sorted.slice(this.maxOperations);
-    if (rest.length > 0) {
-      // Everything the cap dropped still counts, and the bucket says how many it merges, so a cap does not
-      // become a lie by omission (ADR 0017).
+    // Everything the cap dropped still counts, and a bucket says how many it merges, so a cap does not become a
+    // lie by omission (ADR 0017). One bucket per kind it merges, labelled by that kind: a bucket labelled a
+    // query that held calls would have the cloud count calls as queries, and it judges a route's operations kind
+    // by kind (ADR 0219). The buckets share the schema's 64 with what is kept, so each kind past the first that
+    // the rest holds costs the kept list one place — which can bring one more kind into the rest, hence the loop,
+    // which ends in at most as many turns as there are kinds.
+    let keep = Math.min(sorted.length, this.maxOperations);
+    while (keep > 0 && keep + kindsIn(sorted, keep) > this.maxOperations + 1) keep -= 1;
+    const kept = sorted.slice(0, keep).map((work) => this.operationOf(work));
+    const rest = sorted.slice(keep);
+    for (const kind of KINDS_IN_ORDER) {
+      const merged = rest.filter((w) => w.kind === kind);
+      if (merged.length === 0) continue;
       kept.push({
-        kind: "query",
+        kind,
         hash: OTHER_OPERATION,
-        count: rest.reduce((a, w) => a + w.count, 0),
-        totalMs: rest.reduce((a, w) => a + w.totalMs, 0),
-        errors: rest.reduce((a, w) => a + w.errors, 0),
-        distinct: rest.length,
+        count: merged.reduce((a, w) => a + w.count, 0),
+        totalMs: merged.reduce((a, w) => a + w.totalMs, 0),
+        errors: merged.reduce((a, w) => a + w.errors, 0),
+        distinct: merged.length,
       });
     }
     return { method: acc.method, route: acc.route, operations: kept };
@@ -212,4 +235,14 @@ export class ProfileAggregator {
     else if (work.class !== undefined) operation.class = work.class;
     return operation;
   }
+}
+
+/** How many kinds the operations past the first `from` hold: how many `(other)` buckets they would take. */
+function kindsIn(sorted: readonly OperationWork[], from: number): number {
+  const kinds = new Set<OperationWork["kind"]>();
+  for (let i = from; i < sorted.length; i += 1) {
+    const work = sorted[i];
+    if (work) kinds.add(work.kind);
+  }
+  return kinds.size;
 }

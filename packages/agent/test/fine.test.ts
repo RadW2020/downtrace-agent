@@ -1,5 +1,5 @@
 import { channel } from "node:diagnostics_channel";
-import { EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
+import { AGGREGATES_SCHEMA_V0, EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { dependencyKey, enterRequest, recordOperationIn } from "../src/context.ts";
@@ -26,7 +26,7 @@ const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {
 /** One request with its operations, written straight into the register. */
 function requestWith(r: FineRegister, ops: [hash: string, start: number, end: number][], route = "/orders") {
   const from = r.openRequest();
-  for (const [hash, start, end] of ops) r.operation(hash, start, end);
+  for (const [hash, start, end] of ops) r.operation(hash, "query", start, end);
   r.request("GET", route, 200, 0, 100, from, ops.length);
 }
 
@@ -63,7 +63,7 @@ describe("the fine register", () => {
     const r = new FineRegister({ operationsPerRequest: 3 });
     const from = r.openRequest();
     // The caller stops writing at the cap; the count keeps going, which is what makes the difference visible.
-    for (let i = 0; i < 3; i += 1) r.operation(`op-${i}`, i, i + 1);
+    for (let i = 0; i < 3; i += 1) r.operation(`op-${i}`, "query", i, i + 1);
     r.request("GET", "/orders", 200, 0, 100, from, 40);
 
     const [request] = r.snapshot().requests;
@@ -275,8 +275,8 @@ describe("the fine register", () => {
   it("never reads past what was actually written", () => {
     const r = new FineRegister({ requests: 8, operations: 16, operationsPerRequest: 10 });
     const from = r.openRequest();
-    r.operation("mine-1", 0, 1);
-    r.operation("mine-2", 1, 2);
+    r.operation("mine-1", "query", 0, 1);
+    r.operation("mine-2", "query", 1, 2);
     // Reports five, wrote two.
     r.request("GET", "/orders", 200, 0, 10, from, 5);
     requestWith(r, [["theirs", 0, 1]], "/other");
@@ -304,6 +304,66 @@ describe("the ring against the evidence's cap", () => {
       DEFAULT_REQUESTS + reserves,
       `the ring's ${DEFAULT_REQUESTS} plus the reserves' ${DEFAULT_ARMED_ROUTES} x ${DEFAULT_REQUESTS_PER_ARMED_ROUTE} must equal the evidence's maxItems ${EVIDENCE_REQUESTS_MAX_ITEMS_V0}`,
     ).toBe(EVIDENCE_REQUESTS_MAX_ITEMS_V0);
+  });
+});
+
+// DT-17. The evidence names the kind of every operation, because an absent kind is «the sender did not say» and
+// never a query (ADR 0219). The kind rides in the slot that already holds the fingerprint's label, so it costs
+// the ring nothing: there is no room for a column in its budget.
+describe("the kind of each operation", () => {
+  const KINDS = ["query", "error", "framework", "explicit", "call", "command"] as const;
+
+  it("gives back the kind each operation was written with, every one of them", () => {
+    // Enumerated from the schema, so a kind the protocol gains is a kind this test asks about.
+    expect([...KINDS].sort()).toEqual([...AGGREGATES_SCHEMA_V0.$defs.Operation.properties.kind.enum].sort());
+    const r = new FineRegister();
+    const from = r.openRequest();
+    KINDS.forEach((kind, i) => {
+      r.operation(`op-${i}`, kind, i, i + 1);
+    });
+    r.request("GET", "/orders", 200, 0, 100, from, KINDS.length);
+
+    const [request] = r.snapshot().requests;
+    expect(request?.operations.map((o) => o.kind)).toEqual([...KINDS]);
+    expect(request?.operations.map((o) => o.hash)).toEqual(KINDS.map((_k, i) => `op-${i}`));
+    // And the readers the reserve and the reference samples copy from say it too.
+    expect(r.operationsAt(from, KINDS.length).operations.map((o) => o.kind)).toEqual([...KINDS]);
+    expect(r.lastOperations().map((o) => o.kind)).toEqual([...KINDS]);
+  });
+
+  it("keeps the kind of an operation whose fingerprint was folded", () => {
+    // The fold loses the name, never the kind: a call that reads `(other)` is still a call.
+    const r = new FineRegister({ fingerprintLabels: 1 });
+    const from = r.openRequest();
+    r.operation("aaaaaaaaaaaaaaaa", "query", 0, 1);
+    r.operation("bbbbbbbbbbbbbbbb", "call", 1, 2);
+    r.request("GET", "/orders", 200, 0, 10, from, 2);
+
+    const operations = r.snapshot().requests[0]?.operations ?? [];
+    expect(operations.map((o) => [o.hash, o.kind])).toEqual([
+      ["aaaaaaaaaaaaaaaa", "query"],
+      [OTHER_ROUTE, "call"],
+    ]);
+  });
+
+  it("keeps two kinds apart that share one fingerprint", () => {
+    // The same throw seen as the failed operation and as the framework's 5xx shares a hash (gh-596): one label
+    // in the table, and still two kinds.
+    const r = new FineRegister();
+    const from = r.openRequest();
+    r.operation("aaaaaaaaaaaaaaaa", "error", 0, 1);
+    r.operation("aaaaaaaaaaaaaaaa", "framework", 1, 1);
+    r.request("GET", "/orders", 200, 0, 10, from, 2);
+
+    expect(r.snapshot().requests[0]?.operations.map((o) => o.kind)).toEqual(["error", "framework"]);
+  });
+
+  // ADR 0067: the memory half of invariant 3 is arithmetic. A thousand operations more cost three numbers each,
+  // which is what they cost before the kind: the ring did not gain a column.
+  it("costs the ring no column: three numbers per operation, as before", () => {
+    const small = new FineRegister({ operations: 1_000 });
+    const large = new FineRegister({ operations: 2_000 });
+    expect(large.reservedBytes() - small.reservedBytes()).toBe(1_000 * 3 * Float64Array.BYTES_PER_ELEMENT);
   });
 });
 
@@ -337,9 +397,9 @@ describe("the label tables", () => {
   it("folds fingerprints and dependency labels the same way", () => {
     const r = new FineRegister({ fingerprintLabels: 2, dependencyLabels: 1, requests: 8, operations: 16 });
     const from = r.openRequest();
-    r.operation("aaaaaaaaaaaaaaaa", 0, 1);
-    r.operation("bbbbbbbbbbbbbbbb", 1, 2);
-    r.operation("cccccccccccccccc", 2, 3); // the third distinct fingerprint does not fit
+    r.operation("aaaaaaaaaaaaaaaa", "query", 0, 1);
+    r.operation("bbbbbbbbbbbbbbbb", "query", 1, 2);
+    r.operation("cccccccccccccccc", "query", 2, 3); // the third distinct fingerprint does not fit
     r.request("GET", "/orders", 200, 0, 10, from, 3, [
       dependencyKey("postgres", "db:5432"),
       dependencyKey("redis", "cache:6379"), // the second distinct label does not fit
@@ -360,7 +420,7 @@ describe("the label tables", () => {
       const from = r.openRequest();
       // A route, a fingerprint and a dependency nobody has seen before, each at its longest: the scanner case
       // this ticket is about, at the worst case the arithmetic is for.
-      r.operation(String(i).padStart(16, "0"), 0, 1);
+      r.operation(String(i).padStart(16, "0"), "query", 0, 1);
       r.request("OPTIONS", `/${"a".repeat(252)}${String(i).padStart(3, "0")}`, 200, 0, 10, from, 1, [
         dependencyKey("postgres", `${"t".repeat(252)}${String(i).padStart(4, "0")}`),
       ]);

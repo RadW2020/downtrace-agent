@@ -1,9 +1,11 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { CallFingerprints } from "../src/calls.ts";
 import { currentContext, enterRequest, type RequestContext } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { Excluded } from "../src/exclude.ts";
+import { FineRegister } from "../src/fine.ts";
 import { instrumentHttp } from "../src/instrument/http.ts";
 import type { Logger } from "../src/log.ts";
 import { escapedFrom } from "./support/escaped.ts";
@@ -416,5 +418,121 @@ describe("a failure while recording never reaches the application", () => {
     expect(escaped, "escaped as an uncaught exception").toEqual([]);
     // Handed to the agent's count of internal errors once per hook that failed, and nothing else was.
     expect(failures.splice(0)).toEqual(Array.from({ length: hooks }, () => broken));
+  });
+});
+
+/**
+ * DT-17, `product.md:142`: the detail of a request keeps its outgoing calls with their timings and overlaps.
+ * Each call is an operation `call` — its method and the host it asked for — beside the counter of its
+ * dependency, in what the request ran (the profile) and in the black box.
+ */
+describe("an outgoing call is an operation", () => {
+  const calls = new CallFingerprints("call");
+
+  beforeEach(() => {
+    stop();
+    stop = instrumentHttp({ ...deps, calls });
+  });
+
+  afterEach(() => {
+    stop();
+    stop = instrumentHttp(deps);
+  });
+
+  const callsOf = async (ctx: RequestContext) => (await opsOf(ctx)).filter((o) => o.kind === "call");
+
+  it("records two concurrent fetches as one call run twice, overlapping in the black box", async () => {
+    const fine = new FineRegister();
+    const ctx = enterRequest(fine, performance.now());
+    await Promise.all([
+      fetch(`http://127.0.0.1:${port}/a`, { method: "POST", body: "{}" }),
+      fetch(`http://127.0.0.1:${port}/a`, { method: "POST", body: "{}" }),
+    ]);
+    const [call] = await callsOf(ctx);
+    expect(call).toMatchObject({ kind: "call", text: `POST 127.0.0.1:${port}`, count: 2, errors: 0 });
+    fine.request("POST", "/checkout", 200, 0, 100, ctx.fineFrom, ctx.fineOps);
+    const operations = fine.snapshot().requests[0]?.operations ?? [];
+    expect(operations.map((o) => o.kind)).toEqual(["call", "call"]);
+    const [first, second] = [...operations].sort((a, b) => a.startMs - b.startMs);
+    // Started before the other ended: time the request waited on both at once, not one after the other.
+    expect(first && second && second.startMs < first.endMs).toBe(true);
+  });
+
+  it("records the node:http client too, under the same label fetch would", async () => {
+    const ctx = enterRequest();
+    await new Promise<void>((done) => {
+      http.get({ host: "127.0.0.1", port, path: "/b?secret=1" }, (res) => {
+        res.resume();
+        res.on("end", () => done());
+      });
+    });
+    const [call] = await callsOf(ctx);
+    // The method and the host: never the path, never the query string (invariant 5).
+    expect(call?.text).toBe(`GET 127.0.0.1:${port}`);
+    expect(JSON.stringify(call)).not.toContain("secret");
+  });
+
+  it("counts a call that failed as an error of the call, beside the error it threw", async () => {
+    const ctx = enterRequest();
+    await fetch(`http://127.0.0.1:${port}/boom`);
+    const [call] = await callsOf(ctx);
+    // A 5xx is a failed execution of the call, not an error of its own: nobody threw anything.
+    expect(call).toMatchObject({ count: 1, errors: 1 });
+    expect((await opsOf(ctx)).filter((o) => o.kind === "error")).toEqual([]);
+  });
+
+  it("records a fetch that never connected as a failed call, which only the wrapper sees", async () => {
+    const ctx = enterRequest();
+    await expect(fetch("http://127.0.0.1:1/nowhere", { method: "PUT" })).rejects.toThrow();
+    const [call] = await callsOf(ctx);
+    expect(call).toMatchObject({ text: "PUT 127.0.0.1:1", count: 1, errors: 1 });
+  });
+
+  it("records nothing of a host the operator excluded: neither the call nor its counter", async () => {
+    const ctx = enterRequest(undefined, undefined, new Excluded([`127.0.0.1:${port}`]));
+    await fetch(`http://127.0.0.1:${port}/a`);
+    expect(await workOf(ctx)).toEqual([]);
+    expect(ctx.operations).toBeUndefined();
+  });
+
+  // Invariant 2: a failure while recording the operation is the instrumentation's own. It is counted, and the
+  // application's call ends exactly as it would have.
+  it("counts a register that throws as an internal error, and the application's call completes", async () => {
+    const broken = new Error("the ring broke");
+    const fine = new FineRegister();
+    fine.operation = () => {
+      throw broken;
+    };
+    const ctx = enterRequest(fine, performance.now());
+    const response = await fetch(`http://127.0.0.1:${port}/a`, { method: "POST", body: "{}" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
+    await workOf(ctx);
+    expect(failures.splice(0)).toEqual([broken]);
+  });
+
+  it("counts a fingerprint cache that throws as an internal error, and a fetch that failed rejects with its own", async () => {
+    const broken = new Error("the cache broke");
+    stop();
+    stop = instrumentHttp({
+      ...deps,
+      calls: {
+        get: () => {
+          throw broken;
+        },
+      } as unknown as CallFingerprints,
+    });
+    enterRequest();
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow("fetch failed");
+    expect(failures.splice(0)).toEqual([broken]);
+  });
+
+  it("records no operation where nobody handed it a cache, as before", async () => {
+    stop();
+    stop = instrumentHttp(deps);
+    const ctx = enterRequest();
+    await fetch(`http://127.0.0.1:${port}/a`);
+    expect((await workOf(ctx))[0]?.calls).toBe(1);
+    expect(ctx.operations).toBeUndefined();
   });
 });

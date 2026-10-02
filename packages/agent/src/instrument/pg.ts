@@ -250,12 +250,14 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
           if (sql !== undefined && fingerprints) {
             const ctx = currentContext();
             if (ctx) {
+              // With its target, so a database the operator excluded leaves no query either (ADR 0101).
               recordOperationIn(ctx, {
                 kind: "query",
                 fingerprint: fingerprints.get(sql),
                 startedAt: started,
                 endedAt: started + ms,
                 failed,
+                target,
               });
               recordErrorIn(ctx, deps.errors, failed, err, target, started, started + ms);
             }
@@ -287,6 +289,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
                   startedAt: started,
                   endedAt: started + ms,
                   failed,
+                  target,
                 });
                 recordErrorIn(ctx, deps.errors, failed, cbArgs[0], target, started, started + ms);
               }

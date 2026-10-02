@@ -12,8 +12,15 @@
  * Nothing leaves the process. A capture will freeze it (gh-277).
  */
 
-import { EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "@downtrace/protocol";
-import { DEPENDENCY_LABEL_MAX_LENGTH, FINGERPRINT_LABEL_MAX_LENGTH, LabelTable } from "./labels.ts";
+import { EVIDENCE_REQUESTS_MAX_ITEMS_V0, type Operation } from "@downtrace/protocol";
+import {
+  DEPENDENCY_LABEL_MAX_LENGTH,
+  FINGERPRINT_LABEL_MAX_LENGTH,
+  kindOf,
+  LabelTable,
+  labelOf,
+  packOperation,
+} from "./labels.ts";
 import { DEFAULT_ARMED_ROUTES, DEFAULT_REQUESTS_PER_ARMED_ROUTE } from "./prearm.ts";
 import { MAX_ROUTE_LABEL_LENGTH, METHODS, OTHER_ROUTE } from "./routes.ts";
 
@@ -89,7 +96,11 @@ const R_DEP_TRUNCATED = 9;
 const R_POOL_WAIT = 10;
 const R_FIELDS = 11;
 
-/** Fields of one operation row. */
+/**
+ * Fields of one operation row. The fingerprint's slot holds its label's index and the operation's kind packed
+ * into one number (`labels.ts`): the evidence names the kind of every operation (ADR 0219), and a column for it
+ * is a number per operation the budget has no room for.
+ */
 const O_FINGERPRINT = 0;
 /** Start and end, in milliseconds from the start of the request that owns it. */
 const O_START = 1;
@@ -100,6 +111,11 @@ const O_FIELDS = 3;
 export interface FineOperation {
   /** The fingerprint's hash. Never the text: only the hash travels here (invariant 5). */
   hash: string;
+  /**
+   * What kind of operation it is. Absent only when it was written without one, which a reader takes as «did not
+   * say» and never as a query (ADR 0219).
+   */
+  kind?: Operation["kind"];
   startMs: number;
   endMs: number;
 }
@@ -121,7 +137,10 @@ export interface FineRequest {
    * trigger compares wait per request, and a request that never queued is not one that queued for nothing.
    */
   poolWaitMs?: number;
-  /** In the order they started. */
+  /**
+   * In the order they were written, which is when each one **ended**: two calls in flight end in whatever order
+   * the network decides. The evidence puts them in the order they started, which is what its contract says.
+   */
   operations: FineOperation[];
   /**
    * The dependencies this request touched, as `kind|target` — the same label the aggregates are keyed by,
@@ -251,9 +270,9 @@ export class FineRegister {
    * One finished operation of the request that is open. `startMs` and `endMs` are relative to that request's
    * start, so the numbers stay small and comparable however long the process has been up.
    */
-  operation(hash: string, startMs: number, endMs: number): void {
+  operation(hash: string, kind: Operation["kind"], startMs: number, endMs: number): void {
     const at = (this.operationCursor % this.opCapacity) * O_FIELDS;
-    this.operations[at + O_FINGERPRINT] = this.fingerprintLabels.intern(hash);
+    this.operations[at + O_FINGERPRINT] = packOperation(this.fingerprintLabels.intern(hash), kind);
     if (this.fingerprintLabels.folded) this.labelsFolded += 1;
     this.operations[at + O_START] = startMs;
     this.operations[at + O_END] = endMs;
@@ -329,14 +348,7 @@ export class FineRegister {
     const opFrom = this.requests[at + R_OP_FROM] ?? 0;
     const opCount = this.requests[at + R_OP_COUNT] ?? 0;
     const out: FineOperation[] = [];
-    for (let i = 0; i < opCount; i += 1) {
-      const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
-      out.push({
-        hash: this.fingerprintLabels.labels[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
-        startMs: this.operations[opAt + O_START] ?? 0,
-        endMs: this.operations[opAt + O_END] ?? 0,
-      });
-    }
+    for (let i = 0; i < opCount; i += 1) out.push(this.operationOf(opFrom + i));
     return out;
   }
 
@@ -389,15 +401,23 @@ export class FineRegister {
       return { operations: [], lost: true };
     }
     const operations: FineOperation[] = [];
-    for (let i = 0; i < opCount; i += 1) {
-      const opAt = ((opFrom + i) % this.opCapacity) * O_FIELDS;
-      operations.push({
-        hash: this.fingerprintLabels.labels[this.operations[opAt + O_FINGERPRINT] ?? 0] ?? "",
-        startMs: this.operations[opAt + O_START] ?? 0,
-        endMs: this.operations[opAt + O_END] ?? 0,
-      });
-    }
+    for (let i = 0; i < opCount; i += 1) operations.push(this.operationOf(opFrom + i));
     return { operations, lost: false };
+  }
+
+  /** One operation, as a reader sees it, from its absolute cursor. The kind only when it was written with one. */
+  private operationOf(cursor: number): FineOperation {
+    const at = (cursor % this.opCapacity) * O_FIELDS;
+    const packed = this.operations[at + O_FINGERPRINT] ?? 0;
+    const operation: FineOperation = {
+      hash: this.fingerprintLabels.labels[labelOf(packed)] ?? "",
+      startMs: this.operations[at + O_START] ?? 0,
+      endMs: this.operations[at + O_END] ?? 0,
+    };
+    // Assigned rather than spread: the reserve reads this on every request (gh-498), and a spread is an object.
+    const kind = kindOf(packed);
+    if (kind !== undefined) operation.kind = kind;
+    return operation;
   }
 
   snapshot(): FineSnapshot {

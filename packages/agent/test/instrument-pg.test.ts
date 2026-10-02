@@ -624,6 +624,29 @@ describe("a query that fails", () => {
     expect(kinds).toEqual(["query"]);
   });
 
+  // `product.md:104`, ADR 0101: excluding is not observing. A database the operator excluded leaves neither its
+  // counters nor what it ran: no query in the profile or the black box, and no error beside it (DT-17).
+  it("records no query of a database the operator excluded, in either form", async () => {
+    const { pg } = withErrors();
+    class Excluded extends (pg.module.Client as unknown as new () => { query: (...a: unknown[]) => unknown }) {
+      host = "secrets.internal";
+      port = 5432;
+    }
+    const excluding = { has: (t: string) => t === "secrets.internal:5432" };
+    const ctx = enterRequest(undefined, undefined, excluding);
+    const client = new Excluded();
+    await expect(client.query("boom")).rejects.toThrow("query failed");
+    await new Promise((resolve) => client.query("SELECT 1", resolve));
+    expect(ctx.work, "an excluded database is not counted").toBeUndefined();
+    expect(ctx.operations, "nor is what it ran").toBeUndefined();
+
+    // And the same query against a database nobody excluded is seen: a choice, not a blindness.
+    const seen = enterRequest(undefined, undefined, excluding);
+    const other = new (pg.module.Client as unknown as new () => { query: (s: string) => Promise<unknown> })();
+    await other.query("SELECT 1");
+    expect([...(seen.operations?.values() ?? [])].map((o) => o.kind)).toEqual(["query"]);
+  });
+
   it("lets the application see exactly the error it would have seen", async () => {
     const { pg } = withErrors();
     enterRequest();
