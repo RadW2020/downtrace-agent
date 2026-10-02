@@ -60,8 +60,17 @@ const WAIT = /\bAtomics\.wait\b/;
  *   invariant 1 is about the path of a request, and this is not in it. Nor is it the start-up's first
  *   synchronous I/O: resolving `pg` and loading Express go through the module loader, which reads the disk
  *   synchronously under names this guard cannot see.
+ * - `statSync`, in `entry.ts` (DT-48). With `node .` or `node <directory>`, the entry is a directory, and
+ *   `createRequire` reads a path without a trailing separator as a file and resolves from its parent, where
+ *   nothing of the application is. Whether the entry is a directory is one `stat` of the path the realpath
+ *   gave, beside it and for the same reason: at start-up, before the application registers anything, once per
+ *   process, from `Agent.start()`, never in a request (invariant 1), and a fixed cost that does not grow with
+ *   anything (invariant 3).
  */
-const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [{ file: "entry.ts", name: "realpathSync" }];
+const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [
+  { file: "entry.ts", name: "realpathSync" },
+  { file: "entry.ts", name: "statSync" },
+];
 
 /** Every name of the convention on a line, where `SYNC` stops at the first. */
 const SYNC_ALL = new RegExp(SYNC.source, "g");
@@ -135,6 +144,7 @@ describe("synchronous I/O in the agent", () => {
     ["a homegrown name of the same convention", "function flushSync() { write(fd, buffer); }"],
     ["a blocking wait", "Atomics.wait(shared, 0, 0);"],
     ["a realpath in a file that was not allowed one", "return realpathSync(given);"],
+    ["a stat in a file that was not allowed one", "const stats = statSync(entry);"],
   ])("sees the blocking form %s", (_what, text) => {
     expect(offendingLines(codeOf(text))).not.toEqual([]);
   });

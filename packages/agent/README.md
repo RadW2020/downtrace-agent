@@ -591,8 +591,11 @@ Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 
 `pg` and Express are resolved from your application's entry where Node runs it, so they are the ones your
 application loads. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
-(on the command line or in `NODE_OPTIONS`), as it is for Node too. A `pg` that cannot be resolved from there is
-reported as `unavailable` in the batch's observers, which `DOWNTRACE_INSPECT` shows you.
+(on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
+they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
+itself, which differs only for a `main` that is a symlink out of it or that has a `node_modules` of its own
+between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
+batch's observers, which `DOWNTRACE_INSPECT` shows you.
 
 Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every

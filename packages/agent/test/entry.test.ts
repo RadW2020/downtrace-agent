@@ -13,6 +13,11 @@ import { applicationEntry, preservesSymlinksMain } from "../src/entry.ts";
  * `npm i -g`, `/usr/local/bin/<app>`, n8n's official image — the two are not in the same directory, and from
  * the link's directory nothing resolved: `pg` was `unavailable` and no mount was recorded.
  *
+ * DT-48. With `node .` or `node <directory>` — `CMD ["node", "."]` in a Dockerfile — `process.argv[1]` is the
+ * directory and Node runs the main module it finds in it. `createRequire` takes a path without a trailing
+ * separator for a file, and resolved from the directory's parent, where nothing of the application is: the
+ * same loss by another road.
+ *
  * The children below are the proof: the question is how a fresh process started through a link resolves, and
  * the test's own process was not started that way. They wait on the child's exit, never on a timer.
  */
@@ -35,6 +40,12 @@ interface Installed {
   entry: string;
   /** A symlink to the entry in a directory of its own, from which nothing resolves: the binary on the PATH. */
   bin: string;
+  /** The application's directory, whose `package.json` names the entry as its `main`: what `node .` runs there. */
+  app: string;
+  /** A symlink to that directory beside it, the `current` a deployment points at its latest release. */
+  current: string;
+  /** Where the application's `pg` is, which is what anything that resolves from the application has to find. */
+  pg: string;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -57,12 +68,15 @@ async function installed(server = ""): Promise<Installed> {
   );
   await writeFile(path.join(modules, "pg", "index.js"), PG);
   await symlink(EXPRESS, path.join(modules, "express"));
+  await writeFile(path.join(app, "package.json"), JSON.stringify({ name: "app", main: "server.cjs" }));
   const entry = path.join(app, "server.cjs");
   await writeFile(entry, server);
   await mkdir(path.join(dir, "bin"));
   const bin = path.join(dir, "bin", "server");
   await symlink(entry, bin);
-  return { entry, bin };
+  const current = path.join(dir, "lib", "current");
+  await symlink(app, current);
+  return { entry, bin, app, current, pg: path.join(modules, "pg", "index.js") };
 }
 
 /** The environment a child sees: the parent's, minus what would decide the answer for it, plus the scenario's.
@@ -79,9 +93,10 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 function runNode(
   args: string[],
   env: NodeJS.ProcessEnv,
+  cwd?: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { env });
+    const child = spawn(process.execPath, args, { env, cwd });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -100,6 +115,44 @@ describe("applicationEntry", () => {
   it("is the link itself when Node keeps the main module's symlinks", async () => {
     const { bin } = await installed();
     expect(applicationEntry({ argv: ["node", bin], preserveSymlinksMain: true })).toBe(bin);
+  });
+
+  it("is a file as it was given when it is one: nothing changes for it", async () => {
+    const { entry } = await installed();
+    expect(applicationEntry({ argv: ["node", entry] })).toBe(entry);
+  });
+
+  it("is a directory with a trailing separator, so that what resolves from it starts inside it", async () => {
+    const { app, pg } = await installed();
+    const base = applicationEntry({ argv: ["node", app] });
+    expect(base).toBe(`${app}${path.sep}`);
+    expect(createRequire(base).resolve("pg"), "the application's pg, from its own node_modules").toBe(pg);
+    // Without the separator, the search starts in the parent. In this process it may still find some `pg` —
+    // the runner puts its package store on `NODE_PATH`, which the children below go without — but never the
+    // application's.
+    let fromTheParent: string | undefined;
+    try {
+      fromTheParent = createRequire(app).resolve("pg");
+    } catch {
+      fromTheParent = undefined;
+    }
+    expect(fromTheParent, "the failure is real: without it, not the application's pg").not.toBe(pg);
+  });
+
+  it("is the realpath of a symlinked directory, with the separator", async () => {
+    const { app, current } = await installed();
+    expect(applicationEntry({ argv: ["node", current] })).toBe(`${app}${path.sep}`);
+  });
+
+  it("is the symlinked directory itself, with the separator, when Node keeps the main module's symlinks", async () => {
+    const { current } = await installed();
+    expect(applicationEntry({ argv: ["node", current], preserveSymlinksMain: true })).toBe(`${current}${path.sep}`);
+  });
+
+  it("ends a directory in one separator however it was given, the root included", async () => {
+    const { app } = await installed();
+    expect(applicationEntry({ argv: ["node", `${app}${path.sep}`] })).toBe(`${app}${path.sep}`);
+    expect(applicationEntry({ argv: ["node", path.sep] })).toBe(path.sep);
   });
 
   it("is the path as given when it does not exist, and does not throw", () => {
@@ -189,11 +242,59 @@ describe("preservesSymlinksMain agrees with Node", () => {
 });
 
 /**
+ * Each row is a way of naming the application to Node, and the main module Node ran is the judge: it says
+ * which `pg` the application itself loads, and what resolves from the entry has to be that one. The main module
+ * reads the entry with the process's own arguments and flags, which are the ones the instrumentation reads at
+ * `--import`. A row in which the application could not load its own `pg` says nothing, so the test asks for it.
+ */
+describe("what resolves from the entry is what the application loads, however Node was given it", () => {
+  const MAIN = `
+    const { createRequire } = require("node:module");
+    const { pathToFileURL } = require("node:url");
+    import(pathToFileURL(${JSON.stringify(src("entry.ts"))}).href).then(({ applicationEntry, preservesSymlinksMain }) => {
+      const entry = applicationEntry({
+        preserveSymlinksMain: preservesSymlinksMain(process.execArgv, process.env.NODE_OPTIONS),
+      });
+      let fromTheEntry = null;
+      try { fromTheEntry = createRequire(entry).resolve("pg"); } catch {}
+      console.log(JSON.stringify({ application: require.resolve("pg"), fromTheEntry }));
+    }, (err) => { console.error(err); process.exit(1); });
+  `;
+  const rows: Array<[string, (app: Installed) => { args: string[]; cwd?: string }]> = [
+    ["a file", (i) => ({ args: [i.entry] })],
+    ["a symlinked binary", (i) => ({ args: [i.bin] })],
+    ["`node .` from the application's directory", (i) => ({ args: ["."], cwd: i.app })],
+    ["the application's directory", (i) => ({ args: [i.app] })],
+    ["the application's directory with a trailing separator", (i) => ({ args: [`${i.app}${path.sep}`] })],
+    ["a symlinked directory", (i) => ({ args: [i.current] })],
+    [
+      "a symlinked directory, with --preserve-symlinks-main",
+      (i) => ({ args: ["--preserve-symlinks-main", i.current] }),
+    ],
+  ];
+
+  it.each(rows)(
+    "%s",
+    async (_what, how) => {
+      const app = await installed(MAIN);
+      const { args, cwd } = how(app);
+      const { code, stdout, stderr } = await runNode(args, childEnv(), cwd);
+      expect(code, stderr).toBe(0);
+      const { application, fromTheEntry } = JSON.parse(stdout.trim()) as Record<string, unknown>;
+      expect(application, "the application loads its own pg").toBe(app.pg);
+      expect(fromTheEntry, "the entry resolves the pg the application loads").toBe(application);
+    },
+    30_000,
+  );
+});
+
+/**
  * The three places that resolve a module from the application's entry, each called with no `from`: what
  * production gives them when nothing hands them a root. The child is started with `-e`, so Node runs no main
- * module and `process.argv[1]` is the link exactly as written — the path a symlinked binary leaves there.
+ * module and `process.argv[1]` is the link or the directory exactly as written — the path a symlinked binary,
+ * or `node <directory>`, leaves there.
  */
-describe("each site resolves from the entry Node resolved, not from the link", () => {
+describe("each site resolves from the entry Node resolved, not from argv[1] as written", () => {
   const SITES = `
     import { createRequire } from "node:module";
     import { armPg, instrumentPg } from ${JSON.stringify(src("instrument/pg.ts"))};
@@ -226,6 +327,17 @@ describe("each site resolves from the entry Node resolved, not from the link", (
     expect(report.armMounts, "armMounts armed the application's express").toBe(true);
   }, 30_000);
 
+  it("instrumentPg, armPg and armMounts find the application's pg and express from its directory", async () => {
+    const { entry, app } = await installed();
+    const { code, stdout, stderr } = await runNode(["--input-type=module", "-e", SITES, app, entry], childEnv());
+    expect(code, stderr).toBe(0);
+    const report = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(report.fromTheLink, "the failure is real: the directory as a file resolves from its parent").toBe(false);
+    expect(report.instrumentPg, "instrumentPg patched the application's pg").toBe("8.99.0");
+    expect(report.armPg, "armPg resolved the application's pg").toBe("on");
+    expect(report.armMounts, "armMounts armed the application's express").toBe(true);
+  }, 30_000);
+
   it("an entry that does not exist leaves each site where it was, and none of them throws", async () => {
     const { entry } = await installed();
     const missing = path.join(path.dirname(entry), "..", "..", "bin", "no-such-server");
@@ -241,7 +353,7 @@ describe("each site resolves from the entry Node resolved, not from the link", (
 });
 
 /**
- * The application, as a symlinked binary runs it. It serves one request under a mount with a parameter, asks
+ * The application, as a symlinked binary or `node <directory>` runs it. It serves one request under a mount with a parameter, asks
  * the instrumentation to flush, and says which main module Node ran and whether it could load its own express:
  * the scenario's own account of how Node resolved it, which the assertions check before trusting the rest.
  */
@@ -289,10 +401,18 @@ interface Started {
   routes: string[];
 }
 
-/** Starts the installed application through its link with the instrumentation loaded, as `--import` does. */
-async function start(bin: string, flags: string[], extra: Record<string, string> = {}): Promise<Started> {
+/**
+ * Starts the installed application by `main` — its link, its directory, `.` from `cwd` — with the
+ * instrumentation loaded, as `--import` does.
+ */
+async function start(
+  main: string,
+  flags: string[],
+  extra: Record<string, string> = {},
+  cwd?: string,
+): Promise<Started> {
   const env = childEnv({ DOWNTRACE_INSPECT: "stderr", ...extra });
-  const { code, stdout, stderr } = await runNode([...flags, "--import", register, bin, index], env);
+  const { code, stdout, stderr } = await runNode([...flags, "--import", register, main, index], env, cwd);
   expect(code, `the child failed\n${stderr}`).toBe(0);
   let pg: unknown;
   const routes: string[] = [];
@@ -335,6 +455,28 @@ describe("an application started through a symlinked binary, with the instrument
         express: false,
       });
       expect(started.pg, "pg resolved from where Node resolved the application: nowhere").toBe("unavailable");
+    },
+    30_000,
+  );
+});
+
+describe("an application started from its directory, with the instrumentation loaded", () => {
+  it.each<[string, (app: Installed) => { main: string; cwd?: string }]>([
+    ["`node .` from it", (i) => ({ main: ".", cwd: i.app })],
+    ["`node <directory>`", (i) => ({ main: i.app })],
+    ["`node <file>`, as before", (i) => ({ main: i.entry })],
+  ])(
+    "%s, watches its pg and keeps the pattern of its mounts",
+    async (_how, how) => {
+      const app = await installed(SERVER);
+      const { main, cwd } = how(app);
+      const started = await start(main, [], {}, cwd);
+      expect(started.report, "Node ran the package's main, and the application found its express").toEqual({
+        main: app.entry,
+        express: true,
+      });
+      expect(started.pg, "pg resolved from the application's directory").toBe("on");
+      expect(started.routes, "the mount's pattern, not :param").toContain("/tenants/:tenant/users/:id");
     },
     30_000,
   );
