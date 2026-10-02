@@ -610,9 +610,120 @@ describe("calling a tool", () => {
     })) as { content: Array<{ text: string }>; isError?: boolean };
 
     expect(out.isError).toBeUndefined();
-    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/captures/cap-1");
+    // The summary of the capture, which keeps the coarse summary and leaves the requests to their own tool
+    // (DT-15).
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/captures/cap-1?requests=summary");
     // Verbatim: the summary the resource carries is the summary the agent gets.
     expect(said(out)).toBe(resource);
+  });
+});
+
+/**
+ * DT-15, `product.md:166`: «Nobody has to download a whole capture or put it entire into the context of a model
+ * to know what happened». A capture's detail could carry 4,096 requests per delivery, each with its operations;
+ * this server reads the summary, and the requests a page at a time.
+ */
+describe("a capture, read by parts", () => {
+  it("asks for the summary of a capture, which no argument can change", async () => {
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", { name: "read_capture", arguments: { project: "tienda", capture: "cap-1" } });
+    await s.handle("tools/call", {
+      name: "read_capture",
+      arguments: { project: "tienda", capture: "cap-1", requests: "all" },
+    });
+    for (const i of [0, 1]) {
+      const url = new URL(only(calls, i).url);
+      expect(url.pathname).toBe("/api/p/tienda/captures/cap-1");
+      expect([...url.searchParams.entries()]).toEqual([["requests", "summary"]]);
+    }
+  });
+
+  it("does not offer the summary as an argument, because it is not one", () => {
+    expect(Object.keys(toolNamed("read_capture")?.inputSchema.properties ?? {}).sort()).toEqual(["capture", "project"]);
+  });
+
+  it("says in read_capture's description where the requests are and what the summary says of them", () => {
+    const description = toolNamed("read_capture")?.description ?? "";
+    for (const said of ["read_captured_requests", "requests.count", "requests.bytes", "requests.links.first"]) {
+      expect(description, said).toContain(said);
+    }
+  });
+
+  it("reads a page of one instance's requests with the place and the size in the query string", async () => {
+    const page = `{"total":4096,"requests":[{"index":4090,"fromService":{"route":"/checkout"}}]}`;
+    const { s, calls } = server([{ body: page }]);
+    const out = (await s.handle("tools/call", {
+      name: "read_captured_requests",
+      arguments: { project: "tienda", capture: "cap-1", instance: "i 1", offset: 4090, limit: 20 },
+    })) as Called;
+
+    expect(out.isError).toBeUndefined();
+    const url = new URL(only(calls, 0).url);
+    expect(url.pathname).toBe("/api/p/tienda/captures/cap-1/requests");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ instance: "i 1", offset: "4090", limit: "20" });
+    expect(only(calls, 0).method).toBe("GET");
+    // Verbatim, and the request still under `fromService`.
+    expect(said(out)).toBe(page);
+  });
+
+  it("leaves out of the query string what the caller did not give, so the cloud's defaults apply", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "read_captured_requests",
+      arguments: { project: "tienda", capture: "cap-1" },
+    });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/captures/cap-1/requests");
+  });
+
+  it("asks for one request by its index with an offset at it and a limit of one", async () => {
+    const { s, calls } = server([{}]);
+    await s.handle("tools/call", {
+      name: "read_captured_requests",
+      arguments: { project: "tienda", capture: "cap-1", offset: 0, limit: 1 },
+    });
+    expect(Object.fromEntries(new URL(only(calls, 0).url).searchParams)).toEqual({ offset: "0", limit: "1" });
+  });
+
+  it("declares the place and the size of a page as whole numbers in the cloud's range", () => {
+    const properties = toolNamed("read_captured_requests")?.inputSchema.properties;
+    expect(properties?.offset).toMatchObject({ type: "integer", minimum: 0 });
+    expect(properties?.offset).not.toHaveProperty("maximum");
+    expect(properties?.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 100 });
+    expect(properties?.instance?.type).toBe("string");
+  });
+
+  it("is a read: no key, no version, and the hint says so", async () => {
+    const tool = toolNamed("read_captured_requests");
+    expect(tool?.operates).toBeUndefined();
+    const { s } = server();
+    await opened(s, "2025-06-18");
+    const listed = (await s.handle("tools/list", {})) as Listed;
+    expect(listed.tools.find((t) => t.name === "read_captured_requests")?.annotations).toEqual({
+      readOnlyHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("says which argument is missing instead of reading a page of nothing", async () => {
+    const { s, calls } = server();
+    const out = (await s.handle("tools/call", {
+      name: "read_captured_requests",
+      arguments: { project: "tienda" },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("capture");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("hands back a refused page with the cloud's own sentence and its range", async () => {
+    const refused = `{"error":"\`limit\` must be a whole number from 1 to 100","minimum":1,"maximum":100}`;
+    const { s } = server([{ status: 400, body: refused }]);
+    const out = (await s.handle("tools/call", {
+      name: "read_captured_requests",
+      arguments: { project: "tienda", capture: "cap-1", limit: 500 },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toBe(`the cloud answered 400: ${refused}`);
   });
 });
 

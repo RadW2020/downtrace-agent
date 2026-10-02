@@ -37,7 +37,7 @@ Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts
 
 **From `2025-06-18`, a result carries `structuredContent`** beside its text: the JSON object the cloud answered, parsed as it came, so anything under `fromService` is still wrapped. There is no `outputSchema`, because declaring one obliges a server to keep to it and the shape belongs to the API. A refusal, or an answer that is not a JSON object, carries only its text.
 
-**In every revision, the schemas say what the API accepts.** A closed set of values is an `enum`, an instant a `date-time`, and the length of the errors list a whole number from 1 to 200; identifiers are strings. The values of each `enum` are written here, because this package does not read the cloud's code, and an end-to-end walk compares them with the cloud's in both directions.
+**In every revision, the schemas say what the API accepts.** A closed set of values is an `enum`, an instant a `date-time`, the length of the errors list a whole number from 1 to 200, and a page of a capture's requests a whole number from 1 to 100 from a place of 0 onwards; identifiers are strings. The values of each `enum` are written here, because this package does not read the cloud's code, and an end-to-end walk compares them with the cloud's in both directions.
 
 A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own. A credential refused for its level is told which: the cloud answers 403 with the `level` the credential has and the level the operation `needs`, while a token that is not a usable credential —invented, expired or revoked— gets the 401, the same one for the three.
 
@@ -58,7 +58,8 @@ Named after the capability, not the route: an agent looks for "verify the recove
 | `compare_windows` | the differences ordered by how much they explain |
 | `verify_recovery` | did what I changed work |
 | `read_history` | further back than the fine-grained data goes; with `baselineFrom` and `baselineTo` (both or neither), the comparison of the two windows the history page shows, with `baseline` and `comparison` |
-| `list_captures`, `read_capture`, `request_capture` | ask for detail on a route or a dependency |
+| `list_captures`, `read_capture`, `request_capture` | ask for detail on a route or a dependency. `read_capture` reads the capture's summary: how many requests each instance kept and how large they are, without them |
+| `read_captured_requests` | the requests a capture kept, a page at a time, each with its `index`, its place in its delivery: `offset` at an index and `limit` at 1 is that one request. Nobody has to put a whole capture in their context to know what happened |
 | `close_finding`, `accept_reference`, `assess_hypothesis`, `give_feedback` | decide |
 | `annotate_finding`, `record_regression`, `list_regressions` | what you know and Downtrace could not measure |
 | `silence_alerts`, `lift_silence` | stop being told, with a scope and an end |

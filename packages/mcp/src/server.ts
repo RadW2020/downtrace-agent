@@ -104,6 +104,7 @@ export function createServer(opts: ServerOptions) {
       const value = args[name];
       if (value !== undefined) url.searchParams.set(name, String(value));
     }
+    for (const [name, value] of Object.entries(tool.fixedQuery ?? {})) url.searchParams.set(name, value);
 
     const headers: Record<string, string> = { accept: "application/json" };
     if (opts.config.token !== "") headers.authorization = `Bearer ${opts.config.token}`;

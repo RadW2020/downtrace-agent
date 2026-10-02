@@ -39,6 +39,12 @@ export interface Tool {
   path: string;
   /** Which input fields go in the query string rather than the body. */
   query?: string[];
+  /**
+   * Query parameters the tool always sends, whatever the arguments say: they are not arguments, so a caller
+   * neither sees nor changes them. How a read asks for the shape that suits a coding agent's context when the
+   * API's default is another (DT-15).
+   */
+  fixedQuery?: Record<string, string>;
   /** True when this changes something: the caller sends an idempotency key and, sometimes, a version. */
   operates?: boolean;
   /**
@@ -54,6 +60,7 @@ export interface Tool {
 
 const project = { type: "string", description: "The project's slug." } as const;
 const finding = { type: "string", description: "The finding's numeric id." } as const;
+const capture = { type: "string", description: "The capture's id." } as const;
 const error = {
   type: "string",
   description: "The error's identifier, as `list_errors` gives it.",
@@ -425,14 +432,52 @@ export const tools: Tool[] = [
   },
   {
     name: "read_capture",
-    description: "One capture and whatever evidence has arrived, with both of its coverages.",
+    description:
+      "One capture and whatever evidence has arrived, with both of its coverages, how the requests it kept spent " +
+      "their time, and which fraction of its footprint's requests those were. The requests themselves are not in " +
+      "it: a delivery can hold thousands, each with its operations. Each instance's evidence says how many it " +
+      "holds (`requests.count`), how large they are (`requests.bytes`) and where their first page is " +
+      "(`requests.links.first`); read them a page at a time, or one by its index, with `read_captured_requests`.",
     inputSchema: {
       type: "object",
-      properties: { project, capture: { type: "string", description: "The capture's id." } },
+      properties: { project, capture },
       required: ["project", "capture"],
     },
     method: "GET",
     path: "/api/p/{slug}/captures/{id}",
+    fixedQuery: { requests: "summary" },
+  },
+  {
+    name: "read_captured_requests",
+    description:
+      "The requests one instance kept for a capture, a page at a time and in the order they arrived. Each comes " +
+      "with its `index`, its place in that instance's delivery, which is how a request is cited and asked for " +
+      "again: `offset` at the index and `limit` at 1 is that one request, now or later, because a delivery is " +
+      "never rewritten. The answer says the `total` and, while there are more, the `next` page. What each request " +
+      "did — its route, its status, its duration and its operations — is under `fromService`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        capture,
+        instance: {
+          type: "string",
+          description:
+            "The instance whose requests to read, as `read_capture` names it under `evidence[].instance`. It can " +
+            "be left out when one instance delivered; with several, the answer names them.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 0,
+          description: "The index of the first request to return, up to the delivery's total. 0 by default.",
+        },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "How many to return. Twenty by default." },
+      },
+      required: ["project", "capture"],
+    },
+    method: "GET",
+    path: "/api/p/{slug}/captures/{id}/requests",
+    query: ["instance", "offset", "limit"],
   },
   {
     name: "list_regressions",
