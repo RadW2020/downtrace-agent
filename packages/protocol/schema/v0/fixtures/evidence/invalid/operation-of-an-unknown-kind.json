@@ -1,0 +1,33 @@
+{
+  "protocol": "0.9.0",
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "startedAt": "2026-09-10T10:00:00.000Z",
+  "endedAt": "2026-09-10T10:01:00.000Z",
+  "coverage": {
+    "observedRequests": 1,
+    "attachedRequests": 0,
+    "detailLost": 0,
+    "truncated": 0
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "route": "/checkout",
+      "status": 200,
+      "startedAt": "2026-09-10T10:00:03.120Z",
+      "durationMs": 250,
+      "operations": [
+        {
+          "kind": "timeout",
+          "hash": "3e1f0a9c5b7d2468",
+          "startMs": 40,
+          "endMs": 240
+        }
+      ]
+    }
+  ]
+}

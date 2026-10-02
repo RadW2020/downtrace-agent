@@ -22,6 +22,7 @@ ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
 ajv.addKeyword("x-since");
+ajv.addKeyword("x-error");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 /**

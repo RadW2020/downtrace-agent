@@ -113,6 +113,10 @@ export interface CapturedRequest {
  */
 export interface CapturedOperation {
   /**
+   * What kind of operation this is, in the words of the batch's `Operation.kind`, whose enum this borrows: a query, an outgoing call or a Redis command the request ran, or one of the kinds of error recorded in it beside what failed. Since 0.9.0. **Absent means the sender did not say**, never a query: an instrumentation older than the field wrote every operation it recorded here without one, the error signatures beside a failed query among them, and a reader that took them for queries would be naming what it was not told.
+   */
+  kind?: "query" | "error" | "framework" | "explicit" | "call" | "command";
+  /**
    * The fingerprint's hash. Never the text: the profile is where a sender chooses whether to ship the text of its queries, and this path never carries it (invariant 5, ADR 0017).
    */
   hash: string;

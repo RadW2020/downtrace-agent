@@ -5,7 +5,7 @@
  */
 export type ObserverState = "on" | "off" | "unavailable";
 /**
- * A value of `Operation.kind` but a query: the ways an error inside a request arrives, and so the sources that can produce one.
+ * A value of `Operation.kind` that its `x-error` marks as an error: the ways an error inside a request arrives, and so the sources that can produce one. A query, an outgoing call and a Redis command are things a route ran, never a source of error.
  */
 export type InRequestErrorSource = "error" | "framework" | "explicit";
 /**
@@ -291,7 +291,7 @@ export interface AgentResources {
  */
 export interface ErrorSources {
   /**
-   * The sources of the errors this process sees inside a request, by the value of `Operation.kind` they arrive as, a query excluded: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself. No value appears twice.
+   * The sources of the errors this process sees inside a request, by the value of `Operation.kind` they arrive as, among the values `x-error` marks as errors: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself. No value appears twice.
    */
   inRequest: InRequestErrorSource[];
   /**
@@ -547,15 +547,15 @@ export interface ProfileEndpoint {
  */
 export interface Operation {
   /**
-   * What kind of operation this is. `query` is something the route ran; the other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not.
+   * What kind of operation this is. Three are things the route ran: `query`, a query to a database; `call`, an outgoing HTTP call, identified by its method and its host; `command`, a Redis command, identified by its name and its server. The other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not; `x-error` says which values are errors, which is what a list of errors takes and the rest never reach (ERR-01).
    */
-  kind: "query" | "error" | "framework" | "explicit";
+  kind: "query" | "error" | "framework" | "explicit" | "call" | "command";
   /**
    * Stable identity of the operation, or `(other)` for the bucket that holds the rest.
    */
   hash: string;
   /**
-   * Normalised text, e.g. `SELECT id FROM products WHERE id = ?`. Optional: a user who would rather not send it keeps the whole analysis, only without the label.
+   * Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none.
    */
   text?: string;
   /**

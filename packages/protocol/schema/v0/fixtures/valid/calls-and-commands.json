@@ -1,0 +1,59 @@
+{
+  "protocol": "0.9.0",
+  "agent": {
+    "name": "@downtrace/agent",
+    "version": "0.0.0",
+    "runtime": "node",
+    "runtimeVersion": "v24.0.0"
+  },
+  "instance": {
+    "id": "7d1e9c6a-4f2b-4c1e-9b0a-2f6d3e8a1c55",
+    "hostname": "web-1",
+    "pid": 4242
+  },
+  "deploy": {
+    "version": "8f71ac2",
+    "environment": "production"
+  },
+  "intervals": [],
+  "profile": {
+    "start": 1756900000000,
+    "durationMs": 60000,
+    "endpoints": [
+      {
+        "method": "POST",
+        "route": "/checkout",
+        "operations": [
+          {
+            "kind": "query",
+            "hash": "b7c1d0f2a3e45861",
+            "text": "SELECT id, price_cents FROM products WHERE id = ?",
+            "count": 1440,
+            "totalMs": 812.4
+          },
+          {
+            "kind": "call",
+            "hash": "3e1f0a9c5b7d2468",
+            "text": "POST api.stripe.com",
+            "count": 1440,
+            "totalMs": 288000.5,
+            "errors": 2
+          },
+          {
+            "kind": "command",
+            "hash": "5d2c8e4f1a6b9073",
+            "text": "HGETALL cache:6379",
+            "count": 720,
+            "totalMs": 360.2
+          },
+          {
+            "kind": "call",
+            "hash": "7a9b1c3d5e7f9021",
+            "count": 12,
+            "totalMs": 2400
+          }
+        ]
+      }
+    ]
+  }
+}

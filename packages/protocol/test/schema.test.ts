@@ -18,6 +18,7 @@ ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
 ajv.addKeyword("x-since");
+ajv.addKeyword("x-error");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 async function load(kind: "valid" | "invalid"): Promise<[string, unknown][]> {
@@ -63,12 +64,32 @@ describe("aggregates schema v0", () => {
     }
   });
 
-  it("says, for the sources of error, which kind of error arrives as each value", () => {
-    // The declaration's lists hold the values of the two `kind` enums, a query excluded from the one inside a
-    // request, so the cloud can count a declared source only when the protocol carries it. The lists are
-    // compared against the enums themselves, so a value added to a kind without its source fails here.
+  it("says, for every kind of operation, whether it is an error", () => {
+    // Every value of the enum is classified, both ways, beside the enum itself: a kind that is not an error is
+    // something the route ran — a query, an outgoing call, a Redis command — and it must never reach a list of
+    // errors (ERR-01), while a kind of error that nobody marked would never reach it. The keys are compared with
+    // the enum, so a value added to it without saying which it is fails here (DT-16).
     const defs = (AGGREGATES_SCHEMA_V0 as { $defs: Record<string, { properties?: Record<string, unknown> }> }).$defs;
-    const kind = (name: string) => (defs[name]?.properties?.kind as { enum?: string[] } | undefined)?.enum ?? [];
+    const kind = defs.Operation?.properties?.kind as { enum?: string[]; "x-error"?: Record<string, unknown> };
+    const marks = kind["x-error"] ?? {};
+    expect(Object.keys(marks).sort()).toEqual([...(kind.enum ?? [])].sort());
+    for (const [value, mark] of Object.entries(marks)) expect(typeof mark, value).toBe("boolean");
+    // The three that are not errors are the three things a route runs, and the rest are errors.
+    expect(
+      Object.entries(marks)
+        .filter(([, isError]) => !isError)
+        .map(([value]) => value),
+    ).toEqual(["query", "call", "command"]);
+  });
+
+  it("says, for the sources of error, which kind of error arrives as each value", () => {
+    // The declaration's lists hold the values of the two `kind` enums that are errors — inside a request, the ones
+    // `x-error` marks; outside, every one — so the cloud can count a declared source only when the protocol
+    // carries it. The lists are compared against the enums themselves, so a value added to a kind without its
+    // source fails here, and so does a kind that is not an error turning up as a source.
+    const defs = (AGGREGATES_SCHEMA_V0 as { $defs: Record<string, { properties?: Record<string, unknown> }> }).$defs;
+    const kind = (name: string) =>
+      (defs[name]?.properties?.kind as { enum?: string[]; "x-error"?: Record<string, boolean> } | undefined) ?? {};
     const list = (name: string) =>
       (
         (defs.ErrorSources?.properties as Record<string, { items?: { $ref?: string } }> | undefined)?.[name]?.items
@@ -80,8 +101,11 @@ describe("aggregates schema v0", () => {
     expect(inDef).toBeTruthy();
     expect(outDef).toBeTruthy();
     expect(inDef).not.toBe(outDef);
-    expect(sourceEnum(inDef)).toEqual(kind("Operation").filter((v) => v !== "query"));
-    expect(sourceEnum(outDef)).toEqual(kind("ProcessException"));
+    const operation = kind("Operation");
+    const errors = (operation.enum ?? []).filter((v) => operation["x-error"]?.[v] === true);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(sourceEnum(inDef)).toEqual(errors);
+    expect(sourceEnum(outDef)).toEqual(kind("ProcessException").enum ?? []);
   });
 
   it("never drops a minor it once published", () => {
@@ -136,9 +160,42 @@ describe("aggregates schema v0", () => {
     // declarations that do not say a thing the process is (gh-768).
     expect(reason("error-sources-with-a-query.json")).toMatch(/inRequest.*must be equal to one of the allowed values/);
     expect(reason("error-sources-with-a-repeat.json")).toMatch(/inRequest must NOT have duplicate items/);
+    // A call is something the route ran, not a way an error arrives (DT-16).
+    expect(reason("error-sources-with-a-call.json")).toMatch(/inRequest.*must be equal to one of the allowed values/);
+    // A kind the schema does not know is a sender that is broken or ahead of the cloud, refused at the door
+    // as it always was (ADR 0008, DT-16).
+    expect(reason("operation-of-an-unknown-kind.json")).toMatch(/kind must be equal to one of the allowed values/);
+    // A call and a command are a word and where it went, and never a path, a query string, a key or an
+    // argument: the door refuses one that carries more (invariant 5, DT-16).
+    expect(reason("call-with-a-path.json")).toMatch(/text must match pattern/);
+    expect(reason("call-with-a-query-string.json")).toMatch(/text must match pattern/);
+    expect(reason("command-with-its-key.json")).toMatch(/text must match pattern/);
     expect(reason("error-sources-with-an-unknown-value.json")).toMatch(
       /inRequest.*must be equal to one of the allowed values/,
     );
+  });
+
+  it("reads an outgoing call and a Redis command as operations a route ran, labelled by a word and a place", async () => {
+    // `product.md:142`: the structural footprint is «queries by fingerprint, outgoing calls by host, Redis
+    // operations». A call is its method and host, a command its name and server, and either may travel as its
+    // hash alone (DT-16).
+    const doc = byName(await load("valid"), "calls-and-commands.json") as unknown as {
+      profile: { endpoints: { operations: { kind: string; text?: string }[] }[] };
+    };
+    expect(validate(doc), ajv.errorsText(validate.errors)).toBe(true);
+    const ops = doc.profile.endpoints[0]?.operations ?? [];
+    expect(ops.map((o) => [o.kind, o.text])).toEqual([
+      ["query", "SELECT id, price_cents FROM products WHERE id = ?"],
+      ["call", "POST api.stripe.com"],
+      ["command", "HGETALL cache:6379"],
+      ["call", undefined],
+    ]);
+    // The shape of the label binds a call and a command only: a query's text has spaces, slashes and question
+    // marks of its own, and stays as it was.
+    const query = structuredClone(doc);
+    const first = query.profile.endpoints[0]?.operations[0];
+    if (first) first.text = "SELECT a FROM b WHERE c = ? AND d = '/?#'";
+    expect(validate(query), ajv.errorsText(validate.errors)).toBe(true);
   });
 
   it("reads a declaration of the sources of error the sender has connected", async () => {

@@ -33,6 +33,7 @@ function batchValidator() {
   ajv.addKeyword("x-calls-per-request-boundaries");
   ajv.addKeyword("x-ingest-path");
   ajv.addKeyword("x-since");
+  ajv.addKeyword("x-error");
   return ajv.compile(AGGREGATES_SCHEMA_V0);
 }
 
@@ -182,6 +183,7 @@ describe("Sender, carrying the profile", () => {
     ajv.addKeyword("x-calls-per-request-boundaries");
     ajv.addKeyword("x-ingest-path");
     ajv.addKeyword("x-since");
+    ajv.addKeyword("x-error");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(calls[0]?.body), JSON.stringify(validate.errors)).toBe(true);
   });
@@ -919,6 +921,7 @@ describe("Sender, delivering what the process threw", () => {
     ajv.addKeyword("x-calls-per-request-boundaries");
     ajv.addKeyword("x-ingest-path");
     ajv.addKeyword("x-since");
+    ajv.addKeyword("x-error");
     const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
     expect(validate(last), JSON.stringify(validate.errors)).toBe(true);
   });

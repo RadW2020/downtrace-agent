@@ -252,6 +252,50 @@ describe("the capture evidence schema", () => {
     }
   });
 
+  /**
+   * DT-16: an operation of a captured request may say what kind it is — a query, an outgoing call, a Redis
+   * command, or one of the errors — in the words of the batch's `Operation.kind`, whose enum it borrows: one
+   * fact, one place, and `make gen` refuses a copy that drifts.
+   */
+  it("borrows the kind of an operation from the batch's, and only from it", () => {
+    const captured = (
+      CAPTURE_EVIDENCE_SCHEMA_V0 as {
+        $defs: { CapturedOperation: { required: string[]; properties: { kind: { enum: string[] } } } };
+      }
+    ).$defs.CapturedOperation;
+    const batch = (AGGREGATES_SCHEMA_V0 as { $defs: { Operation: { properties: { kind: { enum: string[] } } } } }).$defs
+      .Operation.properties.kind.enum;
+    expect(captured.properties.kind.enum).toEqual(batch);
+    expect(captured.properties.kind.enum).toContain("call");
+    expect(captured.properties.kind.enum).toContain("command");
+    // Optional: every sender before this minor wrote its operations here without it.
+    expect(captured.required).not.toContain("kind");
+  });
+
+  it("accepts operations that say their kind and refuses a kind nobody declared", async () => {
+    const valid = (await load("valid")).find(([n]) => n === "with-operation-kinds.json");
+    expect(valid).toBeDefined();
+    expect(validate(valid?.[1]) || ajv.errorsText(validate.errors)).toBe(true);
+
+    const unknown = (await load("invalid")).find(([n]) => n === "operation-of-an-unknown-kind.json");
+    expect(unknown).toBeDefined();
+    expect(validate(unknown?.[1])).toBe(false);
+    expect(ajv.errorsText(validate.errors)).toMatch(/kind must be equal to one of the allowed values/);
+  });
+
+  /**
+   * Criterion 3 (DT-16): an evidence whose operations carry no kind — every sender before 0.9.0, whose black box
+   * wrote queries and the error signatures beside them alike — stays valid. That every other valid fixture lacks
+   * the field is asserted, so this test cannot pass the day the kind is added to them or made required.
+   */
+  it("keeps an evidence whose operations say no kind valid, the way an older sender's stays", async () => {
+    for (const [name, doc] of await load("valid")) {
+      if (name === "with-operation-kinds.json") continue;
+      expect(JSON.stringify(doc)).not.toContain('"kind"');
+      expect(validate(doc) || `${name}: ${ajv.errorsText(validate.errors)}`).toBe(true);
+    }
+  });
+
   it("speaks exactly the versions the batch does", () => {
     // One fact, one place: the enum lives in the batch schema and `make gen` refuses a copy that has drifted.
     const batch = (AGGREGATES_SCHEMA_V0.properties.protocol as { enum: string[] }).enum;

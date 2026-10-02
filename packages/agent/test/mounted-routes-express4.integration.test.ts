@@ -17,6 +17,7 @@ ajv.addKeyword("x-latency-boundaries-ms");
 ajv.addKeyword("x-calls-per-request-boundaries");
 ajv.addKeyword("x-ingest-path");
 ajv.addKeyword("x-since");
+ajv.addKeyword("x-error");
 const validate = ajv.compile(AGGREGATES_SCHEMA_V0);
 
 /** In-process stand-in for the cloud: captures the batches it is POSTed. */
