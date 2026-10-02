@@ -840,6 +840,37 @@ describe("a retry of an operation", () => {
     expect(calls).toHaveLength(1);
   });
 
+  // An acceptance is a decision with an author too, and the cloud does not let a second one rewrite who took
+  // it, why, or since when the same difference stays quiet: accepting a finding that is already closed,
+  // accepted or not, is a 409 that changes nothing, and it carries the acceptance as it stands.
+  it("says in accept_reference's description what the 409 of a closed finding means", () => {
+    const description = toolNamed("accept_reference")?.description ?? "";
+    for (const what of ["already closed", "already accepted", "409", "changes nothing", "`accepted`", "annotation"]) {
+      expect(description, what).toContain(what);
+    }
+    for (const field of ["by", "why", "at", "declared"]) {
+      expect(description, field).toContain(`\`${field}\``);
+    }
+    expect(description).toContain("same `idempotencyKey`");
+  });
+
+  it("hands the 409 of an accepted finding back with its acceptance, and sends exactly one request", async () => {
+    const standing =
+      `{"error":"this finding is already closed, so nothing was changed","finding":7,"state":"closed",` +
+      `"closedReason":"accepted","closedAt":"2026-10-02T09:00:00Z","accepted":{"declared":false,` +
+      `"by":"ana (cred-1)","why":"batched on purpose","at":"2026-10-02T09:00:00Z"}}`;
+    const { s, calls } = server([{ status: 409, body: standing }]);
+    const out = (await s.handle("tools/call", {
+      name: "accept_reference",
+      arguments: { project: "tienda", finding: "7", why: "mine now", version: "abc123" },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    for (const what of ["409", "already closed", `"by":"ana (cred-1)"`, `"why":"batched on purpose"`]) {
+      expect(said(out), what).toContain(what);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
   // Enumerated from the source, not from a list here (repo rule): an operation added later that does not
   // declare the key would make the README false again, and this is the test that says so.
   it("declares the idempotency key in every operation, and in no read", () => {

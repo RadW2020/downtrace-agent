@@ -558,7 +558,14 @@ export const tools: Tool[] = [
   },
   {
     name: "accept_reference",
-    description: "Accept the current behaviour as the new normal for this finding." + idempotentRetry,
+    description:
+      "Accept the current behaviour as the new normal for this finding. A finding that is already closed is " +
+      "not accepted, also when it is already accepted, because a second acceptance would overwrite who " +
+      "accepted it, why and since when the same difference stays quiet: the cloud answers 409, changes " +
+      "nothing, and says how it stands closed — `closedReason` and `closedAt` — with, when an acceptance closed " +
+      "it, that acceptance in `accepted`: `by`, `why`, `at` and whether `declared`. If that acceptance is your " +
+      "own and its answer never reached you, the 409 is it; a correction to the reason is an annotation." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: { project, finding, why, version, idempotencyKey },
