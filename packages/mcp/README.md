@@ -25,6 +25,8 @@ Downtrace as tools a coding agent can discover and use: the queries and the oper
 
 `DOWNTRACE_URL` is required. `DOWNTRACE_TOKEN` is not: without it the server comes up **read-only**, every operation is still listed, and calling one says what credential it would need. That is more use than refusing to start.
 
+The shared administration password is not the token for a project. This server sends its token as a Bearer token, and in that shape the password opens `list_projects` and `read_credential` and no tool about a project: those answer it a 403 with `needs: "access credential"`, because a project's reads and operations need an access credential of that project.
+
 The token is read from the environment and never from an argument: an argument ends up in a process list and in a shell history, and this one can close findings.
 
 ## What it speaks
@@ -39,7 +41,7 @@ Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts
 
 **In every revision, the schemas say what the API accepts.** A closed set of values is an `enum`, an instant a `date-time`, the length of the errors list a whole number from 1 to 200, and a page of a capture's requests a whole number from 1 to 100 from a place of 0 onwards; identifiers are strings. The values of each `enum` are written here, because this package does not read the cloud's code, and an end-to-end walk compares them with the cloud's in both directions.
 
-A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own. A credential refused for its level is told which: the cloud answers 403 with the `level` the credential has and the level the operation `needs`, while a token that is not a usable credential —invented, expired or revoked— gets the 401, the same one for the three.
+A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own. A credential refused for its level is told which: the cloud answers 403 with the `level` the credential has and the level the operation `needs` —or `access credential`, to the administration password at a tool about a project—, while a token that is not a usable credential —invented, expired or revoked— gets the 401, the same one for the three.
 
 **No dependencies.** The protocol a tools-only server needs is three methods, and it is written out here. See ADR 0078 for the argument and for the risk.
 
@@ -49,7 +51,8 @@ Named after the capability, not the route: an agent looks for "verify the recove
 
 | | |
 |---|---|
-| `read_credential` | **ask it first** when you do not know the project's slug: the project your credential belongs to, its level and expiry, the environments it reaches, and every route of the project with the level it needs and whether your credential opens it |
+| `read_credential` | **ask it first** when you do not know the project's slug: the project your credential belongs to, its level and expiry, the environments it reaches, and every route of the project with the level it needs and whether your credential opens it. Given the administration password, level `admin`, no project and every route closed |
+| `list_projects` | every project's slug, with its open findings and its last batch, as the front page reads them. Only the administration password opens it, and the password opens no tool about a project |
 | `project_status` | traffic, endpoints —ordered by the column you name, as on the page—, dependencies, runtime, coverage, budget |
 | `list_findings`, `read_finding` | what was detected |
 | `list_errors`, `read_error` | every error observed, from the first one, with no traffic minimum —ordered by last seen, first seen or how many times, as on the page— |

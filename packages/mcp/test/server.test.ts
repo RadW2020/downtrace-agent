@@ -1374,6 +1374,49 @@ describe("what the credential can do", () => {
   });
 });
 
+/**
+ * DT-41: this server sends its token as a Bearer token, and the administration password in that shape opens the
+ * list of projects and `read_credential`, and no tool about a project — those need an access credential of that
+ * project (ADR 0195). The two tools a coding agent given the password reaches say so, where it reads them.
+ */
+describe("the administration password as the token", () => {
+  it("is told by list_projects that a project's tools need an access credential of that project", () => {
+    const description = toolNamed("list_projects")?.description ?? "";
+    expect(description).toContain("administration password");
+    expect(description).toContain("access credential of that project");
+    expect(description).toContain("403");
+  });
+
+  it("is named by read_credential, with what it opens through this server", () => {
+    const description = toolNamed("read_credential")?.description ?? "";
+    expect(description).toContain("administration password");
+    expect(description).toContain("`list_projects`");
+    expect(description).toContain("access credential of that project");
+  });
+
+  // Given the password as the token, when a tool about a project is called, then the result is the cloud's 403 as
+  // it came — what the password is and what the project needs — and nothing of this server's own over it.
+  it("hands back the refusal of a project's tool as the cloud wrote it", async () => {
+    const refusal = JSON.stringify({
+      error:
+        "the administration password opens the list of projects as Bearer; a project's reads and operations " +
+        "need an access credential of that project",
+      level: "admin",
+      needs: "access credential",
+    });
+    const { s, calls } = server([{ status: 403, body: refusal }]);
+    const out = (await s.handle("tools/call", {
+      name: "project_status",
+      arguments: { project: "tienda" },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("403");
+    expect(said(out)).toContain(`"needs":"access credential"`);
+    expect(said(out)).toContain(`"level":"admin"`);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("the transport", () => {
   it("answers a line that is not JSON with a parse error and carries on", async () => {
     const out = await respondTo("{{{", async () => ({}));

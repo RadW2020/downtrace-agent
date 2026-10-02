@@ -130,9 +130,12 @@ export const tools: Tool[] = [
       "to, with its slug and name; its own name, id and level —read, operate or admin—; when it expires, null when " +
       "it does not; the environments it reaches; and every route of a project with the level it needs and whether " +
       "this credential opens it. Call it first when you do not know the project's slug: a project's credential " +
-      "belongs to one project, this names it, and the list of projects does not open with it. An operation " +
-      "refused for its level answers 403 with the level the credential has and the level the operation needs; " +
-      "a token that is not a usable credential —invented, expired or revoked— answers 401.",
+      "belongs to one project, this names it, and the list of projects does not open with it. Given the shared " +
+      "administration password, it answers level admin and no project, and every route closed: through this " +
+      "server the password opens `list_projects` and this, and a project's reads and operations need an access " +
+      "credential of that project. An operation refused for its level answers 403 with the level the credential " +
+      "has and the level the operation needs; a token that is not a usable credential —invented, expired or " +
+      "revoked— answers 401.",
     inputSchema: { type: "object", properties: {} },
     method: "GET",
     path: "/api/credential",
@@ -145,9 +148,10 @@ export const tools: Tool[] = [
       "nothing ever arrived, which is not the same as quiet— and the word of the front page's column: `N open`, " +
       "`none` or `not compared`, which is nothing arrived in the last hour, so the detectors had nothing to " +
       "compare. The front page is about every project, so it opens with the shared administration password and " +
-      "with no other credential; a project's own key does not list the others, and is refused with a 403. With " +
-      "the password, ask it to learn a project's slug before you ask about it; with a project's credential, " +
-      "`read_credential` names that project.",
+      "with no other credential; a project's own key does not list the others, and is refused with a 403. The " +
+      "password opens the list and `read_credential`, and no tool about a project: those answer it a 403 that " +
+      'says they need an access credential of that project, `needs: "access credential"`. With a project\'s ' +
+      "credential, `read_credential` names that project.",
     inputSchema: { type: "object", properties: {} },
     method: "GET",
     path: "/api/projects",
