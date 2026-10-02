@@ -441,7 +441,10 @@ export const tools: Tool[] = [
       "their time, and which fraction of its footprint's requests those were. The requests themselves are not in " +
       "it: a delivery can hold thousands, each with its operations. Each instance's evidence says how many it " +
       "holds (`requests.count`), how large they are (`requests.bytes`) and where their first page is " +
-      "(`requests.links.first`); read them a page at a time, or one by its index, with `read_captured_requests`.",
+      "(`requests.links.first`); read them a page at a time, or one by its index, with `read_captured_requests`. " +
+      "A capture is finished when `pending` is false, and not before: evidence can be there while it is still " +
+      "`collecting`, waiting a short while for the other instances that served its footprint to deliver theirs, " +
+      "and `retryAfterSeconds` says when to read it again.",
     inputSchema: {
       type: "object",
       properties: { project, capture },

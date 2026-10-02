@@ -649,6 +649,15 @@ describe("a capture, read by parts", () => {
     }
   });
 
+  // A capture gathers every instance's evidence, so one that holds some is not necessarily finished: a coding
+  // agent polling it reads `pending`, and the description says so before it reads `collecting` as an end.
+  it("says in read_capture's description that a capture is finished when it is not pending, collecting included", () => {
+    const description = toolNamed("read_capture")?.description ?? "";
+    for (const said of ["`pending`", "`collecting`", "`retryAfterSeconds`", "other instances"]) {
+      expect(description, said).toContain(said);
+    }
+  });
+
   it("reads a page of one instance's requests with the place and the size in the query string", async () => {
     const page = `{"total":4096,"requests":[{"index":4090,"fromService":{"route":"/checkout"}}]}`;
     const { s, calls } = server([{ body: page }]);
