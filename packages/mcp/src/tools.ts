@@ -442,6 +442,9 @@ export const tools: Tool[] = [
       "it: a delivery can hold thousands, each with its operations. Each instance's evidence says how many it " +
       "holds (`requests.count`), how large they are (`requests.bytes`) and where their first page is " +
       "(`requests.links.first`); read them a page at a time, or one by its index, with `read_captured_requests`. " +
+      "The coverages are what arrived; a delivery that did not fit whole in the evidence budget was stored with " +
+      "its oldest requests left out, and `coverage.notStored` says how many, beyond what one delivery may hold " +
+      "and beyond what the capture had left — requests that were served and are not in the evidence. " +
       "A capture is finished when `pending` is false, and not before: evidence can be there while it is still " +
       "`collecting`, waiting a short while for the other instances that served its footprint to deliver theirs, " +
       "and `retryAfterSeconds` says when to read it again.",

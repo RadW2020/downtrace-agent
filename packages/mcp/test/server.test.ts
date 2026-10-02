@@ -666,6 +666,16 @@ describe("a capture, read by parts", () => {
     }
   });
 
+  // A delivery that did not fit whole in the evidence budget is stored cut, and its coverage says so: a coding agent
+  // reading `requests.count` beside the coverage must know where the difference is said, or it reads a shortfall
+  // as requests that never happened.
+  it("says in read_capture's description where a delivery says what the evidence budget did not store", () => {
+    const description = toolNamed("read_capture")?.description ?? "";
+    for (const said of ["`coverage.notStored`", "one delivery", "what the capture had left"]) {
+      expect(description, said).toContain(said);
+    }
+  });
+
   it("reads a page of one instance's requests with the place and the size in the query string", async () => {
     const page = `{"total":4096,"requests":[{"index":4090,"fromService":{"route":"/checkout"}}]}`;
     const { s, calls } = server([{ body: page }]);
