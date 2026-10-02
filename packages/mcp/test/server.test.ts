@@ -1171,6 +1171,70 @@ describe("without a credential", () => {
   });
 });
 
+/**
+ * DT-8, `product.md:204` and `:219`: a coding agent asks what its credential can do before it attempts anything,
+ * and an operation it is refused says why. A project's credential belongs to one project, and the list of
+ * projects is not for it, so this is also where such an agent learns its project's slug.
+ */
+describe("what the credential can do", () => {
+  it("reads it through the API with the server's token, with no argument and no key", async () => {
+    const { s, calls } = server([{ body: `{"level":"read","project":{"slug":"tienda","name":"Tienda"}}` }]);
+    const out = (await s.handle("tools/call", { name: "read_credential", arguments: {} })) as Called;
+    expect(out.isError).toBeUndefined();
+    expect(said(out)).toContain(`"slug":"tienda"`);
+    expect(only(calls, 0).method).toBe("GET");
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/credential");
+    expect(only(calls, 0).headers.authorization).toBe("Bearer tok");
+    expect(only(calls, 0).headers["idempotency-key"]).toBeUndefined();
+  });
+
+  it("is a read that takes no argument, not even the project it is the way to learn", () => {
+    const tool = toolNamed("read_credential");
+    expect(tool?.operates).toBeUndefined();
+    expect(tool?.inputSchema.properties).toEqual({});
+    expect(tool?.inputSchema.required ?? []).toEqual([]);
+  });
+
+  it("says in its description that it is the first call when the slug is not known", () => {
+    const description = toolNamed("read_credential")?.description ?? "";
+    expect(description).toContain("slug");
+    expect(description).toContain("first");
+    for (const what of ["level", "expires", "environments", "route"]) expect(description).toContain(what);
+  });
+
+  it("is named in the greeting, where an agent reads before it lists the tools", async () => {
+    const { s } = server();
+    const out = handshake(await s.handle("initialize", {}));
+    expect(out.instructions).toContain("read_credential");
+  });
+
+  // The front page's list is the password's: a project's credential is sent to the read that names its project.
+  it("is where the list of projects sends a project's credential", () => {
+    expect(toolNamed("list_projects")?.description).toContain("read_credential");
+  });
+
+  // Given a read token, when it closes a finding, then the result says which level is missing: the cloud's
+  // refusal, as it came, and nothing of this server's own over it.
+  it("hands back what an operation refused for its level lacks", async () => {
+    const refusal = JSON.stringify({
+      error: "this credential's level is read and this needs operate",
+      level: "read",
+      needs: "operate",
+    });
+    const { s, calls } = server([{ status: 403, body: refusal }]);
+    const out = (await s.handle("tools/call", {
+      name: "close_finding",
+      arguments: { project: "tienda", finding: "7", reason: "noise", why: "x", version: "abc123" },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("403");
+    expect(said(out)).toContain(`"needs":"operate"`);
+    expect(said(out)).toContain(`"level":"read"`);
+    expect(out.structuredContent).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("the transport", () => {
   it("answers a line that is not JSON with a parse error and carries on", async () => {
     const out = await respondTo("{{{", async () => ({}));

@@ -117,6 +117,20 @@ const version = {
 
 export const tools: Tool[] = [
   {
+    name: "read_credential",
+    description:
+      "What the credential this server was given can do, asked before attempting anything: the project it belongs " +
+      "to, with its slug and name; its own name, id and level —read, operate or admin—; when it expires, null when " +
+      "it does not; the environments it reaches; and every route of a project with the level it needs and whether " +
+      "this credential opens it. Call it first when you do not know the project's slug: a project's credential " +
+      "belongs to one project, this names it, and the list of projects does not open with it. An operation " +
+      "refused for its level answers 403 with the level the credential has and the level the operation needs; " +
+      "a token that is not a usable credential —invented, expired or revoked— answers 401.",
+    inputSchema: { type: "object", properties: {} },
+    method: "GET",
+    path: "/api/credential",
+  },
+  {
     name: "list_projects",
     description:
       "The list of projects, in the order the front page reads them: the ones with open findings first, then by " +
@@ -124,8 +138,9 @@ export const tools: Tool[] = [
       "nothing ever arrived, which is not the same as quiet— and the word of the front page's column: `N open`, " +
       "`none` or `not compared`, which is nothing arrived in the last hour, so the detectors had nothing to " +
       "compare. The front page is about every project, so it opens with the shared administration password and " +
-      "with no other credential; a project's own key does not list the others. Ask it to learn a project's slug " +
-      "before you ask about it.",
+      "with no other credential; a project's own key does not list the others, and is refused with a 403. With " +
+      "the password, ask it to learn a project's slug before you ask about it; with a project's credential, " +
+      "`read_credential` names that project.",
     inputSchema: { type: "object", properties: {} },
     method: "GET",
     path: "/api/projects",

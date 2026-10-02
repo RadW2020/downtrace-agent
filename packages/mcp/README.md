@@ -39,7 +39,7 @@ Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts
 
 **In every revision, the schemas say what the API accepts.** A closed set of values is an `enum`, an instant a `date-time`, and the length of the errors list a whole number from 1 to 200; identifiers are strings. The values of each `enum` are written here, because this package does not read the cloud's code, and an end-to-end walk compares them with the cloud's in both directions.
 
-A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own.
+A failure is a result with `isError`, the HTTP status and the cloud's own sentence. There is no error code of this server's own. A credential refused for its level is told which: the cloud answers 403 with the `level` the credential has and the level the operation `needs`, while a token that is not a usable credential —invented, expired or revoked— gets the 401, the same one for the three.
 
 **No dependencies.** The protocol a tools-only server needs is three methods, and it is written out here. See ADR 0078 for the argument and for the risk.
 
@@ -49,6 +49,7 @@ Named after the capability, not the route: an agent looks for "verify the recove
 
 | | |
 |---|---|
+| `read_credential` | **ask it first** when you do not know the project's slug: the project your credential belongs to, its level and expiry, the environments it reaches, and every route of the project with the level it needs and whether your credential opens it |
 | `project_status` | traffic, endpoints —ordered by the column you name, as on the page—, dependencies, runtime, coverage, budget |
 | `list_findings`, `read_finding` | what was detected |
 | `list_errors`, `read_error` | every error observed, from the first one, with no traffic minimum —ordered by last seen, first seen or how many times, as on the page— |
