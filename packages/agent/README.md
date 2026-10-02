@@ -394,7 +394,11 @@ whatever it does measure. It all comes from Node's own instruments, which run wh
 When your application uses `pg`, the instrumentation also counts the calls each request makes to it, how long they took in
 total, the slowest one and how many failed, and reports that distribution per route. It also times how long each
 request **waited for a connection** from the pool. That wait is not the database being slow, it is your application
-having nowhere to run, and it is invisible in the query's own duration. It is what turns "this endpoint
+having nowhere to run, and it is invisible in the query's own duration. A wait that ends without a connection — the
+pool timed out, or the database refused — is counted too, on the same database as the connections that pool handed
+over, or on the host and port of its connection string when it has handed none: a pool run dry is one dependency
+saturated, not a nameless one. The connection string gives only its host and port, never its user, password or
+database. It is what turns "this endpoint
 got slower" into "this endpoint went from 12 queries per request to 65". **It never reads the query text or its
 values**, only counts and durations.
 

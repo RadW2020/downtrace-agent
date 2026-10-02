@@ -184,6 +184,136 @@ describe("waiting for a connection", () => {
     expect(ctx.work?.get("postgres")?.waitMs).toBeGreaterThanOrEqual(15);
   });
 
+  // A pool built from a connection string — `DATABASE_URL`, the usual way — knows its host only through the clients
+  // it hands over. A wait that timed out has no client, and it used to land on a nameless postgres, a dependency
+  // with no reference, so a pool run dry was never judged as one (DT-36, the canary's first night).
+  describe("when the wait ends in a timeout", () => {
+    const dsn = "postgres://shop:s3cret@db.internal:6543/shop";
+    /**
+     * A pool that hands over clients of `db.internal:6543` until `dry`, and from then on times out. Without a
+     * connection string it is a pool configured by the PG* environment variables: neither its options nor a string
+     * name the host, and only the clients it hands over do.
+     */
+    function poolOf(connectionString?: string) {
+      const pg = fakePg();
+      class Pool {
+        options = connectionString === undefined ? {} : { connectionString };
+        dry = false;
+        connect(cb?: (err: unknown, client?: unknown, release?: () => void) => void): unknown {
+          const settle = (resolve: (c: unknown) => void, reject: (e: unknown) => void) =>
+            setTimeout(() => {
+              if (this.dry) return reject(new Error("timeout exceeded when trying to connect"));
+              const client = new (pg.module.Client as unknown as new () => Record<string, unknown>)();
+              client.host = "db.internal";
+              client.port = 6543;
+              resolve(client);
+            }, 20);
+          if (!cb) return new Promise(settle);
+          settle(
+            (client) => cb(undefined, client, () => {}),
+            (err) => cb(err),
+          );
+          return undefined;
+        }
+      }
+      instrumentPg({
+        ...deps,
+        moduleImpl: { ...pg.module, Pool: Pool as unknown as { prototype: Record<string, unknown> } },
+      });
+      return new Pool();
+    }
+    const named = (target: string) => `postgres\0${target}`;
+
+    it("puts it on the dependency of the clients the pool handed over, not on a nameless one", async () => {
+      const pool = poolOf();
+      enterRequest();
+      await pool.connect();
+
+      pool.dry = true;
+      const ctx = enterRequest();
+      await expect(pool.connect()).rejects.toThrow("timeout exceeded");
+      expect([...(ctx.work?.keys() ?? [])]).toEqual([named("db.internal:6543")]);
+      expect(ctx.work?.get(named("db.internal:6543"))?.waitMs).toBeGreaterThanOrEqual(15);
+    });
+
+    it("does the same in the callback form, which is how pool.query() asks for a connection", async () => {
+      const pool = poolOf();
+      enterRequest();
+      await new Promise((resolve) => pool.connect((_e, client) => resolve(client)));
+
+      pool.dry = true;
+      const ctx = enterRequest();
+      const err = await new Promise((resolve) => pool.connect((e) => resolve(e)));
+      expect(String(err)).toMatch(/timeout exceeded/);
+      expect([...(ctx.work?.keys() ?? [])]).toEqual([named("db.internal:6543")]);
+    });
+
+    it("takes it from the connection string when the pool has handed nothing over yet, and never its credentials", async () => {
+      const pool = poolOf(dsn);
+      pool.dry = true;
+      const ctx = enterRequest();
+      await expect(pool.connect()).rejects.toThrow("timeout exceeded");
+      const keys = [...(ctx.work?.keys() ?? [])];
+      expect(keys).toEqual([named("db.internal:6543")]);
+      expect(keys.join()).not.toMatch(/shop|s3cret/);
+    });
+
+    it("says the default port when the connection string names none, as a client would", async () => {
+      const pool = poolOf("postgresql://shop@db.internal/shop");
+      pool.dry = true;
+      const ctx = enterRequest();
+      await expect(pool.connect()).rejects.toThrow("timeout exceeded");
+      expect([...(ctx.work?.keys() ?? [])]).toEqual([named("db.internal:5432")]);
+    });
+
+    it("reads the connection string where pg's own pool keeps it, in both forms", async () => {
+      // pg's real pool, over a client that refuses: `pg-pool` keeps the options it was built with, and this is the
+      // shape every pool built from DATABASE_URL has. The client has a `query`, as any pg client does, or the
+      // instrumentation would take it for something else and leave the pool alone.
+      class Refusing extends EventEmitter {
+        connect(cb: (err?: Error) => void): void {
+          setImmediate(() => cb(new Error("connection refused")));
+        }
+        query(): Promise<unknown> {
+          return Promise.reject(new Error("never connected"));
+        }
+        end(cb?: () => void): void {
+          setImmediate(() => cb?.());
+        }
+      }
+      class Pool extends pg.Pool {}
+      instrumentPg({ ...deps, moduleImpl: { Client: Refusing, Pool } });
+      const pool = new Pool({ Client: Refusing as unknown as new () => pg.ClientBase, connectionString: dsn });
+
+      const promised = enterRequest();
+      await expect(pool.connect()).rejects.toThrow("connection refused");
+      expect([...(promised.work?.keys() ?? [])]).toEqual([named("db.internal:6543")]);
+
+      const called = enterRequest();
+      await new Promise((resolve) => pool.connect((err) => resolve(err)));
+      expect([...(called.work?.keys() ?? [])]).toEqual([named("db.internal:6543")]);
+      await pool.end();
+    });
+
+    it("leaves it nameless when nothing names the host and the pool has handed nothing over", async () => {
+      const pool = poolOf();
+      pool.dry = true;
+      const ctx = enterRequest();
+      await expect(pool.connect()).rejects.toThrow("timeout exceeded");
+      expect([...(ctx.work?.keys() ?? [])]).toEqual(["postgres"]);
+    });
+
+    it("leaves it nameless, and throws nothing, when the connection string names no host it can read", async () => {
+      for (const unreadable of ["postgres:///shop?host=/var/run/postgresql", "not a url"]) {
+        const pool = poolOf(unreadable);
+        pool.dry = true;
+        const ctx = enterRequest();
+        await expect(pool.connect()).rejects.toThrow("timeout exceeded");
+        expect([...(ctx.work?.keys() ?? [])], unreadable).toEqual(["postgres"]);
+      }
+    });
+  });
+
   it("does not count waiting outside a request", async () => {
     const pg = fakePg();
     instrumentPg({ ...deps, moduleImpl: pg.module });

@@ -365,9 +365,11 @@ function wrapPoolConnect(pg: PgModule, deps: InstrumentPgDeps): void {
         if (ctx) {
           // One binding, not two: an AsyncResource per acquisition is the price of correct attribution, and
           // `pool.query()` acquires a connection for every query, so paying it twice is measurable.
+          const pool = this;
           args[args.length - 1] = AsyncResource.bind(function (this: unknown, ...cbArgs: unknown[]): unknown {
             try {
-              recordWaitIn(ctx, "postgres", targetOfClient(cbArgs[1]), performance.now() - started);
+              const target = cbArgs[0] ? targetOfWaitingPool(pool) : handedOver(pool, cbArgs[1]);
+              recordWaitIn(ctx, "postgres", target, performance.now() - started);
             } catch (err) {
               internalError(err);
             }
@@ -391,7 +393,7 @@ function wrapPoolConnect(pg: PgModule, deps: InstrumentPgDeps): void {
           // The target comes from the client the pool just handed over, so the wait lands on the same dependency
           // as the queries that follow it. A pool built from a connection string knows nothing about its host.
           try {
-            recordWait("postgres", targetOfClient(client), performance.now() - started);
+            recordWait("postgres", handedOver(this, client), performance.now() - started);
           } catch (err) {
             internalError(err);
           }
@@ -400,7 +402,7 @@ function wrapPoolConnect(pg: PgModule, deps: InstrumentPgDeps): void {
         (err: unknown) => {
           // A pool that timed out waiting is the clearest case of all: count the wait, and let the error through.
           try {
-            recordWait("postgres", targetOfPool(this), performance.now() - started);
+            recordWait("postgres", targetOfWaitingPool(this), performance.now() - started);
           } catch (failure) {
             internalError(failure);
           }
@@ -414,17 +416,58 @@ function wrapPoolConnect(pg: PgModule, deps: InstrumentPgDeps): void {
   log.debug("timing waits for a Postgres connection");
 }
 
+/** The target of the last client each pool handed over: what a wait that ends without a client belongs to. */
+const poolTargets = new WeakMap<object, string>();
+
+/** The port a `pg` client reports when its connection string names none. */
+const DEFAULT_PG_PORT = 5432;
+
 /**
- * Where a pool points, for the case where it never handed over a client: its options, which are only populated
- * when the pool was built from explicit host and port rather than a connection string. An empty target is better
- * than a wrong one.
+ * The target of a client the pool just handed over, which is also where the pool points: remembered, so that a wait
+ * on the same pool that ends in a timeout lands on the same dependency as the waits and the queries that came before
+ * it (DT-36). The client's own target, and not the pool's, so the wait and the queries that follow it agree.
  */
-function targetOfPool(pool: unknown): string {
+function handedOver(pool: unknown, client: unknown): string {
+  const target = targetOfClient(client);
+  if (target !== "" && pool && typeof pool === "object") poolTargets.set(pool, target);
+  return target;
+}
+
+/**
+ * Where a pool points when a wait on it ends without a client — the case a pool run dry is made of. In order: the
+ * target of the clients it has handed over; its options, populated when it was built from host and port; its
+ * connection string, which is how most pools are built (`DATABASE_URL`). An empty target is better than a wrong one,
+ * but a nameless one has no reference to be judged against, and a saturated pool went unjudged that way.
+ */
+function targetOfWaitingPool(pool: unknown): string {
   if (!pool || typeof pool !== "object") return "";
-  const options = (pool as { options?: { host?: unknown; port?: unknown } }).options;
+  const remembered = poolTargets.get(pool);
+  if (remembered !== undefined) return remembered;
+  const options = (pool as { options?: { host?: unknown; port?: unknown; connectionString?: unknown } }).options;
   const host = options?.host;
-  if (typeof host !== "string" || host === "") return "";
-  return typeof options?.port === "number" ? `${host}:${options.port}` : host;
+  if (typeof host === "string" && host !== "") {
+    return typeof options?.port === "number" ? `${host}:${options.port}` : host;
+  }
+  return targetOfConnectionString(options?.connectionString);
+}
+
+/**
+ * The host and port of a `postgres://` or `postgresql://` connection string, as a client built from it would report
+ * them: the default port when the string names none. Never its user, password or database. Empty when the string
+ * names no host this can read — a socket path in the query, or not a URL at all.
+ */
+function targetOfConnectionString(dsn: unknown): string {
+  if (typeof dsn !== "string" || dsn === "") return "";
+  let url: URL;
+  try {
+    url = new URL(dsn);
+  } catch {
+    return "";
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") return "";
+  const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+  if (host === "") return "";
+  return `${host}:${url.port === "" ? DEFAULT_PG_PORT : url.port}`;
 }
 
 /** Which database this client talks to, so a read replica and a primary are two dependencies. */
