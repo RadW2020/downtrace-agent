@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConfigError, configFrom } from "../src/config.ts";
-import { linesOf, respondTo } from "../src/rpc.ts";
+import { type Handler, linesOf, serve } from "../src/rpc.ts";
 import { createServer, PROTOCOL_VERSION, PROTOCOL_VERSIONS, SERVER_NAME } from "../src/server.ts";
 import { errorOrders, toolNamed, tools } from "../src/tools.ts";
 
@@ -1417,25 +1417,38 @@ describe("the administration password as the token", () => {
   });
 });
 
+/** What `serve` wrote for these lines, each line read back as the message it carries. */
+async function answersTo(lines: string[], handle: Handler): Promise<unknown[]> {
+  const written: string[] = [];
+  await serve(lines, handle, (line) => written.push(line));
+  return written.map((line) => JSON.parse(line) as unknown);
+}
+
 describe("the transport", () => {
   it("answers a line that is not JSON with a parse error and carries on", async () => {
-    const out = await respondTo("{{{", async () => ({}));
-    expect(out).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32700 } });
+    const { s } = server();
+    const out = await answersTo(["{{{", `{"jsonrpc":"2.0","id":1,"method":"ping"}`], s.handle);
+    expect(out).toMatchObject([
+      { jsonrpc: "2.0", id: null, error: { code: -32700 } },
+      { jsonrpc: "2.0", id: 1, result: {} },
+    ]);
   });
 
   it("does not answer a notification, however it went", async () => {
-    expect(await respondTo(`{"jsonrpc":"2.0","method":"notifications/initialized"}`, async () => null)).toBeUndefined();
-    expect(
-      await respondTo(`{"jsonrpc":"2.0","method":"boom"}`, async () => {
-        throw new Error("no");
-      }),
-    ).toBeUndefined();
+    const out = await answersTo(
+      [`{"jsonrpc":"2.0","method":"notifications/initialized"}`, `{"jsonrpc":"2.0","method":"boom"}`],
+      async (method) => {
+        if (method === "boom") throw new Error("no");
+        return null;
+      },
+    );
+    expect(out).toEqual([]);
   });
 
   it("says method-not-found for a method it does not have", async () => {
     const { s } = server();
-    const out = await respondTo(`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`, s.handle);
-    expect(out).toMatchObject({ id: 1, error: { code: -32601 } });
+    const out = await answersTo([`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`], s.handle);
+    expect(out).toMatchObject([{ id: 1, error: { code: -32601 } }]);
   });
 
   it("frames messages by line and answers each one", async () => {
@@ -1449,6 +1462,326 @@ describe("the transport", () => {
     expect(written).toHaveLength(2);
     expect(JSON.parse(written[0] ?? "{}").id).toBe(1);
     expect(JSON.parse(written[1] ?? "{}").id).toBe(2);
+  });
+});
+
+/** A promise the test settles when it decides. */
+function gate() {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { opened, open: () => open() };
+}
+
+/**
+ * The input of a session that is still open: lines a test sends one at a time, and an end it decides. An
+ * array ends at once, and what these tests are about is what happens while a message is still waiting.
+ */
+function session() {
+  const queue: string[] = [];
+  let wake: () => void = () => undefined;
+  let ended = false;
+  async function* lines(): AsyncGenerator<string> {
+    for (;;) {
+      const next = queue.shift();
+      if (next !== undefined) {
+        yield next;
+        continue;
+      }
+      if (ended) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+    }
+  }
+  return {
+    lines: lines(),
+    send: (message: unknown) => {
+      queue.push(typeof message === "string" ? message : JSON.stringify(message));
+      wake();
+    },
+    end: () => {
+      ended = true;
+      wake();
+    },
+  };
+}
+
+/** What one written line says, as a test reads it. */
+interface Answer {
+  jsonrpc: string;
+  id: unknown;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+/** `serve` running over a session the test drives, and everything it wrote, one entry per `write`. */
+function running(handle: Handler) {
+  const { lines, send, end } = session();
+  const written: string[] = [];
+  const served = serve(lines, handle, (line) => written.push(line));
+  const answers = () => written.map((line) => JSON.parse(line) as Answer);
+  return { send, end, served, written, answers, ids: () => answers().map((a) => a.id) };
+}
+
+/** A request to the cloud that waits until the test answers it, and that an abort rejects, as `fetch` does. */
+interface Waiting {
+  url: string;
+  signal: AbortSignal;
+  answer: (body: string) => void;
+}
+
+/** A server whose cloud answers only when the test says so. */
+function slowCloud(timeoutMs?: number) {
+  const waiting: Waiting[] = [];
+  const fetchImpl = ((url: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) {
+        reject(new Error("a request to the cloud without a signal"));
+        return;
+      }
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      waiting.push({ url: String(url), signal, answer: (body) => resolve(new Response(body)) });
+    })) as unknown as typeof fetch;
+  const s = createServer({
+    config: { url: "https://cloud.test", token: "tok" },
+    version: "0.0.0",
+    fetchImpl,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+  /** The request to the cloud at that place, or a failure that says how many there are. */
+  const at = (i: number): Waiting => {
+    const w = waiting[i];
+    if (!w) throw new Error(`no request to the cloud at ${i}: ${waiting.length} are waiting`);
+    return w;
+  };
+  return { s, waiting, at };
+}
+
+const call = (id: string | number, name: string) => ({
+  jsonrpc: "2.0",
+  id,
+  method: "tools/call",
+  params: { name, arguments: {} },
+});
+const ping = (id: string | number) => ({ jsonrpc: "2.0", id, method: "ping" });
+const cancel = (params: unknown) => ({ jsonrpc: "2.0", method: "notifications/cancelled", params });
+
+/**
+ * A call waits for the cloud up to its timeout, and a client that pings to know the server is alive must not
+ * be told otherwise in the middle of a slow read (DT-39). Each message is answered when its own work is done.
+ */
+describe("several messages in flight", () => {
+  it("answers a ping at once while a call is still waiting for the cloud", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    r.send(ping(2));
+    await vi.waitFor(() => expect(r.ids()).toEqual([2]));
+    at(0).answer(`{"level":"read"}`);
+    await vi.waitFor(() => expect(r.ids()).toEqual([2, 1]));
+    r.end();
+    await r.served;
+  });
+
+  it("answers two calls in the order they finish, each with its own answer", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    r.send(call(2, "list_projects"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(2));
+    expect(new URL(at(0).url).pathname).toBe("/api/credential");
+    expect(new URL(at(1).url).pathname).toBe("/api/projects");
+    at(1).answer(`{"projects":[]}`);
+    await vi.waitFor(() => expect(r.ids()).toEqual([2]));
+    at(0).answer(`{"level":"read"}`);
+    await vi.waitFor(() => expect(r.ids()).toEqual([2, 1]));
+    // JSON-RPC pairs an answer with its request by id, so the order is free and the pairing is not.
+    expect(r.answers().map((a) => [a.id, said(a.result as Called)])).toEqual([
+      [2, `{"projects":[]}`],
+      [1, `{"level":"read"}`],
+    ]);
+    r.end();
+    await r.served;
+  });
+
+  it("answers a request that failed with its own error, and the others as if nothing happened", async () => {
+    const slow = gate();
+    const r = running(async (method) => {
+      if (method === "slow") {
+        await slow.opened;
+        return { slow: true };
+      }
+      if (method === "broken") throw new Error("it broke halfway");
+      return {};
+    });
+    r.send({ jsonrpc: "2.0", id: 1, method: "slow" });
+    r.send({ jsonrpc: "2.0", id: 2, method: "broken" });
+    r.send({ jsonrpc: "2.0", id: 3, method: "quick" });
+    await vi.waitFor(() => expect(r.ids()).toEqual([2, 3]));
+    slow.open();
+    await vi.waitFor(() => expect(r.ids()).toEqual([2, 3, 1]));
+    expect(r.answers()).toEqual([
+      { jsonrpc: "2.0", id: 2, error: { code: -32603, message: "it broke halfway" } },
+      { jsonrpc: "2.0", id: 3, result: {} },
+      { jsonrpc: "2.0", id: 1, result: { slow: true } },
+    ]);
+    r.end();
+    await r.served;
+  });
+
+  // A client closes the input to shut the server down and waits for it to exit (MCP, lifecycle): what it
+  // asked before closing is still answered, as it was when each message waited for the one before.
+  it("answers the calls still in flight when the input ends, and only then returns", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    r.end();
+    const early = await Promise.race([
+      r.served.then(() => "returned"),
+      new Promise((resolve) => setTimeout(() => resolve("still answering"), 20)),
+    ]);
+    expect(early).toBe("still answering");
+    expect(r.written).toEqual([]);
+    at(0).answer(`{"level":"read"}`);
+    await r.served;
+    expect(r.ids()).toEqual([1]);
+  });
+
+  // Several answers on their way at once must never share a line or split one: one `write` per message,
+  // and the frame's only line break is the one that ends it, whatever the cloud's own text carries.
+  it("writes each answer whole, one line per write, however the answers interleave", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    r.send(call(2, "list_projects"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(2));
+    r.send(ping(3));
+    r.send("{{{");
+    r.send({ jsonrpc: "2.0", id: 4, method: "resources/list" });
+    at(1).answer(`{\n  "projects": []\n}\n`);
+    at(0).answer(`{\n  "level": "read"\n}`);
+    r.end();
+    await r.served;
+    expect(r.written).toHaveLength(5);
+    for (const chunk of r.written) {
+      expect(chunk.indexOf("\n")).toBe(chunk.length - 1);
+      expect(() => JSON.parse(chunk)).not.toThrow();
+    }
+    expect(new Set(r.ids())).toEqual(new Set([1, 2, 3, null, 4]));
+  });
+
+  it("still gives up on a cloud that does not answer, at the server's timeout", async () => {
+    const { s, at } = slowCloud(20);
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    r.end();
+    await r.served;
+    const [answer] = r.answers();
+    expect(answer).toMatchObject({ id: 1, result: { isError: true } });
+    expect(said(answer?.result as Called)).toContain("could not reach the cloud");
+    expect(at(0).signal.reason).toMatchObject({ name: "TimeoutError" });
+  });
+});
+
+/**
+ * MCP 2025-11-25, cancellation: the receiver of `notifications/cancelled` SHOULD stop processing the request,
+ * free what it holds and not send a response for it, and SHOULD ignore one for an unknown or finished request
+ * and a malformed one (DT-39).
+ */
+describe("a cancellation", () => {
+  it("aborts the call it names, and that call is never answered", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call("call-1", "read_credential"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    r.send(cancel({ requestId: "call-1", reason: "the user moved on" }));
+    await vi.waitFor(() => expect(at(0).signal.aborted).toBe(true));
+    r.send(ping(2));
+    r.end();
+    await r.served;
+    expect(r.ids()).toEqual([2]);
+  });
+
+  // The protocol lets a server still answer a request whose cancellation came late; this one does not, so a
+  // cancelled request is never answered, whatever its work had reached when the cancellation was read.
+  it("leaves unanswered a request whose work finished after it was cancelled", async () => {
+    const work = gate();
+    let seen: AbortSignal | undefined;
+    const r = running(async (method, _params, signal) => {
+      if (method !== "stubborn") return {};
+      seen = signal;
+      await work.opened; // it does not listen to its signal, as the work of a request may not
+      return { done: true };
+    });
+    r.send({ jsonrpc: "2.0", id: 1, method: "stubborn" });
+    r.send(cancel({ requestId: 1 }));
+    r.send(ping(2));
+    await vi.waitFor(() => expect(r.ids()).toEqual([2]));
+    expect(seen?.aborted).toBe(true);
+    work.open();
+    r.end();
+    await r.served;
+    expect(r.ids()).toEqual([2]);
+  });
+
+  it("does nothing when it names no request in flight, or names none it can use", async () => {
+    const { s, waiting, at } = slowCloud();
+    const r = running(s.handle);
+    r.send(call(1, "read_credential"));
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    // An id nobody sent; the same id written as a string, which in JSON-RPC is another id; none, which
+    // 2025-11-25 allows for the tasks this server does not have; and three that are not cancellations at all.
+    r.send(cancel({ requestId: 99 }));
+    r.send(cancel({ requestId: "1" }));
+    r.send(cancel({ reason: "no id" }));
+    r.send(cancel({ requestId: { id: 1 } }));
+    r.send(cancel("1"));
+    r.send({ jsonrpc: "2.0", method: "notifications/cancelled" });
+    // Written as a request, it is not a cancellation: it is a method this server does not have.
+    r.send({ jsonrpc: "2.0", id: 5, method: "notifications/cancelled", params: { requestId: 1 } });
+    r.send(ping(2));
+    await vi.waitFor(() => expect(r.ids()).toEqual([5, 2]));
+    expect(r.answers()[0]).toMatchObject({ id: 5, error: { code: -32601 } });
+    expect(at(0).signal.aborted).toBe(false);
+    at(0).answer(`{"level":"read"}`);
+    await vi.waitFor(() => expect(r.ids()).toEqual([5, 2, 1]));
+    // And one that names a request already answered.
+    r.send(cancel({ requestId: 1 }));
+    r.send(ping(3));
+    r.end();
+    await r.served;
+    expect(r.ids()).toEqual([5, 2, 1, 3]);
+  });
+
+  // A client must not reuse an id within a session (MCP, base protocol). One that does still gets its
+  // cancellation to the request in flight under it, and not lost with the earlier one that finished.
+  it("reaches the request in flight under its id after an earlier one with the same id was answered", async () => {
+    const first = gate();
+    const signals: AbortSignal[] = [];
+    const r = running(async (method, _params, signal) => {
+      signals.push(signal);
+      if (method === "first") {
+        await first.opened;
+        return { first: true };
+      }
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      return { second: true };
+    });
+    r.send({ jsonrpc: "2.0", id: 7, method: "first" });
+    r.send({ jsonrpc: "2.0", id: 7, method: "second" });
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    first.open();
+    await vi.waitFor(() => expect(r.ids()).toEqual([7]));
+    r.send(cancel({ requestId: 7 }));
+    await vi.waitFor(() => expect(signals[1]?.aborted).toBe(true));
+    r.end();
+    await r.served;
+    expect(r.answers()).toEqual([{ jsonrpc: "2.0", id: 7, result: { first: true } }]);
   });
 });
 
