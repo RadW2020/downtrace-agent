@@ -403,6 +403,15 @@ database. It is what turns "this endpoint
 got slower" into "this endpoint went from 12 queries per request to 65". **It never reads the query text or its
 values**, only counts and durations.
 
+A query counts for the request whose code ran it, and for no other. One that runs outside any request — a
+migration at start-up, a scheduled job, a health check's poll, work a handler left for later — is in no route's
+numbers, because no route ran it. A request answered before it reached the database — a gate that says «starting
+up», a rate limiter's 429, a 401 for a missing session — carries no Postgres at all, because it made no call. So a
+route with Postgres in one interval and none in the next has not lost its queries: its requests ran none inside
+the request, which does not mean the database was idle. Checked against n8n with every statement logged by
+Postgres: each request carried the queries the log shows for it, and the ones n8n answered without its database
+carried none.
+
 ### Calls to other services
 
 Outgoing HTTP is reported the same way, grouped by the host your application asked for: how many calls per request,
@@ -607,7 +616,19 @@ an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script u
 version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
 A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a
 parameter from a route's own words, and the ways to keep it out are an endpoint exclusion, matched against
-the template, and minimal mode. **The first version that collapses these segments changes route identities,
+the template, and minimal mode.
+
+A route registered after the server starts listening is that case until it exists. n8n listens first, answers
+«starting up» from a middleware while it migrates, then lets Express answer a 404, and registers
+`/webhook/*path` seconds later: a request in that window has no template to be named by, so it is named as a 404
+is — `/webhook/nope-9` is `/webhook/:id` — and from the moment the route exists, it is `/webhook/*path`. A
+webhook path that is a plain word is a plain word: in that window it travels as written. Minimal mode sends a
+digest of it, which whoever guesses the word can confirm; the exclusion that keeps it out entirely is
+`/webhook/*`, and it takes the template with it. A file served by a mount with no route,
+`app.use("/", express.static(dir))`, is named the same way: a bundler's hash comes out as `:id` when it has a
+digit or makes a long mixed-case run with the name, and as written otherwise.
+
+**The first version that collapses these segments changes route identities,
 once:** an endpoint whose route carried a value is seen as the template it became, a finding on the old route
 receives no data and is not declared recovered, and an exclusion written against a collapsed segment has to
 be rewritten against the template.
