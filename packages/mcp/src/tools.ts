@@ -533,9 +533,10 @@ export const tools: Tool[] = [
       "Close a finding by hand, with one of the three reasons the product allows. This is not observed " +
       "recovery and is never presented as one. A finding that is already closed, with the same reason or " +
       "another, is not closed again, because that would overwrite who closed it and why: the cloud answers " +
-      "409, changes nothing, and says how it stands closed — `closedReason`, `closedBy`, `closedNote` and " +
-      "`closedAt`, with no `closedBy` when nobody closed it by hand. If that close is your own and its answer " +
-      "never reached you, the 409 is it." +
+      "409, changes nothing, and says how it stands closed — `closedReason`, `closedBy`, `closedNote`, " +
+      "`closedByDeclared` and `closedAt`: `closedBy` is who closed it by hand or accepted its reference, and " +
+      "there is none on an observed recovery, which nobody performed, nor on an acceptance whose who was not " +
+      "recorded. If that close is your own and its answer never reached you, the 409 is it." +
       idempotentRetry,
     inputSchema: {
       type: "object",

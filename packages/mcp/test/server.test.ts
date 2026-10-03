@@ -882,6 +882,16 @@ describe("a retry of an operation", () => {
     expect(description).toContain("same `idempotencyKey`");
   });
 
+  // Since DT-58 an accepted finding keeps who accepted it in `closedBy`, so a `closedBy` no longer means a close
+  // by hand, and the description must not say it does.
+  it("says in close_finding's description who `closedBy` names, and when there is none", () => {
+    const description = toolNamed("close_finding")?.description ?? "";
+    for (const what of ["closedByDeclared", "accepted its reference", "observed recovery", "not recorded"]) {
+      expect(description, what).toContain(what);
+    }
+    expect(description).not.toContain("nobody closed it by hand");
+  });
+
   it("hands the 409 of a closed finding back with how it stands, and sends exactly one request", async () => {
     const standing =
       `{"error":"this finding is already closed, so nothing was changed","finding":7,"state":"closed",` +
