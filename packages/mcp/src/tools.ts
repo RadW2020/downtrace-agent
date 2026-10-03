@@ -450,8 +450,9 @@ export const tools: Tool[] = [
       "its oldest requests left out, and `coverage.notStored` says how many, beyond what one delivery may hold " +
       "and beyond what the capture had left — requests that were served and are not in the evidence. " +
       "A capture is finished when `pending` is false, and not before: evidence can be there while it is still " +
-      "`collecting`, waiting a short while for the other instances that served its footprint to deliver theirs, " +
-      "and `retryAfterSeconds` says when to read it again.",
+      "`collecting`, waiting for the other instances that served its footprint to deliver theirs until " +
+      "`collectingUntil`, at most its window and two minutes after the first delivery, because an instance that " +
+      "took the order late watches a whole window from then; `retryAfterSeconds` says when to read it again.",
     inputSchema: {
       type: "object",
       properties: { project, capture },

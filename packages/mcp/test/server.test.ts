@@ -683,6 +683,16 @@ describe("a capture, read by parts", () => {
     }
   });
 
+  // A collecting capture waits for an instance that took the order late, which watches a whole window from then, so
+  // the wait of a ten-minute capture is twelve minutes: a coding agent told «a short while» would give up on it.
+  it("says in read_capture's description how long a collecting capture can wait, and where it says until when", () => {
+    const description = toolNamed("read_capture")?.description ?? "";
+    for (const said of ["`collectingUntil`", "its window and two minutes"]) {
+      expect(description, said).toContain(said);
+    }
+    expect(description).not.toContain("a short while");
+  });
+
   // A delivery that did not fit whole in the evidence budget is stored cut, and its coverage says so: a coding agent
   // reading `requests.count` beside the coverage must know where the difference is said, or it reads a shortfall
   // as requests that never happened.
