@@ -75,11 +75,16 @@ export const errorOrders = ["last-seen", "first-seen", "occurrences"] as const;
 /** The two directions every ordered list takes. */
 const directions = ["desc", "asc"] as const;
 
+/**
+ * The reason an operation records. Not «required with the administration password»: this server presents its token
+ * as a Bearer, and a project's routes take a Bearer only when it is an access credential (DT-41), so whatever it
+ * operates is attributed to that credential. Which tools require it is each tool's `required`.
+ */
 const why = {
   type: "string",
   description:
-    "Why you are doing this. Required when authenticating with the shared administration " +
-    "password, which cannot say who you are.",
+    "Why you are doing this. Recorded with the operation, which the cloud attributes to the access credential " +
+    "this server presents.",
 } as const;
 
 /**
@@ -190,14 +195,26 @@ export const tools: Tool[] = [
   },
   {
     name: "list_findings",
-    description: "The findings of a project, open and recently closed, grouped into the incidents they form.",
+    description:
+      "The findings of a project, as one flat list: every open one, the most recently confirmed first, then every " +
+      "one that closed in the last 48 hours, the most recently closed first. Each is a summary to choose from and " +
+      "not the evidence, and names under `incident.members` the findings of the incident it belongs to: the ones " +
+      "on the same dependency in the same environment that were open at the same time. There is no filter and no " +
+      "paging; `read_report` has one finding's comparison, hypotheses and recommendations. No findings is not the " +
+      "same as no data: `freshness.lastReceivedAt` says when the last batch arrived, and is null when nothing ever " +
+      "did.",
     inputSchema: { type: "object", properties: { project }, required: ["project"] },
     method: "GET",
     path: "/api/p/{slug}/findings",
   },
   {
     name: "read_finding",
-    description: "One finding: what was measured, what it is attributed to, what has been said about it.",
+    description:
+      "One finding in detail: what was measured, under `observed`; what was deployed close enough before it to " +
+      "name, under `attributed`, which is a coincidence in time and not a cause; the reference it is compared " +
+      "against; and the annotations and ratings left on it. Its comparison, hypotheses and recommendations are in " +
+      "`read_report`, and so is the `version` a decision on it takes. An id that is not a number is refused with " +
+      "400, and a finding this project does not have with 404.",
     inputSchema: { type: "object", properties: { project, finding }, required: ["project", "finding"] },
     method: "GET",
     path: "/api/p/{slug}/findings/{id}",
@@ -218,7 +235,9 @@ export const tools: Tool[] = [
     name: "compare_windows",
     description:
       "What changed between the degraded window and its reference: the differences ordered by how much " +
-      "they explain, with the attribution and its limits.",
+      "they explain, with the attribution and its limits. Each window says why it was chosen. `available: false`, " +
+      "with its `reason`, means nothing could be compared, which is not the same as nothing having changed. " +
+      "`read_report` carries the same comparison inside the report.",
     inputSchema: { type: "object", properties: { project, finding }, required: ["project", "finding"] },
     method: "GET",
     path: "/api/p/{slug}/findings/{id}/diff",
@@ -226,8 +245,12 @@ export const tools: Tool[] = [
   {
     name: "verify_recovery",
     description:
-      "Did what I changed work? Observed recovery, persistent degradation or inconclusive, by scope, and " +
-      "never a claim that the intervention caused it.",
+      "Did what I changed work? It reads the finding's footprint from `since`, the instant of the intervention, " +
+      "and concludes `recovery-observed`, `degradation-persists` or `inconclusive`, overall and per deployed " +
+      "version under `scopes`; `waitingCouldHelp` says whether more time could still turn it into an answer. It is " +
+      "a read: it closes nothing and accepts no reference, and it never claims that the intervention caused what " +
+      "it observed. A `since` in the future is refused with 400, and one older than the stored detail starts the " +
+      "window where the data does, and says so.",
     inputSchema: {
       type: "object",
       properties: {
@@ -248,7 +271,9 @@ export const tools: Tool[] = [
   {
     name: "read_history",
     description:
-      "What a project looked like further back than the fine-grained data goes, hour by hour. " +
+      "What a project looked like further back than the fine-grained data goes, hour by hour. `to` must be " +
+      "after `from`, and a window longer than 3 × 366 days, more than any history this cloud keeps, is refused " +
+      "with 400. " +
       "`baselineFrom` and `baselineTo`, both or neither, are the other window the history page compares " +
       "against: with them the answer adds `baseline`, the window as asked for with whether the series covers " +
       "it, and `comparison`, one row per endpoint and metric with before, after, the change and whether it " +
@@ -398,7 +423,12 @@ export const tools: Tool[] = [
   },
   {
     name: "unignore_error",
-    description: "Bring an ignored error back into the default list before its time is up." + idempotentRetry,
+    description:
+      "Lift an ignore before its `until`, attributed: the error goes back to `open` and into the default list. " +
+      "Only an error that is ignored now can be unignored; any other is refused with 409, including one whose " +
+      "ignore already ran out and so reads `open` again. An ignored error can be resolved with `resolve_error` " +
+      "directly, without this first." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: { project, error, why, idempotencyKey },
@@ -433,7 +463,13 @@ export const tools: Tool[] = [
   },
   {
     name: "list_captures",
-    description: "The captures of a project, with the budget and what a capture cannot do.",
+    description:
+      "The newest hundred captures of a project, newest first, whatever their origin —requested, automatic or " +
+      "prearmed—, since all of them spend one budget. Each says its state, when it was accepted and when " +
+      "observation really started —`startedAt`, null until the instrumentation confirms it—, and while it is " +
+      "live when to ask again (`retryAfterSeconds`). The answer also carries the budget —captures per rolling " +
+      "hour, how many at once, how long a footprint cools down and the longest window— and the legend of the " +
+      "states. The evidence is not here: it is in `read_capture`, one capture at a time.",
     inputSchema: { type: "object", properties: { project }, required: ["project"] },
     method: "GET",
     path: "/api/p/{slug}/captures",
@@ -496,7 +532,12 @@ export const tools: Tool[] = [
   },
   {
     name: "list_regressions",
-    description: "What this project says Downtrace missed.",
+    description:
+      "What this project says Downtrace missed: the newest hundred regressions recorded with `record_regression`, " +
+      "newest first, each attributed and declared rather than measured. Beside them, under `ask`, the newest " +
+      "question the cloud has recorded for the project and whether a recorded regression has answered it; absent " +
+      "when it has not asked yet. The evaluation reads these as the numerator of its undetected-regressions " +
+      "metric. They are not findings: what was detected is `list_findings`.",
     inputSchema: { type: "object", properties: { project }, required: ["project"] },
     method: "GET",
     path: "/api/p/{slug}/regressions",
@@ -505,7 +546,11 @@ export const tools: Tool[] = [
     name: "request_capture",
     description:
       "Ask for detail on a route or a dependency for a while. Accepting is not observing: the answer says " +
-      "it is queued, and nothing recovers detail that was not kept." +
+      "it is queued, `startedAt` stays null until the instrumentation confirms observation began, and nothing " +
+      "recovers detail that was not kept; `read_capture` follows it. A footprint with a live capture, or cooling " +
+      'down after one that finished, is refused with 409 and `reason: "cooldown"`, naming that capture: read it ' +
+      "rather than asking again. A project already running as many captures as it may, or whose hourly budget is " +
+      "spent, is refused with 429, `reason` `concurrent` or `hourly`, and `retryAfterSeconds`." +
       idempotentRetry,
     inputSchema: {
       type: "object",
@@ -516,7 +561,10 @@ export const tools: Tool[] = [
         route: { type: "string", description: "Route template, when watching a route." },
         kind: { type: "string", description: "Dependency kind, when watching a dependency." },
         target: { type: "string", description: "Dependency target, when watching a dependency." },
-        windowSeconds: { type: "integer", description: "How long to watch for, in whole seconds." },
+        windowSeconds: {
+          type: "integer",
+          description: "How long to watch for, in whole seconds: 10 to 600 seconds, sixty by default.",
+        },
         why,
         idempotencyKey,
       },
@@ -586,13 +634,20 @@ export const tools: Tool[] = [
   {
     name: "assess_hypothesis",
     description:
-      "Record your own reading of a hypothesis. It sits beside Downtrace's and never overwrites it." + idempotentRetry,
+      "Record your own reading of a hypothesis, with its reason. It sits beside Downtrace's evaluation and never " +
+      "overwrites it: the evaluation stands and the finding is untouched. Only the hypotheses the rules derive can " +
+      "be assessed: one a language model proposed (`model-1` and on) is refused with 404, which names the ones " +
+      "that can." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: {
         project,
         finding,
-        hypothesis: { type: "string", description: "The hypothesis' stable id." },
+        hypothesis: {
+          type: "string",
+          description: "The hypothesis' stable id, as the report gives it under `hypotheses[].id`.",
+        },
         state: {
           type: "string",
           enum: ["supported", "weakened", "discarded", "not-assessed"],
@@ -616,7 +671,8 @@ export const tools: Tool[] = [
       "Rate a finding on the two axes: was the diagnosis right, and was the alert worth having. It changes " +
       "nothing about the finding. It is recorded as a rating given by a coding agent, which is what calls " +
       "this server, and counts apart from the person's: an agent that confirms the diagnosis it has just " +
-      "used is agreeing with itself, so it counts as a signal, not as accuracy." +
+      "used is agreeing with itself, so it counts as a signal, not as accuracy. Give `accuracy`, `usefulness` or " +
+      "both: with neither, the cloud refuses it with 400." +
       idempotentRetry,
     inputSchema: {
       type: "object",
@@ -646,8 +702,11 @@ export const tools: Tool[] = [
   {
     name: "annotate_finding",
     description:
-      "Say what Downtrace could not measure: 'reverted at 15:02', 'the provider confirms an incident'. " +
-      "Also acknowledge, hand back, or reopen a finding that was closed by hand." +
+      "Say what Downtrace could not measure about a finding: 'reverted at 15:02', 'the provider confirms an " +
+      "incident'. It is kept beside the evidence and never on top of it, and changes no measurement. The same call " +
+      "says that somebody is on it (`acknowledge`) or no longer is (`unacknowledge`), or reopens a finding that " +
+      "was closed by hand (`reopen`). Reopening one that is open, or one that closed on observed recovery or an " +
+      "accepted reference, is refused with 409: contradicting an observed recovery is `record_regression`." +
       idempotentRetry,
     inputSchema: {
       type: "object",
@@ -674,8 +733,11 @@ export const tools: Tool[] = [
   {
     name: "record_regression",
     description:
-      "Record something Downtrace did not detect. Nothing reads these yet; they are the record of what the " +
-      "detector missed." +
+      "Record something Downtrace did not detect. It belongs to the project and not to a finding —there is none, " +
+      "which is the point—, and it changes no detector and raises no alert. The evaluation reads these against " +
+      "the questions the cloud records, and this one answers the newest question still without an answer; " +
+      "`list_regressions` reads them back. It is also how to contradict a finding that closed on observed " +
+      "recovery, which `annotate_finding` cannot reopen." +
       idempotentRetry,
     inputSchema: {
       type: "object",
@@ -690,8 +752,10 @@ export const tools: Tool[] = [
   {
     name: "silence_alerts",
     description:
-      "Stop being told about something, with a scope and an end. It silences the alert, never the detector: " +
-      "the finding still opens and still counts." +
+      "Stop being told about something, with a scope and an end at most thirty days away. It silences the alert, " +
+      "never the detector: the finding still opens and still counts. An `until` in the past or more than thirty " +
+      "days away is refused with 400. The silences in force, with their ids, are in `project_status` under " +
+      "`silences`, and `lift_silence` ends one early." +
       idempotentRetry,
     inputSchema: {
       type: "object",
@@ -722,7 +786,11 @@ export const tools: Tool[] = [
   },
   {
     name: "lift_silence",
-    description: "End a silence before its time." + idempotentRetry,
+    description:
+      "End a silence before its `until`, attributed to the credential that lifts it. Lifting one that was already " +
+      "lifted succeeds, and keeps when it was first lifted and by whom. It answers with the id under `lifted`; the " +
+      "silences in force, with their ids, are in `project_status` under `silences`." +
+      idempotentRetry,
     inputSchema: {
       type: "object",
       properties: { project, silence: { type: "string", description: "The silence's id." }, idempotencyKey },

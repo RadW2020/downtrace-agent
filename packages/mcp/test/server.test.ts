@@ -1350,6 +1350,122 @@ describe("the silence of an alert, by its finding", () => {
   });
 });
 
+/**
+ * A coding agent picks a tool and fills its arguments from `tools/list` alone, so a description says what the
+ * cloud does with the call: what comes back, when a sibling is the right tool, and what is refused and how,
+ * before the refusal (DT-76). Each sentence below is the cloud's handler, read for it; and where a description
+ * said something the cloud does not do, the old words are listed so they do not come back.
+ */
+describe("what a description says the cloud does", () => {
+  const contracts: Array<{ tool: string; says: string[]; never?: string[] }> = [
+    {
+      tool: "list_findings",
+      says: [
+        "one flat list",
+        "the most recently confirmed first",
+        "closed in the last 48 hours",
+        "`incident.members`",
+        "`freshness.lastReceivedAt`",
+        "`read_report`",
+      ],
+      never: ["grouped into the incidents"],
+    },
+    {
+      tool: "read_finding",
+      says: ["`observed`", "`attributed`", "not a cause", "`read_report`", "404"],
+    },
+    {
+      tool: "compare_windows",
+      says: ["`available: false`", "not the same as nothing having changed"],
+    },
+    {
+      tool: "verify_recovery",
+      says: [
+        "`recovery-observed`",
+        "`degradation-persists`",
+        "`inconclusive`",
+        "`scopes`",
+        "`waitingCouldHelp`",
+        "in the future is refused with 400",
+      ],
+    },
+    {
+      tool: "read_history",
+      says: ["`to` must be after `from`", "3 × 366 days"],
+    },
+    {
+      tool: "unignore_error",
+      says: ["refused with 409", "ran out"],
+    },
+    {
+      tool: "list_captures",
+      says: ["newest hundred", "budget", "`read_capture`"],
+    },
+    {
+      tool: "request_capture",
+      says: ["409", '`reason: "cooldown"`', "429", "`concurrent`", "`hourly`"],
+    },
+    {
+      tool: "list_regressions",
+      says: ["`ask`", "evaluation"],
+    },
+    {
+      tool: "record_regression",
+      says: ["The evaluation reads these", "newest question", "raises no alert", "`list_regressions`"],
+      never: ["Nothing reads these"],
+    },
+    {
+      tool: "annotate_finding",
+      says: ["refused with 409", "observed recovery", "`record_regression`"],
+    },
+    {
+      tool: "assess_hypothesis",
+      says: ["`model-1`", "refused with 404"],
+    },
+    {
+      tool: "give_feedback",
+      says: ["with neither, the cloud refuses it with 400"],
+    },
+    {
+      tool: "silence_alerts",
+      says: ["thirty days", "refused with 400", "`project_status`", "`silences`", "`lift_silence`"],
+    },
+    {
+      tool: "lift_silence",
+      says: ["already lifted", "`lifted`", "`project_status`"],
+    },
+  ];
+
+  for (const { tool, says, never = [] } of contracts) {
+    it(`says in ${tool}'s description what the cloud does with it`, () => {
+      const description = toolNamed(tool)?.description;
+      expect(description, tool).toBeDefined();
+      for (const what of says) expect(description, `${tool}: ${what}`).toContain(what);
+      for (const what of never) expect(description, `${tool}: ${what}`).not.toContain(what);
+    });
+  }
+
+  // The range the cloud refuses outside of, and what it watches for when none is given, where the argument is.
+  it("says how long a capture may watch, and for how long when it is not told", () => {
+    const window = toolNamed("request_capture")?.inputSchema.properties.windowSeconds?.description ?? "";
+    expect(window).toContain("10 to 600 seconds");
+    expect(window).toContain("sixty by default");
+  });
+
+  // The reason an operation records goes with the credential this server presents. The administration password
+  // opens no tool about a project through this server (DT-41), so a `why` that is «required with the password»
+  // describes a call that cannot happen. Enumerated from the source: every tool that takes a reason.
+  it("does not tie the reason of an operation to the administration password", () => {
+    const withWhy = tools.filter((t) => t.inputSchema.properties.why !== undefined);
+    expect(withWhy.length).toBeGreaterThan(0);
+    for (const t of withWhy) {
+      const why = t.inputSchema.properties.why?.description ?? "";
+      expect(why, t.name).not.toContain("administration password");
+      expect(why, t.name).toContain("access credential");
+    }
+  });
+});
+
 describe("when something goes wrong", () => {
   // A failure is a result the agent can read, never an exception that ends the session.
   it("turns an API error into a readable result and stays alive", async () => {
