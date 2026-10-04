@@ -137,6 +137,10 @@ describe("an application that leaves on its own", () => {
     while (servers.length) await servers.pop()?.();
   });
 
+  // `process.exit()`, the second of ERR-04's three ways a process ends, is these two: without waiting, and after
+  // `await shutdown()`.
+  //
+  // covers: ERR-04
   it("loses its last batch when it does not wait", async () => {
     // The failure, pinned. Not a warning about a race: the batch is simply not there.
     const s = await sink();
@@ -146,6 +150,7 @@ describe("an application that leaves on its own", () => {
     expect(s.batches, "the batch arrived without anybody waiting for it").toBe(0);
   });
 
+  // covers: ERR-04
   it("keeps it when it waits", async () => {
     const s = await sink();
     servers.push(s.close);

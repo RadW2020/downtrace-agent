@@ -540,6 +540,23 @@ describe("calling a tool", () => {
     );
   });
 
+  // After a crash, the status is where a coding agent finds out how each process ended and what that left behind
+  // (ESC-14). It already carried it; the description did not say so, and an agent choosing a tool from a list reads
+  // the description and nothing else (gh-598, DT-6).
+  it("says in project_status's description that it carries how each process ended, and where to look after a crash", () => {
+    const description = toolNamed("project_status")?.description ?? "";
+    for (const said of [
+      "`endings`",
+      "how each process",
+      "handed over",
+      "stopped sending",
+      "lost if it died",
+      "after a crash",
+    ]) {
+      expect(description, said).toContain(said);
+    }
+  });
+
   // A window with more routes than one read carries is read to its busiest, and a route past that cut is not one
   // that appeared or went away: a coding agent that reads `new` or `gone` there concludes what nobody measured.
   it("says in read_history's description what an unevaluable row past a window's cut means", () => {
@@ -1483,9 +1500,10 @@ describe("when something goes wrong", () => {
   // agent has to read the same words a person reads on the page, not a summary of them (gh-598, ESC-14).
   it("hands back what the cloud says about a process that stopped, word for word", async () => {
     const says =
-      "It stopped sending and said nothing about ending. This cloud cannot tell a process that died from " +
-      "one that was stopped or has gone quiet; if it died, what it had not sent is lost: the interval in " +
-      "hand and any exception that killed it. Nothing here is proof that no error happened.";
+      "It stopped sending and said nothing about ending, and has now been quiet for longer than 5 minutes. " +
+      "This cloud cannot tell a process that died from one that was stopped or has gone quiet; if it died, " +
+      "what it had not sent is lost: the interval in hand and any exception that killed it. Nothing here is " +
+      "proof that no error happened.";
     const { s, calls } = server([{ body: JSON.stringify({ endings: [{ id: "i-0", state: "stopped", says }] }) }]);
     const out = (await s.handle("tools/call", {
       name: "project_status",

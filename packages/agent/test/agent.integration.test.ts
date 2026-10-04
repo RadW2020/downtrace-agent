@@ -403,6 +403,65 @@ describe("agent v0 (integration)", () => {
       "the window was not up",
     ).toBe(false);
   });
+  // The same order, on the way out. `flush` hands over `takeAll()` when the process is leaving and `take(now)`
+  // when it is not (ADR 0073, gh-383): partial evidence is an answer and silence is not. The README says a signal
+  // and a waited-for `process.exit()` hand over «the evidence of any capture still under way», and until DT-6
+  // nothing asked it of an agent: `captures.test.ts` asks it of `takeAll()` alone, which stays green if the way
+  // out stops calling it.
+  it("hands over the evidence of a capture still under way when it shuts down", async () => {
+    const REQUEST_START = "http.server.request.start";
+    const RESPONSE_FINISH = "http.server.response.finish";
+    const evidence: { path: string; body: unknown }[] = [];
+    let ordered = false;
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith(AGGREGATES_PATH)) {
+        // A window of a minute: it is **not** going to close by itself, so what delivers this is the shutdown
+        // and nothing else.
+        const captures = ordered
+          ? []
+          : [
+              {
+                id: "cap-1",
+                windowSeconds: 60,
+                expiresAt: new Date(Date.now() + 600_000).toISOString(),
+                method: "GET",
+                route: "/products/:id",
+              },
+            ];
+        ordered = true;
+        return new Response(JSON.stringify({ accepted: 1, inserted: 1, captures }), { status: 202 });
+      }
+      evidence.push({ path, body: JSON.parse(String(init?.body)) });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+
+    const clock = testClock();
+    const agent = createAgent(config("http://cloud.invalid", { instrument: new Set(["pg"]) }), {
+      log: quiet,
+      fetchImpl,
+      now: clock.now,
+    });
+    cleanups.push(() => agent.stop());
+    agent.start();
+
+    const request = { method: "GET", url: "/products/7" };
+    channel(REQUEST_START).publish({ request });
+    channel(RESPONSE_FINISH).publish({ request, response: { statusCode: 200 } });
+    clock.here();
+    // The first flush brings the order back; the capture is now watching and its window is nowhere near up.
+    expect(await agent.flushNow()).toBe(true);
+    clock.advance(1_000);
+    expect(await agent.flushNow()).toBe(true);
+    expect(evidence, "the window closed on its own; this test would prove nothing").toHaveLength(0);
+
+    await agent.stop();
+
+    expect(evidence, "the capture under way was not handed over on the way out").toHaveLength(1);
+    expect(evidence[0]?.path).toContain("/v0/captures/cap-1/evidence");
+    expect(validateEvidence(evidence[0]?.body), ajv.errorsText(validateEvidence.errors)).toBe(true);
+  });
+
   // gh-379: the loop closes. The cloud asks in the answer to a batch (ADR 0071), this process starts
   // watching, says so in the next batch (ADR 0098) and sends the evidence when the window shuts (ADR 0073).
   // Until now `transport.ts` looked at `res.ok` and threw the answer away.

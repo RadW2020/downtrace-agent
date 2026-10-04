@@ -253,18 +253,31 @@ through `beforeExit`, and there is no synchronous channel to send it on. It arri
 survives what it threw — because it has its own `uncaughtException` handler, or because the rejection did
 not kill it — which is the common case for the ones you can still do something about.
 
+That is decided, not pending: the instrumentation does not write the exception to disk to deliver it at the
+next start. A container's disk is usually ephemeral and the next start may be another instance, so a spool
+would only help a machine with a persistent disk; and writing on the way down is synchronous I/O, with a
+bound of its own to keep, at the one moment the instrumentation must not change how your process ends. What
+it does instead is say the loss, and the cloud shows it per process (below).
+
 ### What each way of ending keeps, and what it loses
 
-Three ways a process ends, and they are not the same for your telemetry. What is in this table is what the
-tests in `test/` assert, with real processes, because a process that does not end cannot prove any of this
-from the inside.
+Three ways a process ends — an orderly shutdown, an explicit exit, an exception that kills it — and they are
+not the same for your telemetry. Every claim below names the test in `test/` that asserts it; the ones about
+how a process ends use real processes, because a process that does not end cannot prove that from the inside,
+and the one claim no test can reach says so in those words.
 
-| How it ends | What reaches Downtrace | What is lost | Where it is asked |
-| --- | --- | --- | --- |
-| SIGTERM or SIGINT, with the instrumentation's own handler | everything it was holding: the interval in hand, the profile's window closed whatever the clock says, the evidence of any capture under way, and the exceptions it had recorded | nothing it was holding | `endings.test.ts`, `profile.test.ts` |
-| `process.exit()`, after `await shutdown()` | the same | nothing it was holding | `shutdown.test.ts` |
-| `process.exit()`, without waiting | nothing of the last flush — the call waits for no promise and fires no `beforeExit` | the interval in hand, the profile's window, any capture evidence | `shutdown.test.ts` |
-| An exception nobody caught | what had already been sent: the earlier intervals with their runtime signals, and the exceptions that rode an earlier batch | **the exception that killed it**, the interval in hand, the profile's window, any capture evidence | `endings.test.ts`, `uncaught.test.ts` |
+| How it ends | What reaches Downtrace | What is lost |
+| --- | --- | --- |
+| SIGTERM or SIGINT, with the instrumentation's own handler | everything it was holding: the interval in hand and the exceptions it had recorded, and the process still dies of that signal (`endings.test.ts`) | nothing it was holding |
+| The event loop empties: nothing is left to do | the same, by the same path: the interval in hand (`endings.test.ts`) | nothing it was holding |
+| `process.exit()`, after `await shutdown()` | the same, by the same path: the last batch (`shutdown.test.ts`) | nothing it was holding |
+| `process.exit()`, without waiting | nothing of the last flush — the call waits for no promise and fires no `beforeExit` (`shutdown.test.ts`) | the interval in hand, the profile's window, any capture evidence |
+| An exception nobody caught | what had already been sent: the earlier intervals with their runtime signals, and the exceptions that rode an earlier batch (`endings.test.ts`) | **the exception that killed it** and the interval in hand (`endings.test.ts`); and with them the profile's window and any capture evidence — **stated by reasoning and not by a test**, because nothing runs after the process is gone and what delivers those two is the flush that never happens |
+
+The three orderly ways out — the signal, the emptied loop and `shutdown()` — are one path, and on it the
+instrumentation also closes the profile's window whatever the clock says (`profile.test.ts`,
+`agent.integration.test.ts`) and hands over the evidence of any capture still under way, partial rather than
+silent (`agent.integration.test.ts`, `captures.test.ts`).
 
 Two things hold in every row. The **black box** — the fine detail, the coarse summary and the reference
 samples — never leaves your process except inside a capture, so it always goes with the process; that is

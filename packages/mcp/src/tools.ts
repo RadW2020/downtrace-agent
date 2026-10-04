@@ -166,7 +166,9 @@ export const tools: Tool[] = [
     description:
       "What a project looks like right now: traffic, endpoints, dependencies, runtime health, coverage " +
       "and the data budget with its consumption. The endpoints come in the order you ask for, and the " +
-      "answer says which order it applied under `endpointsSort`.",
+      "answer says which order it applied under `endpointsSort`. Under `endings` it says how each process " +
+      "of the last day ended: one that handed over what it was holding before leaving, or one that stopped " +
+      "sending without a word, with what that means was lost if it died. This is where to look after a crash.",
     inputSchema: {
       type: "object",
       properties: {
