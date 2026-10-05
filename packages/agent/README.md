@@ -16,6 +16,8 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 
 It watches only the process it is loaded into: one process, one service.
 
+The package also installs a command, `downtrace`. `downtrace check` compares two runs of your tests, before you deploy, with no account and with nothing leaving your machine: see [Compare two runs before you deploy](#compare-two-runs-before-you-deploy-downtrace-check).
+
 > **On the word «agent».** Two things in Downtrace could be called that, and this README never uses it alone: the **instrumentation** is this library, and a **coding agent** is whoever queries and operates Downtrace — a first-class user of the product, not a part of it. The npm name `@downtrace/agent` keeps the older sense on purpose: renaming a published package costs its users more than the ambiguity costs them, and the ambiguity is bounded by saying which is which everywhere else.
 
 ## Install
@@ -674,6 +676,91 @@ running deployment can be audited without turning it off, and what you read is w
 Two things worth knowing: **the file grows and nothing rotates it** — it is yours, and so is deciding what to do
 with it — and it may contain the normalised text of your queries, which is the point, so give it the same care
 you would give an application log.
+
+## Compare two runs before you deploy: `downtrace check`
+
+```sh
+npx downtrace check --base origin/main -- npm test
+```
+
+It runs your tests twice — on the base you name, in a temporary checkout of its own, and on your working tree as it is — with the instrumentation writing locally, and compares the two route by route **by composition**: which queries, outgoing calls and Redis commands each request ran, by fingerprint, and how many times. For each route it says one of three things:
+
+- **worse**: an operation appeared that the base did not run, or one runs at least 25% and at least half an execution more per request than it did. It names the operation by its fingerprint and says how many times a request ran it.
+- **unchanged**: the route was evaluated and nothing of that kind got worse. An operation that is gone or runs less is listed, and is not worse.
+- **not evaluated**: the run cannot say, and says why. A route is never presented as unchanged because nothing was looked at.
+
+It needs no account and sends nothing anywhere: the runs are given no token and no URL, so the instrumentation can only write a file, and `git` runs with no hook of yours, no LFS download and no password prompt. It never checks out, stashes or resets anything in your working tree; the base is a worktree under your temporary directory, outside the repository, that is removed when the runs end, however they ended. Installed with the project, `npx downtrace check` finds this package's command; where `@downtrace/agent` is not installed, `npx @downtrace/agent check` is the same command, and `npx downtrace` is not: it would look for a package of that name on the registry, which is not ours. It is tried on macOS and Linux, and its test command is run by a POSIX shell.
+
+### What it answers, and what it does not
+
+**Composition, never latency.** Durations are shown beside each verdict as data — the mean time of a request, the time per execution of an operation — and no verdict depends on one: the traffic of a test run is not production's and the machine it runs on is not quiet. The comparison is per request, so more traffic through the same code is not a regression. What a small fixture shows is the operation that appeared and how many times it repeats — five executions where production would see fifty — and that is what it names.
+
+**What it says nothing about** is what only real traffic produces: a dependency that degrades, a pool that saturates, a change of load, an error that depends on production's data. The errors beside the operations are not judged either; the test command's own result is where a failing test shows. Those are what production is for.
+
+**Operations are the same operation by fingerprint**, with one exception made for your machine: a call or a command to `localhost`, `127.0.0.1` or `[::1]` is the same operation whatever its port, because a test's stub server on a port the system picks has another port on every run and would otherwise be an operation that appeared beside one that vanished. A bucket of requests that belongs to no route of yours is not judged at all (below).
+
+### Why a route was not evaluated
+
+Each route that is not evaluated carries a code an agent can branch on, in the JSON, and a sentence in the text:
+
+| Code | Why |
+|---|---|
+| `not-called` | No request reached it in either run. Only a route your project declares (`routes`, below) can be named when nobody called it: nothing observes a route nobody asked. |
+| `not-called-in-base` | The base run made no request to it: it is new, or the tests only reach it now. |
+| `not-called-in-change` | The change run made no request to it: it is gone, or the tests no longer reach it. |
+| `no-profile-in-base`, `no-profile-in-change` | That run saw requests to it and no profile covered them, so what they ran is unknown. |
+| `nothing-observed` | No query, outgoing call or Redis command was observed inside its requests, in either run: it has none, or its dependencies were simulated or are not observed. With nothing to compare, nothing is said; a route that starts running something in the change is not this, it is worse. |
+| `bucket` | A bucket of requests, not a route of the project: `(unmatched)` is what no route of the framework matched, `/_not-found` is Next.js's own, and `(other)` is what went past the cap of routes. What is in one is a mix and how many requests fall in it depends on the tests, so a bucket is listed by name and never judged, and a change in how many fall in it is never read as a route getting worse. |
+
+If **no route** could be evaluated, `check` does not print a green result: it says no comparison could be made and lists why each route was not evaluated.
+
+### When a run leaves no profile
+
+The instrumentation writes what it holds when its process ends in an orderly way, and after every second of the runs `check` makes; a runner that ends the process without waiting, or stops the workers that run the tests, can lose what was not yet written. The file does not say that anything was lost — a process that wrote nothing looks like one that served nothing — so `check` reads the command it ran. When a run left no profile it says «the run left no profile», names the cause it can tell from the command, and says what to use instead:
+
+| In the test command | Use |
+|---|---|
+| `node --test --test-force-exit` | drop `--test-force-exit` |
+| Jest `--forceExit` | drop `--forceExit` |
+| Mocha `--exit` | drop `--exit` |
+| Mocha `--parallel` | drop `--parallel` |
+| Vitest with the `threads` or `vmThreads` pool | use `--pool=forks`, which is Vitest's default |
+
+The instrumentation is loaded into every process of the run through `NODE_OPTIONS`, and not with `--import` on the runner's command line: a runner's workers do not inherit the command line (Vitest's do not), and `NODE_OPTIONS` reaches every process. Every process writes its own lines into one file, so `check` merges them by route and counts a window or an interval that was written twice once. A route whose requests made calls that no profile covers is evaluated over the requests that a profile does cover, and the report says how many that was; one with none is `no-profile-in-base` or `no-profile-in-change`.
+
+### The test command and the configuration
+
+The command comes after `--`, or from `downtrace.json`, which `downtrace init` writes for `check` to read. It lives at the root of the project or of the repository, and is looked for upward from where `check` runs:
+
+```json
+{
+  "check": {
+    "command": "npm test",
+    "routes": ["GET /products", "POST /checkout"],
+    "prepare": "pnpm install --offline --frozen-lockfile",
+    "timeout": 900
+  }
+}
+```
+
+Every key is optional. A key `check` does not know is an error, and keys outside `check` are not judged.
+
+| Key | What it is |
+|---|---|
+| `command` | The test command, run by a shell; or a list of words, which is quoted for it. A command after `--` takes its place. |
+| `routes` | The routes the project has, as `METHOD /template`, so that one no test calls can be named as `not-called`. The template is the one the instrumentation names the route by: `/products/:id` for Express and Koa, `/products/[id]` for Next.js. |
+| `prepare` | A command run in the base checkout before the tests, for what a fresh checkout lacks. When it is given, the base's dependencies are its business, and `check` links none (below). It gets `DOWNTRACE_CHECK_ORIGIN`, the directory of your project. |
+| `timeout` | How long each run of the test command may take, in seconds; 900 by default, `--timeout` on the command line. A run that does not end in time is stopped, with what it started, and said. |
+
+Options of the command: `--base <ref>` (what to compare against; `HEAD` by default, which is what is not committed yet; for a branch that is behind its base, `$(git merge-base origin/main HEAD)`), `--json`, `--config <file>`, `--timeout <seconds>`. The progress of a run goes to stderr, so that stdout is the result alone.
+
+**How the base runs.** A fresh checkout has no dependencies, and installing them would need the network, so every `node_modules` of your working tree (to three levels below the top of the repository) is linked into the same place in the base. Two consequences are yours to know: a tool that writes into `node_modules` writes into yours — `check` installs nothing itself, and sets `verify-deps-before-run=false` for the base so that pnpm does not install on its own — and a package of your own repository that is linked into them is the working tree's, not the base's: in a monorepo, run `check` in the package that changes, or give `prepare` the install that builds the base's own. Files git ignores, a `.env` for instance, are not in the base; `prepare` can copy them from `DOWNTRACE_CHECK_ORIGIN`. The checkout runs no hook of the project, fetches no LFS object and does not initialise submodules. If `check` is killed without the chance to clean up (`SIGKILL`), the temporary checkout stays under the temporary directory, and `git worktree prune` takes its entry away. Every `DOWNTRACE_` variable of your environment is dropped for the runs: they would point the instrumentation at production.
+
+### What it hands back
+
+For a person, text with the three columns, each route with its evidence. For a coding agent, `--json`: one object, `schema: "downtrace-check/1"`, with `status` (`compared` or `failed`), `summary` (`worse`, `unchanged`, `notEvaluated`), `base` and `change` (the ref, the commit, the command, its exit status and what the run left: processes, requests, routes, profile windows, lines it could not read, what each observer said), `notes`, and `routes`. Each route has a stable `id` (`POST /checkout`), its `verdict`, its `reasons` when it was not evaluated, `requests` and `profiledRequests` for each side, `meanRequestMs`, its `dependencies` (all the queries, all the outgoing calls, all the commands, per request, on each side) and its `operations`: for each, a stable `id`, the `hash` of its fingerprint, its `kind`, its `label`, how it moved (`appeared`, `multiplied`, `unchanged`, `reduced`, `disappeared`), and `perRequest`, `executions` and `msPerExecution` for each side. A comparison that could not be made has `status: "failed"` and a `failure` with a `code`, the `side`, a `message`, `advice` and the `outputTail` of the command when it is what failed: `not-a-repository`, `bad-ref`, `bad-config`, `no-command`, `setup-failed`, `command-failed`, `timeout`, `no-profile`, `nothing-evaluated`, `interrupted`.
+
+For CI, the exit status: **0** no route got worse, **1** at least one did, **2** no comparison could be made — the test command failed on either side (a comparison needs two runs that end well), a run left no profile, no route could be evaluated, or the command was interrupted.
 
 ## Guarantees
 
