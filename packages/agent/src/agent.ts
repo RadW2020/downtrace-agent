@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import diagnostics_channel from "node:diagnostics_channel";
+import { createRequire } from "node:module";
 import { hostname } from "node:os";
 import {
   type AgentInfo,
@@ -36,6 +37,7 @@ import { instrumentHttp } from "./instrument/http.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
+import { attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
 import { armMounts } from "./mounts.ts";
@@ -90,6 +92,8 @@ export interface AgentDeps {
   sender?: Sender | undefined;
   log?: Logger | undefined;
   fetchImpl?: typeof fetch | undefined;
+  /** The module cache the Koa of the application is looked for in (DT-90), so a test can hand it one of its own. */
+  moduleCache?: Readonly<Record<string, unknown>> | undefined;
   /** Flush on SIGTERM/SIGINT. Off in tests; on when loaded via register. */
   handleSignals?: boolean | undefined;
   /** The `pg` module, so a test can hand it one that cannot be instrumented. Same seam `instrumentPg` has. */
@@ -169,6 +173,7 @@ export class Agent {
   private readonly agentInfo: AgentInfo;
   private readonly pgModule: unknown;
   private readonly mysqlModule: unknown;
+  private readonly moduleCache: Readonly<Record<string, unknown>> | undefined;
   /** Every instant this agent produces. See `AgentDeps.now`: one clock, not two (gh-538). */
   private readonly now: () => number;
   private readonly log: Logger;
@@ -254,6 +259,12 @@ export class Agent {
   private recorded = 0;
   private internalErrors = 0;
   private disabled = false;
+  /**
+   * What finds the Koa the application loaded and records the template of the route each request matched
+   * (DT-90). It runs once, from the start of the first request, and is cleared after it: the application has
+   * loaded its modules by then, and nothing is read from the module cache again.
+   */
+  private koaAttach: (() => void) | undefined;
   private readonly onStart = (message: unknown): void => this.guard(() => this.requestStarted(message));
   private readonly onFinish = (message: unknown): void => this.guard(() => this.responseFinished(message));
   private readonly onSignal: Record<(typeof SIGNALS)[number], () => void>;
@@ -278,6 +289,7 @@ export class Agent {
     this.config = config;
     this.pgModule = deps.pgModule;
     this.mysqlModule = deps.mysqlModule;
+    this.moduleCache = deps.moduleCache;
     this.now = deps.now ?? defaultNow;
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
@@ -467,6 +479,16 @@ export class Agent {
     // pattern is lost. `armMounts` cannot throw; a failure to arm leaves the `:param` fallback, and the
     // application goes on (invariant 2).
     armMounts(entry);
+    // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
+    // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
+    // one read of the cache, once.
+    this.koaAttach = () => {
+      attachKoa({
+        cache: this.moduleCache ?? createRequire(entry).cache,
+        log: this.log,
+        internalError: (err) => this.internalError(err),
+      });
+    };
     const on = this.config.instrument;
     // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
     // which is a configuration and not a fault; `unavailable` is «asked for and could not attach», which is
@@ -1003,6 +1025,11 @@ export class Agent {
   private requestStarted(message: unknown): void {
     const request = (message as { request?: object }).request;
     if (!request) return;
+    if (this.koaAttach !== undefined) {
+      const attach = this.koaAttach;
+      this.koaAttach = undefined;
+      attach();
+    }
     const startedAt = performance.now();
     this.starts.set(request, startedAt);
     this.runtime.requestStarted();

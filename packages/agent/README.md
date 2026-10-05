@@ -73,7 +73,7 @@ export async function register() {
 }
 ```
 
-Because your code imports it, Next traces it and ships it. Verified on Next 15 with `output: "standalone"`: the instrumentation starts, finds your `pg` and reports queries per route.
+Because your code imports it, Next traces it and ships it. Verified on Next 15 with `output: "standalone"`: the instrumentation starts, finds your `pg` and reports queries per route, and names each route by the file that serves it (`/api/products/[id]`; see Requirements).
 
 Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `nodenext` — the classic `node` setting cannot resolve the `/register` subpath. Next puts one of those in new projects; older ones may still be on `node`.
 
@@ -633,6 +633,12 @@ you would give an application log.
   import with the instrumentation not running loads no Express and touches nothing. They pass arguments, results and
   errors through untouched, and a failure inside either one runs your application anyway — the mount is then read as
   `:param`, which is the safe side (see Requirements).
+- For Koa route templates the instrumentation wraps one more method, `Application.prototype.createContext`, which builds the
+  context of each request: it remembers which context belongs to which request, because the template a router matched is
+  on the context and nothing leads to it from the request. The wrapper passes arguments, results and errors through
+  untouched, is put in place from the **first request** and not at start-up — it looks for the Koa your application has
+  already loaded, in the module cache, and loads nothing — and an application without Koa pays for that look once.
+  Next.js route templates wrap nothing: the template is read off the request, where Next leaves it.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
@@ -674,7 +680,7 @@ answers under a mount before any route matched — a 401 from `app.use("/tenants
 pattern too: the mount is read from the routers the request went through, and the rest of the path goes through the
 heuristic below. Where the same stretch is matched by two mounts registered with different patterns, or by routers the
 walk cannot tell apart, the stretch comes out as `:param` per segment — and so does a mount registered with several paths on Express 4, which keeps no matcher per path. A middleware whose error the app's handler
-answers after Express has put `baseUrl` back to nothing is not reached by this yet. Without a framework — and for
+answers after Express has put `baseUrl` back to nothing is not reached by this yet. Without a framework template — and for
 whatever Express answers when nothing is left of the mount, a 404 or a first-level middleware, read as the path the
 client asked for — a segment that carries a value is collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
@@ -692,6 +698,34 @@ digest of it, which whoever guesses the word can confirm; the exclusion that kee
 `/webhook/*`, and it takes the template with it. A file served by a mount with no route,
 `app.use("/", express.static(dir))`, is named the same way: a bundler's hash comes out as `:id` when it has a
 digit or makes a long mixed-case run with the name, and as written otherwise.
+
+**Koa** routes are named by the path the router registered the matched route with: `/users/:id` for `@koa/router` and
+`koa-router`, which leave it on the context as `ctx._matchedRoute`. **Strapi 5** runs on Koa and on that router, so a
+request to `/api/articles/1` and one to `/api/articles/2` are one route, `/api/articles/:id`, with the prefix of the
+router and of the routers it is nested in; nothing of either path travels. The instrumentation finds the Koa your
+application loaded in the module cache, wherever it is installed — Strapi brings its own, which under pnpm is not
+reachable from your application's root — from the first request on. A route that hands on to the middleware after it
+(Strapi's public files and its 404s do) is named by the route, and not by the last middleware that ran. Without a
+template, the heuristic below names the request as it did: a Koa that is loaded after the first request (a lazy
+`import()`), a Koa bundled into one file with the rest of the application, a Koa router that does not write
+`_matchedRoute` and a route registered with a regular expression, which has no words to be written back.
+
+**Next.js** routes are named by the pathname Next matched, as the file system names it: `app/api/products/[id]/route.ts`
+is `/api/products/[id]` for every product, and so are `pages/api/…`, pages and the edge runtime — with Next's own
+brackets, which is the path of the file that serves it. What Next matched to no route is Next's own `/_not-found`, and no
+part of the path travels. Next keeps this on the request, under a symbol it does not document; it was checked on Next
+13.5, 14.2, 15.5 and 16.3 with `next start` and, on 16.3, with `output: "standalone"` too, and a version that stops
+writing it is named by the heuristic as before. What Next did not route — an asset under `/_next/static`, on some
+versions — is the heuristic's too.
+
+A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
+catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then
+Express.
+
+**The first version that names Koa and Next.js routes by their templates changes their route identities, once**, as the
+one below did for the values: a route that was a path — a Koa one with a plain word in it, a Next.js one with its
+parameter as written — is seen as the template it became, a finding on the old route receives no data, and an exclusion
+written against the old name has to be rewritten against the template: `/api/products/[id]` for Next, with its brackets.
 
 **The first version that collapses these segments changes route identities,
 once:** an endpoint whose route carried a value is seen as the template it became, a finding on the old route

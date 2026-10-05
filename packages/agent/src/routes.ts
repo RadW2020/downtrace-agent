@@ -1,5 +1,7 @@
 import type { Endpoint } from "@downtrace/protocol";
+import { koaMatchedRoute } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
+import { nextMatchedPathname } from "./next.ts";
 import { segmentLooksLikeValue } from "./sanitize.ts";
 
 export type Method = Endpoint["method"];
@@ -24,7 +26,10 @@ export function normalizeMethod(method: string | undefined): Method {
   return METHODS.has(m) ? (m as Method) : "OTHER";
 }
 
-/** What we read off a request: Express sets `route`/`baseUrl`/`app`; plain Node gives us `url`. */
+/**
+ * What we read off a request: Express sets `route`/`baseUrl`/`app`; plain Node gives us `url`. Next.js and Koa
+ * leave theirs where `next.ts` and `koa.ts` read it, and not in this shape.
+ */
 export interface RouteSource {
   url?: string | undefined;
   route?: unknown;
@@ -40,10 +45,15 @@ export interface RouteSource {
 
 /**
  * Route template for a request. Prefers the framework's own template
- * (`/products/:id` from Express), with the mounts that carried the request to the route as the patterns
- * they were registered with — never as the values they matched (invariant 5, gh-858); otherwise collapses
- * a segment that carries a value into `:id`, so that a parameter of the request does not leave
- * (invariant 5, gh-756).
+ * (`/products/:id` from Express or Koa's router, `/products/[id]` from Next.js), with the mounts that carried
+ * the request to the route as the patterns they were registered with — never as the values they matched
+ * (invariant 5, gh-858); otherwise collapses a segment that carries a value into `:id`, so that a parameter
+ * of the request does not leave (invariant 5, gh-756).
+ *
+ * The frameworks are asked from the innermost: Next.js and Koa can sit behind an Express server (Next's
+ * custom server, an app mounted under another), and what they matched is a route where Express saw a mount
+ * or a catch-all. A request only carries the record of the framework that handled it, so asking them costs a
+ * lookup that finds nothing for every other request (DT-90).
  *
  * Without a template, the heuristic starts from the path the client asked for, `originalUrl`, when it is a
  * string: Express trims `url` as the request passes through the mounts, and a middleware that answers before
@@ -52,7 +62,7 @@ export interface RouteSource {
  * where `baseUrl` plus `url` could not be.
  */
 export function routeOf(req: RouteSource): string {
-  const template = expressTemplate(req);
+  const template = nextTemplate(req) ?? koaTemplate(req) ?? expressTemplate(req);
   const asked = typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/");
   const route = template ?? heuristicTemplate(asked);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
@@ -64,6 +74,18 @@ export function routeOf(req: RouteSource): string {
  * (invariant 5, gh-858). The README says when this happens.
  */
 export const PARAM_SEGMENT = ":param";
+
+/** Next.js's template: the pathname of the route it matched, as the file system names it (`next.ts`). */
+function nextTemplate(req: object): string | undefined {
+  const pathname = nextMatchedPathname(req);
+  return pathname === undefined ? undefined : joinTemplate([], pathname);
+}
+
+/** Koa's template: the path the router registered the matched route with, prefix and mounts included (`koa.ts`). */
+function koaTemplate(req: object): string | undefined {
+  const matched = koaMatchedRoute(req);
+  return matched === undefined ? undefined : joinTemplate([], matched);
+}
 
 function expressTemplate(req: RouteSource): string | undefined {
   const route = req.route;
