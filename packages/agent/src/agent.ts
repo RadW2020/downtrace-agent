@@ -30,9 +30,10 @@ import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
-import { type Fingerprint, FingerprintCache } from "./fingerprint.ts";
+import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
+import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -93,6 +94,8 @@ export interface AgentDeps {
   handleSignals?: boolean | undefined;
   /** The `pg` module, so a test can hand it one that cannot be instrumented. Same seam `instrumentPg` has. */
   pgModule?: unknown;
+  /** The `mysql2` module, so a test can hand the agent the copy it loaded. Same seam, for the other driver. */
+  mysqlModule?: unknown;
   /**
    * The clock every **instant** this agent produces comes from, so a test can place one exactly.
    *
@@ -165,6 +168,7 @@ export class Agent {
   readonly instance: InstanceInfo;
   private readonly agentInfo: AgentInfo;
   private readonly pgModule: unknown;
+  private readonly mysqlModule: unknown;
   /** Every instant this agent produces. See `AgentDeps.now`: one clock, not two (gh-538). */
   private readonly now: () => number;
   private readonly log: Logger;
@@ -195,6 +199,11 @@ export class Agent {
   private readonly overhead: OverheadMeter;
   /** Only when Postgres is instrumented: without it no query text is ever looked at. */
   private readonly fingerprints: FingerprintCache | undefined;
+  /**
+   * The same for MySQL, and a cache of its own: the same text is a different query to a different server, and
+   * the cache is the dialect it reads it in (ADR 0086). Never shared with the Postgres one.
+   */
+  private readonly mysqlFingerprints: FingerprintCache | undefined;
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
   private readonly errors: ErrorFingerprintCache;
   /**
@@ -234,6 +243,8 @@ export class Agent {
    * asked for and no module was handed over, and cleared once the attach settles.
    */
   private pgAttach: (() => boolean) | undefined;
+  /** The `mysql2` observer's, the same way (ADR 0209). */
+  private mysqlAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
@@ -266,6 +277,7 @@ export class Agent {
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
     this.config = config;
     this.pgModule = deps.pgModule;
+    this.mysqlModule = deps.mysqlModule;
     this.now = deps.now ?? defaultNow;
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
@@ -317,6 +329,7 @@ export class Agent {
     // map that rotates to null. Before this, a process with `DOWNTRACE_INSTRUMENT=http` had nowhere to put a
     // reported error, and the cost of always having them is two empty maps and no work on the hot path.
     if (config.instrument.has("pg") && config.pgDepth === "full") this.fingerprints = new FingerprintCache();
+    if (config.instrument.has("mysql")) this.mysqlFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "mysql");
     this.errors = new ErrorFingerprintCache();
     this.named = config.minimal ? withheldName : undefined;
     this.calls = new CallFingerprints("call", { named: this.named });
@@ -498,6 +511,21 @@ export class Agent {
         this.pgAttach = armed.attach;
       }
     }
+    // MySQL through `mysql2`, the same way (DT-91). It has no key in `observers`: the protocol names four
+    // switches and the schema refuses a fifth, so whether it attached is said in the log and not in the batch.
+    if (on.has("mysql")) {
+      const mysqlDeps = {
+        log: this.log,
+        internalError,
+        fingerprints: this.mysqlFingerprints,
+        errors: this.errors,
+      };
+      if (this.mysqlModule !== undefined) {
+        patchMysql(this.mysqlModule, "unknown", mysqlDeps);
+      } else {
+        this.mysqlAttach = armMysql({ ...mysqlDeps, from: entry }).attach;
+      }
+    }
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
       this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors, calls: this.calls });
@@ -513,7 +541,7 @@ export class Agent {
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.
-    this.instrumented = on.has("pg") || on.has("http") || on.has("redis");
+    this.instrumented = on.has("pg") || on.has("mysql") || on.has("http") || on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
     if (on.has("runtime")) {
       this.runtime.start();
@@ -983,6 +1011,7 @@ export class Agent {
     // cache, and it is before the handler runs. One property read per request until the attach settles;
     // nothing after, because the reference goes with the settle.
     if (this.pgAttach?.()) this.pgAttach = undefined;
+    if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
     // from there would be state this repository does not keep.

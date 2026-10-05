@@ -93,6 +93,15 @@ describe("which observers to run", () => {
     expect([...parseInstruments(" PG , Redis ")].sort()).toEqual(["pg", "redis"]);
   });
 
+  it("takes MySQL as a switch of its own, beside Postgres and not under it (DT-91)", () => {
+    expect([...parseInstruments("mysql")]).toEqual(["mysql"]);
+    expect([...parseInstruments("pg,http")].sort(), "a list that does not name it does not run it").toEqual([
+      "http",
+      "pg",
+    ]);
+    expect([...parseInstruments("pg,mysql")].sort()).toEqual(["mysql", "pg"]);
+  });
+
   it("ignores names it does not know rather than failing to start", () => {
     expect([...parseInstruments("pg,cassandra")]).toEqual(["pg"]);
     expect([...parseInstruments("nonsense")]).toEqual([]);

@@ -11,6 +11,13 @@ import { meaningful, sanitizeValues } from "./sanitize.ts";
  * opens and never closes swallows the rest and emits `?`, because from there on the scanner is not reading
  * what it thought it was reading. What is emitted verbatim is only what a rule recognised.
  *
+ * It reads the SQL of the database the query is for (`Dialect`, DT-91). The scanner started as Postgres' and
+ * ADR 0086 wrote down what that assumed: a double quote is a name there and a value in MySQL, and keeping its
+ * content would have been the same failure in another database. So what a quote opens, how a comment opens and
+ * what a `$` is are data in `DIALECTS`, one table per dialect, and the scan consults it. A text is read as the
+ * dialect of the driver that ran it and never as another, and Postgres is the default only for the callers
+ * that were written before there was a second.
+ *
  * What survives is structure: keywords, table and column names, the shape of the statement. Case is left alone —
  * the hash is computed on the normalised text, so it is already insensitive to formatting, and lowercasing would
  * only make a real table name harder to read.
@@ -18,6 +25,83 @@ import { meaningful, sanitizeValues } from "./sanitize.ts";
 
 /** Longer than this and the label is truncated. Values are already gone by then, so a cut cannot expose one. */
 const MAX_TEXT = 1024;
+
+/**
+ * The SQL a query is written in. A quote opens a name in one and a value in the other, a comment opens with a
+ * different character, and the only way to read a text safely is to read it the way the server that will run it
+ * does — which is the database the driver talks to, and not something the text says about itself (DT-91).
+ */
+export type Dialect = "postgres" | "mysql";
+
+/** What a character that opens a quoted span is the start of. */
+export interface Quote {
+  /**
+   * `string` is a value: it comes out as `?`, whatever is inside. `identifier` is a name: it stays, delimiters
+   * and all, for as long as it is one — closed, and with nothing in it that looks like a value (gh-350).
+   */
+  opens: "string" | "identifier";
+  /**
+   * Whether a backslash takes the next character with it, so that `\'` does not close. Where the server reads
+   * it both ways depending on a setting the text does not carry (`standard_conforming_strings` in Postgres,
+   * `NO_BACKSLASH_ESCAPES` in MySQL), it is read as an escape: that swallows more and never less, and a span
+   * that swallowed to the end is not understood (ADR 0028).
+   */
+  backslash: boolean;
+}
+
+/**
+ * How one dialect quotes and comments. Data and not branches, so that a test can enumerate every delimiter a
+ * dialect has and ask the same of each (ADR 0086: a list written by hand was missing the case that leaked).
+ */
+export interface DialectRules {
+  /**
+   * By the character that opens them. The closer is the same character; doubling it puts one inside.
+   * A quote the table does not list is a character the scanner has no rule for.
+   */
+  quotes: Readonly<Record<string, Quote>>;
+  /** `$tag$…$tag$` is a value (Postgres). Where it is not, a `$` is a character of a name (MySQL). */
+  dollarQuoting: boolean;
+  /** A block comment may hold another (Postgres), and ends at the second closing. Where it may not, a second opening is a doubt. */
+  nestedComments: boolean;
+  /** `#` opens a comment to the end of the line (MySQL). In Postgres it is an operator. */
+  hashComments: boolean;
+  /** `--` opens a comment only before a blank, a control character or the end of the text (MySQL). */
+  dashCommentNeedsBlank: boolean;
+  /**
+   * A block comment opened with a bang, or with `M!` for MariaDB, is SQL the server runs and not a comment
+   * (MySQL). What is inside is read as code, strings and all, so a text that has one is not understood.
+   */
+  executableComments: boolean;
+}
+
+export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
+  postgres: {
+    quotes: {
+      "'": { opens: "string", backslash: true },
+      '"': { opens: "identifier", backslash: false },
+    },
+    dollarQuoting: true,
+    nestedComments: true,
+    hashComments: false,
+    dashCommentNeedsBlank: false,
+    executableComments: false,
+  },
+  mysql: {
+    // Without `ANSI_QUOTES`, which is the server's default and not something the text says, a double quote
+    // delimits a string, exactly as a single one does (ADR 0086). With it on, a double-quoted name is read as
+    // a value and goes as `?`: the label is poorer and nothing leaves.
+    quotes: {
+      "'": { opens: "string", backslash: true },
+      '"': { opens: "string", backslash: true },
+      "`": { opens: "identifier", backslash: false },
+    },
+    dollarQuoting: false,
+    nestedComments: false,
+    hashComments: true,
+    dashCommentNeedsBlank: true,
+    executableComments: true,
+  },
+};
 
 /** What a statement is, when that is all that can be said about it safely. The protocol's five and no more. */
 export type QueryClass = "select" | "insert" | "update" | "delete" | "other";
@@ -72,8 +156,9 @@ const isDollarTag = (tag: string): boolean => {
 
 /**
  * Everything else SQL is made of. A character that is not a name, a number, a delimiter or one of these is a
- * character this scanner has no rule for — a backtick (that is MySQL), a backslash (that is psql), a control
- * byte — and the honest conclusion is that the text in front of it is not the text it thinks it is reading.
+ * character this scanner has no rule for — a backtick where the dialect has no rule for one (it is MySQL's quote,
+ * and in a Postgres text it is a sign the query is not Postgres'), a backslash (that is psql), a control byte —
+ * and the honest conclusion is that the text in front of it is not the text it thinks it is reading.
  */
 const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((c) => c !== "`"));
 
@@ -90,11 +175,21 @@ const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((
  * a label (ADR 0084). A name with no values in it comes back untouched, which is the ordinary case and the
  * reason the label is worth having at all (gh-350).
  */
-function quotedName(quoted: string): string {
+function quotedName(quoted: string, delimiter: string): string {
   const inner = quoted.slice(1, -1);
   const sanitised = sanitizeValues(inner);
   if (sanitised === inner) return quoted;
-  return meaningful(sanitised) ? `"${sanitised}"` : "?";
+  return meaningful(sanitised) ? `${delimiter}${sanitised}${delimiter}` : "?";
+}
+
+/**
+ * What ends a dash comment in MySQL: `--` is a comment there only when a blank follows it, and the end of the
+ * text and a control character count as one, as they do for the server (MySQL's reference, «Comment syntax»).
+ */
+function isBlank(c: string | undefined): boolean {
+  if (c === undefined) return true;
+  const k = c.charCodeAt(0);
+  return k <= 32 || k === 127;
 }
 
 /** What one scan found: the label, and whether it believes it. */
@@ -103,11 +198,14 @@ interface Scan {
   understood: boolean;
 }
 
-export function normalizeQuery(sql: string): string {
-  return scanQuery(sql).text;
+export function normalizeQuery(sql: string, dialect: Dialect = "postgres"): string {
+  return scanQuery(sql, dialect).text;
 }
 
-function scanQuery(sql: string): Scan {
+function scanQuery(sql: string, dialect: Dialect): Scan {
+  const rules = DIALECTS[dialect];
+  /** Where Postgres has dollar quoting a `$` opens a body; where it has none, it is a letter of a name. */
+  const dollarIsName = !rules.dollarQuoting;
   const out: string[] = [];
   const n = sql.length;
   let i = 0;
@@ -126,18 +224,25 @@ function scanQuery(sql: string): Scan {
   while (i < n) {
     const c = sql[i] as string;
 
-    // A single-quoted literal. Doubled quotes and backslash escapes stay inside it; an unterminated one runs to
-    // the end of the string, which is the whole point of scanning instead of matching.
-    if (c === "'") {
+    // A quoted span: a literal, or an identifier, as the dialect says this character is the start of. Doubled
+    // delimiters (and backslash escapes, where the dialect has them) stay inside it; one that is never closed
+    // runs to the end of the string, which is the whole point of scanning instead of matching. An identifier
+    // is a name and not a value and is the label's best part, so it stays — but only while it is one. With no
+    // closing delimiter the scanner is not reading a name any more, it is reading whatever the rest of the
+    // query happens to be, literals included, and emitting it verbatim is the very thing this file exists to
+    // prevent (gh-348). Unread is unread: it becomes `?`, as an unclosed literal does, in every dialect.
+    const quote = rules.quotes[c];
+    if (quote !== undefined) {
+      const start = i;
       i++;
       let closed = false;
       while (i < n) {
-        if (sql[i] === "\\") {
+        if (quote.backslash && sql[i] === "\\") {
           i += 2;
           continue;
         }
-        if (sql[i] === "'") {
-          if (sql[i + 1] === "'") {
+        if (sql[i] === c) {
+          if (sql[i + 1] === c) {
             i += 2;
             continue;
           }
@@ -147,12 +252,16 @@ function scanQuery(sql: string): Scan {
         }
         i++;
       }
-      if (!closed) swallowed = true;
-      emit("?");
+      if (!closed) {
+        swallowed = true;
+        emit("?");
+        continue;
+      }
+      emit(quote.opens === "string" ? "?" : quotedName(sql.slice(start, i), c));
       continue;
     }
 
-    if (c === "$") {
+    if (c === "$" && rules.dollarQuoting) {
       // `$1`: a placeholder the application already wrote.
       if (isDigit(sql[i + 1] ?? "")) {
         i++;
@@ -185,7 +294,12 @@ function scanQuery(sql: string): Scan {
       continue;
     }
 
-    if (c === "-" && sql[i + 1] === "-") {
+    // A comment to the end of the line: `--` where the dialect has it, `#` where it has that. MySQL opens a
+    // dash comment only before a blank; a `--` that does not is a minus and a minus to the server and a
+    // comment to a person, and the scanner reads neither with confidence.
+    if (c === "-" && sql[i + 1] === "-" && rules.dashCommentNeedsBlank && !isBlank(sql[i + 2])) {
+      unknown = true;
+    } else if ((c === "-" && sql[i + 1] === "-") || (c === "#" && rules.hashComments)) {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? n : end + 1;
       if (previous !== "" && previous !== " ") emit(" ");
@@ -195,12 +309,20 @@ function scanQuery(sql: string): Scan {
     // Block comments **nest** in PostgreSQL: `/* a /* b */ c */` is one comment and ends at the second
     // `*/`. Stopping at the first emits the rest of the comment as if it were SQL, and a comment carries
     // whatever anybody put in it — an ORM tag with the request's context, for instance (gh-368).
+    //
+    // MySQL does not nest them, and its manual adds that under some conditions it might: a second opening
+    // inside a comment is a doubt, and a doubt is omitted. And a comment opened with a bang is not a comment
+    // there but SQL the server runs, whose strings may hold the `*/` that ends this scan: it is not read.
     if (c === "/" && sql[i + 1] === "*") {
+      if (rules.executableComments && (sql[i + 2] === "!" || (sql[i + 2] === "M" && sql[i + 3] === "!"))) {
+        unknown = true;
+      }
       let depth = 1;
       i += 2;
       while (i < n && depth > 0) {
         if (sql[i] === "/" && sql[i + 1] === "*") {
-          depth++;
+          if (rules.nestedComments) depth++;
+          else unknown = true;
           i += 2;
           continue;
         }
@@ -218,41 +340,12 @@ function scanQuery(sql: string): Scan {
       continue;
     }
 
-    // A double-quoted identifier is a name, not a value: it is what makes the label readable, so it stays —
-    // but only while it is one. With no closing quote the scanner is not reading a name any more, it is
-    // reading whatever the rest of the query happens to be, literals included, and emitting it verbatim is
-    // the very thing this file exists to prevent (gh-348). Unread is unread: it becomes `?`, as `'` does.
-    if (c === '"') {
-      const start = i;
-      i++;
-      let closed = false;
-      while (i < n) {
-        if (sql[i] === '"') {
-          if (sql[i + 1] === '"') {
-            i += 2;
-            continue;
-          }
-          i++;
-          closed = true;
-          break;
-        }
-        i++;
-      }
-      if (!closed) {
-        swallowed = true;
-        emit("?");
-        continue;
-      }
-      emit(quotedName(sql.slice(start, i)));
-      continue;
-    }
-
     // A bare name or keyword: `orders`, `SELECT`, `user_id`. Taking it whole rather than a letter at a time is
     // what lets the last rule below mean «a character I have no rule for» instead of «a letter in a name».
-    if (startsName(c)) {
+    if (startsName(c) || (dollarIsName && c === "$")) {
       const start = i;
       i++;
-      while (i < n && insideName(sql[i] as string)) i++;
+      while (i < n && (insideName(sql[i] as string) || (dollarIsName && sql[i] === "$"))) i++;
       emit(sql.slice(start, i));
       continue;
     }
@@ -312,14 +405,18 @@ export function hash64(text: string): string {
  * answer, which is what makes this safe to send when the label is not. `WITH` is `other` on purpose — it
  * usually ends in a SELECT, and «usually» is not a thing to say about a query already declared not understood.
  */
-export function classOf(sql: string): QueryClass {
+export function classOf(sql: string, dialect: Dialect = "postgres"): QueryClass {
+  const rules = DIALECTS[dialect];
   let i = 0;
   // An ORM writes its tag in a comment before the verb, so the verb is not always the first word.
   while (i < sql.length) {
     const c = sql[i] as string;
     if (c === " " || c === "\n" || c === "\t" || c === "\r") {
       i++;
-    } else if (c === "-" && sql[i + 1] === "-") {
+    } else if (
+      (c === "-" && sql[i + 1] === "-" && (!rules.dashCommentNeedsBlank || isBlank(sql[i + 2]))) ||
+      (c === "#" && rules.hashComments)
+    ) {
       const end = sql.indexOf("\n", i);
       if (end === -1) return "other";
       i = end + 1;
@@ -337,12 +434,12 @@ export function classOf(sql: string): QueryClass {
   return word === "select" || word === "insert" || word === "update" || word === "delete" ? word : "other";
 }
 
-export function fingerprintOf(sql: string): Fingerprint {
-  const { text, understood } = scanQuery(sql);
+export function fingerprintOf(sql: string, dialect: Dialect = "postgres"): Fingerprint {
+  const { text, understood } = scanQuery(sql, dialect);
   // The hash is a digest of the normalised text either way: it reveals nothing, and keeping it means a query
   // that cannot be labelled is still one operation the cloud can group, count and compare (ADR 0017).
   const hash = hash64(text);
-  return understood ? { text, hash } : { text: "", hash, class: classOf(sql) };
+  return understood ? { text, hash } : { text: "", hash, class: classOf(sql, dialect) };
 }
 
 /** How many distinct query texts one process is expected to write. Beyond this the cache stops growing. */
@@ -361,11 +458,17 @@ export const DEFAULT_CACHE_SIZE = 1000;
 export class FingerprintCache {
   private readonly entries = new Map<string, Fingerprint>();
   private readonly max: number;
+  /**
+   * The dialect every text in it is read as. A cache is for one database: the same text is two different
+   * queries to two different servers, and a cache that mixed them would hand a MySQL query a Postgres label.
+   */
+  readonly dialect: Dialect;
   /** How many texts had to be normalised. Only interesting in tests and when debugging the cost. */
   misses = 0;
 
-  constructor(max = DEFAULT_CACHE_SIZE) {
+  constructor(max = DEFAULT_CACHE_SIZE, dialect: Dialect = "postgres") {
     this.max = max;
+    this.dialect = dialect;
   }
 
   get size(): number {
@@ -376,7 +479,7 @@ export class FingerprintCache {
     const cached = this.entries.get(sql);
     if (cached) return cached;
     this.misses += 1;
-    const fingerprint = fingerprintOf(sql);
+    const fingerprint = fingerprintOf(sql, this.dialect);
     if (this.entries.size < this.max) this.entries.set(sql, fingerprint);
     return fingerprint;
   }

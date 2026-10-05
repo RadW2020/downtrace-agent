@@ -32,6 +32,8 @@
     "ajv": "^8.20.0",
     "express": "^5.2.1",
     "express4": "npm:express@^4",
+    "mysql2": "^3.24.5",
+    "mysql2-legacy": "npm:mysql2@3.11.5",
     "pg": "^8.23.0"
   },
   "license": "MIT",

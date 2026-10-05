@@ -137,6 +137,20 @@ export function currentContext(): RequestContext | undefined {
 }
 
 /**
+ * Runs `fn` in the context of a request captured earlier, and in no other change of the async context: whatever
+ * else the application keeps in its own storage is what it was where `fn` is called.
+ *
+ * For the callback a driver calls from the socket of a connection, whose async context is the one of the request
+ * that opened it. Everything the callback asks from there — the next query of a chain — would belong to that
+ * request, and the context is what makes it belong to this one (gh-89). `AsyncResource.bind` would carry all of
+ * the application's context back to the call, which is more than attribution asks and changes what the
+ * application sees in its own callback; this changes only the store this file owns.
+ */
+export function runIn<T>(ctx: RequestContext, fn: () => T): T {
+  return storage.run(ctx, fn);
+}
+
+/**
  * Records one finished call against the current request. Work outside a request is not attributed to any route:
  * a query at startup belongs to no endpoint.
  */

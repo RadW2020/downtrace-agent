@@ -15,6 +15,7 @@ import { applicationEntry } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
+import { type Armed, armDriver } from "./arm.ts";
 
 /** `pg` takes the query as a string or as a config object; anything else is not a query text we can read. */
 function queryTextOf(args: readonly unknown[]): string | undefined {
@@ -76,21 +77,6 @@ export interface InstrumentPgDeps {
 }
 
 /**
- * What `armPg` leaves behind at start-up: what the batch can already report, and the attach that runs the
- * patch from the start of a request.
- */
-export interface PgArmed {
-  /** Resolved from the application's root: «on», or «unavailable» when there is no `pg` to instrument. */
-  state: "on" | "unavailable";
-  /**
-   * Patches the driver once the application has loaded it. Called from the start of each request until it
-   * settles: `true` when the attach is done — patched, or decided there is nothing to patch — and `false`
-   * while the application has not loaded the driver yet.
-   */
-  attach: () => boolean;
-}
-
-/**
  * Wraps `pg`'s `Client.prototype.query` so every query counts towards the request that issued it.
  *
  * The module is handed over already loaded — a test gives one, or the caller resolves and requires it from
@@ -128,67 +114,26 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
 
 /**
  * The start-up half of `pg`'s instrumentation: it resolves the driver from the application's root and does
- * not load it (ADR 0209).
- *
- * Loading it here would warm the module cache before the application's own load, and a tracker that
- * instruments `pg` by hooking module loading would then never see the driver the way it would alone: with
- * this observer loaded first, its hook for `pg-pool` would never run at all (the application loads `pg` once,
- * from the cache this observer warmed); with the tracker loaded first, its hook would run a second time on
- * top of this observer's wrapper, which it does not recognise as one, and would wrap the query twice.
- * Resolving keeps the patch where it has to be — on the prototype the application actually uses, whatever
- * order the two are loaded in — without taking the load from the application.
- *
- * The patch itself runs in `attach`, from the start of the first request at which the driver is in the
- * module cache: by then the application has loaded it (a server that answers a request has finished its
- * start-up), the `require` is a cache hit that re-executes nothing, and the wrapper is in place before the
- * request's handler runs. What that moment gives up is said in ADR 0209: a query the application makes in
- * the very request that loads the driver for the first time — a lazy import in a handler — is the one this
- * observer does not count; from the next request it counts again.
+ * not load it, and patches it from the start of the first request at which the application has loaded it
+ * (ADR 0209). The mechanism is `armDriver`'s, which is shared with the other drivers; what is `pg`'s is the
+ * patch and the shape of the module it checks.
  */
-export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): PgArmed {
-  const require = createRequire(deps.from ?? applicationEntry());
-  let resolved: string;
-  try {
-    resolved = require.resolve("pg");
-  } catch {
-    deps.log.debug("pg is not resolvable from the application's root; not instrumenting");
-    return { state: "unavailable", attach: () => true };
-  }
-  // The version of the log, read at start-up where the old start-up require read it, and not in a request.
-  let version = "unknown";
-  try {
-    const pkg = require("pg/package.json") as { version?: unknown };
-    if (typeof pkg.version === "string") version = pkg.version;
-  } catch {
-    deps.log.debug("pg resolved but its version could not be read; it stays unknown");
-  }
-  let settled = false;
-  const attach = (): boolean => {
-    if (settled) return true;
-    try {
-      // Until the application loads the driver there is nothing to patch, and nothing is lost by waiting:
-      // a query cannot run before the driver is loaded, and a query outside a request is not counted
-      // (`context.ts`). The check is one property read on the module cache, once per request until then.
-      if (require.cache[resolved] === undefined) return false;
-      settled = true;
-      const pg = require("pg") as PgModule;
+export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): Armed {
+  return armDriver<PgModule>({
+    driver: "pg",
+    from: deps.from ?? applicationEntry(),
+    log: deps.log,
+    internalError: deps.internalError,
+    patch: (pg, version) => {
       const proto = pg.Client?.prototype;
       if (!proto || typeof proto.query !== "function") {
         deps.log.debug("pg found but Client.prototype.query is not a function; not instrumenting");
-        return true;
+        return;
       }
-      if (proto[MARK] === true) return true;
+      if (proto[MARK] === true) return;
       patchClientAndPool(pg, version, deps);
-      return true;
-    } catch (err) {
-      // A failure of the attach is a failure of the instrumentation's own: counted like any other
-      // (invariant 2, ADR 0161), and never handed to the request that asked for it.
-      settled = true;
-      deps.internalError(err);
-      return true;
-    }
-  };
-  return { state: "on", attach };
+    },
+  });
 }
 
 /**

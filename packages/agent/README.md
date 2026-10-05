@@ -4,12 +4,13 @@
 
 **A flight recorder for your Node.js backend.** Downtrace watches how your application normally behaves and, when something gets slower or breaks, tells you what changed. This is the **instrumentation**: it observes your application from the inside, aggregates locally per route and 10-second interval, and ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
 
-It observes four things, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
+It observes five things, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
 
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection |
+| `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
 | `redis` | Redis commands per request, by server |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
 
@@ -39,7 +40,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — the floor and the ceiling are derived, see below). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
-| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,http,redis,runtime` |
+| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,http,redis,runtime` |
 | `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch for weighing the fine detail and the profile on their own (ADR 0080, gh-570); leave it alone in production |
 | `DOWNTRACE_PG_DEPTH` | no | `full` (default), `context` or `wrapper`: how much of the Postgres observer's attribution runs — `context` attributes the calls and the waits without looking at the query text, `wrapper` only leaves the patch in place. The benchmark's switch for weighing the observer part by part (gh-592); leave it alone in production |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
@@ -425,6 +426,50 @@ the request, which does not mean the database was idle. Checked against n8n with
 Postgres: each request carried the queries the log shows for it, and the ones n8n answered without its database
 carried none.
 
+### MySQL
+
+When your application uses `mysql2`, the instrumentation does the same for MySQL, as a dependency of its own
+(`mysql`): the queries each request makes, how long they took, how many failed, and how long the request waited
+for a connection from a `mysql2` pool, apart from the query that followed it. TypeORM, Sequelize and knex — which
+is what Strapi uses — reach MySQL through `mysql2`, so they are observed through it; nothing is asked of them.
+The target is the host and the port of the server (the socket path, for a socket), never the user, the password
+or the database. Prepared statements (`execute`) count like queries.
+
+**The query text is read as MySQL's, not as Postgres'.** In MySQL, without `ANSI_QUOTES`, a double quote opens a
+*string*, where in Postgres it opens a name: `WHERE name = "ana"` has a value in it, and it is replaced like any
+other (`WHERE name = ?`). A backtick opens a name, which stays: `` SELECT `name` FROM `users` `` travels as it is.
+The rest of MySQL's lexical rules are the server's: a backslash escapes in a string, `#` and `-- ` open a comment,
+`/* */` does not nest, and a `$` is a letter of a name. What the scanner cannot read with confidence is omitted
+and not guessed: a `--` not followed by a blank, a comment opened with `/*!` (the server runs what is inside), a
+block comment that opens another, a delimiter that never closes. Such a query travels as its hash and its class
+(`select`, `insert`, …) and no text. A server in `ANSI_QUOTES` mode gets a poorer label — its double-quoted names
+read as values — and nothing leaves.
+
+What the instrumentation does with the driver, and what it gives up:
+
+- **A query belongs to the request whose code ran it.** `mysql2` finishes a query on the connection's socket, in
+  the async context of whichever request opened that connection, and its callback API is built on callbacks: the
+  second query of a chain is asked from inside the first one's. So the context is taken when the application
+  asks, the result is written into it, and the application's callback runs with it. That changes the one thing
+  this instrumentation keeps in async storage and nothing of the application's own.
+- **It wraps the methods that define `query`, `execute` and the pool's `getConnection`** — on the class `mysql2`
+  defines them on, so a pool's connections are covered whichever way the version lays its classes out (up to 3.18 a
+  pooled connection is not a `Connection`). Run against a MySQL 8.4 server, with every way of asking for a query, on
+  2.3.3, 3.0.0, 3.2.0, 3.6.5, 3.9.8, 3.10.3, 3.11.5, 3.14.5, 3.19.1, 3.20.0 and 3.24.5. Arguments, results and
+  errors pass through untouched, and if the wrapper itself fails the query still runs. It never asks a query for a
+  result: `mysql2`'s commands throw when they are awaited.
+- **The wait is the wait of `mysql2`'s own pool.** knex and Sequelize keep a pool of their own over plain
+  connections, and a request that queues in it is not seen waiting. The wait of a MySQL pool travels with the
+  dependency's aggregate, which is what a pool-saturation finding reads; it is **not** part of the wait that goes
+  with a capture's requests, which is Postgres' (a finding over a MySQL pool gets no estimate of its impact, and
+  says so).
+- **A query run with listeners or as a stream** (`connection.query(sql).on("result", …)`) has no callback to
+  settle: it is counted when it is issued, with no time and no failure, as a `pg` cursor is. Prepared statements
+  made with `connection.prepare()` and run through the statement are not observed.
+- **Beside an error tracker** this was not verified for `mysql2`, as it was for `pg` and `ioredis`
+  ([below](#beside-your-error-tracker)): the mechanism is the same — it resolves the driver and loads nothing — but
+  nobody has run the pair.
+
 ### Calls to other services
 
 Outgoing HTTP is reported the same way, grouped by the host your application asked for: how many calls per request,
@@ -454,8 +499,7 @@ carry, so its commands travel with their hash alone; a command the channel does 
 operation.
 
 Every dependency carries a **target** saying which instance of its kind it is, taken from the driver: the host for
-outgoing HTTP, host and port for Postgres and Redis. A read replica and a primary are two dependencies, not one.
-MySQL will appear the same way when it is added.
+outgoing HTTP, host and port for Postgres, MySQL and Redis. A read replica and a primary are two dependencies, not one.
 
 The first 60 distinct destinations a route talks to in an interval keep their target; past that, the rest fold into
 one row of their own kind with target `(other)`. The folded destinations' calls, time and errors are in that row —
@@ -471,7 +515,8 @@ anyway. `DOWNTRACE_INSTRUMENT=none` turns it off.
 
 The instrumentation also builds a **profile**: not only that a route made 4 queries, but which ones — and which
 outgoing calls and Redis commands it made, as above.
-Each query text is reduced to its shape — `SELECT id FROM products WHERE id = ?` — and hashed. The hash is the
+Each query text is reduced to its shape — `SELECT id FROM products WHERE id = ?` — and hashed, read as the SQL of the
+database it was sent to. The hash is the
 identity the cloud groups and compares by; the text is only the label you read. That is what lets Downtrace say
 *«this route went from 2 executions of this query to 53»* instead of *«this route makes more queries now»*.
 
@@ -575,8 +620,9 @@ you would give an application log.
 ## Guarantees
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
-  request the instrumentation does wrap one method, `pg`'s `Client.prototype.query`: it passes arguments, results and errors
-  through untouched, and if the wrapper itself fails your query still runs. `DOWNTRACE_INSTRUMENT=none` disables it.
+  request the instrumentation does wrap one method, `pg`'s `Client.prototype.query` (and, for MySQL, `mysql2`'s `query` and
+  `execute`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
+  runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - For Express route templates the instrumentation wraps two more methods. The first — `Router.prototype.use`, or the
   `Router` function's own `use` in Express 4, where it is the routers' prototype — keeps the pattern of
   each mount, because Express discards it as soon as it compiles it: without the pattern, a mount with a
@@ -601,14 +647,17 @@ you would give an application log.
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+`pg`, `mysql2` and Express are resolved from your application's entry where Node runs it, so they are the ones your
 application loads. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
 itself, which differs only for a `main` that is a symlink out of it or that has a `node_modules` of its own
 between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
-batch's observers, which `DOWNTRACE_INSPECT` shows you.
+batch's observers, which `DOWNTRACE_INSPECT` shows you. A `mysql2` that cannot be resolved is not observed, and the
+batch does not say so yet: the protocol's `observers` names four switches and has no key for it, so without a
+MySQL dependency on a route you cannot tell «the application does not use it» from «it could not be found».
+`DOWNTRACE_DEBUG=1` says it at start-up.
 
 Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every
