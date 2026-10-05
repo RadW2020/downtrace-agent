@@ -9,7 +9,7 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
-| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma) |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
 | `redis` | Redis commands per request, by server |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
@@ -470,6 +470,64 @@ What the instrumentation does with the driver, and what it gives up:
   ([below](#beside-your-error-tracker)): the mechanism is the same — it resolves the driver and loads nothing — but
   nobody has run the pair.
 
+### Prisma
+
+Prisma is observed when it reaches Postgres through `pg`, and only then. What decides it is not the version of the ORM
+but the engine that runs its queries, so it was measured, version by version, with this instrumentation loaded through
+`--import` and a real Postgres 17 behind it (Prisma 5.22.0, 6.7.0, 6.16.0, 6.19.3 and 7.10.0):
+
+| Your Prisma | Its queries go | Observed |
+|---|---|---|
+| 7.x, with `@prisma/adapter-pg` | through `pg`: 7 has no engine of its own and requires an adapter | **Yes** |
+| 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with `@prisma/adapter-pg` | through `pg`, as 7 does | **Yes** |
+| 5.x, and 6.x on its default engine, with `@prisma/adapter-pg` | from Prisma's query engine, which calls the adapter, and so `pg`, from a thread of its own | **No** |
+| 5.x, and 6.x on its default engine, with no adapter: what Prisma 5 does unless told otherwise | from the query engine, which speaks to Postgres itself and never touches `pg` | **No** |
+| Any version with another adapter (Neon, MariaDB, …) | through that adapter's own driver | **No**: it was not looked at |
+
+When it is observed, nothing is asked of you: a Prisma query is a query of the route that ran it, with its time and its
+errors, and its fingerprint in the route's profile, like any `pg` query. The queries of `prisma.$transaction` carry the
+`BEGIN` and the `COMMIT` that Prisma sends, because they are queries. Prisma sends its values as parameters, so what a
+`findMany({ where: { name } })` is called is `… WHERE "public"."User"."name" = ? OFFSET ?`; SQL that you write yourself with
+a value in it (`$queryRawUnsafe`) is normalised like any other, and the value does not leave. Prisma merges calls to
+`findUnique` of the same shape made in the same tick into one query (`WHERE "id" IN (…)`), and that query is counted
+once, for the request whose call came first: measured on 7.10.0, four requests that asked for the same row in one tick
+made one query.
+
+To be observed, then: Prisma 7, or on 6.16 or later `engineType = "client"` in the generator block of the schema, and
+the adapter. No tracing and no OpenTelemetry are involved:
+
+```ts
+import { PrismaPg } from "@prisma/adapter-pg";
+
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+```
+
+How to tell which row you are in: with `DOWNTRACE_INSPECT`, a route whose Prisma queries are seen has a `postgres`
+dependency. A route that queries through Prisma and has none is in one of the **No** rows, and is not a route that makes no
+queries.
+
+**Why the engine's queries are not seen.** With an adapter, the engine calls it from a thread of its own, so the query
+reaches `pg` carrying none of the request's async context: `pg` sees every query, outside any request, and a query
+outside a request counts for no route. The instrumentation counts a query for the request whose code ran it and never
+guesses which one that was. The versions that run their queries in JavaScript run them in the context of the call that
+asked: with four concurrent requests, every query came to the request that made it. Without an adapter, there is nothing to
+see through `pg` at all.
+
+**What could be seen, and is not asked for.** Prisma's engine can report each query as a trace span, and what it looks for
+in order to do it is an object on `globalThis`, so it can be read without loading OpenTelemetry into your application. The
+instrumentation does not switch it on, because the engine only produces those spans when asked to, and asking has a price
+that was measured against the same Postgres on the same machine: a query went from 0.38 ms to 0.46 ms, about a fifth more,
+and the process used about 15 points more CPU while queries ran back to back; and Prisma appends a comment with the trace's
+identity to every statement it sends. A request that runs twelve queries would spend on that the millisecond that is the
+whole budget (see Guarantees). On 5.x it also needs `previewFeatures = ["tracing"]` in your schema. It is a decision
+this README does not take for you.
+
+**The `pg` the adapter uses.** From 6.11, `@prisma/adapter-pg` has `pg` as a dependency of its own and not as a peer (in 5.x and up to 6.10 it was one), and the
+copy it queries through is not always yours: with pnpm, an application that lists the adapter and not `pg` has none at its
+root, and with npm a `pg` of yours that the adapter's version range does not take is a second copy beside it. So the
+instrumentation also resolves the `pg` that `@prisma/adapter-pg` resolves, without loading it, and patches it when the
+application has: a query is counted by the copy it went through, once.
+
 ### Calls to other services
 
 Outgoing HTTP is reported the same way, grouped by the host your application asked for: how many calls per request,
@@ -654,7 +712,7 @@ you would give an application log.
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
 `pg`, `mysql2` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`

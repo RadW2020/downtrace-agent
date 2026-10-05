@@ -116,12 +116,18 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
  * The start-up half of `pg`'s instrumentation: it resolves the driver from the application's root and does
  * not load it, and patches it from the start of the first request at which the application has loaded it
  * (ADR 0209). The mechanism is `armDriver`'s, which is shared with the other drivers; what is `pg`'s is the
- * patch and the shape of the module it checks.
+ * patch and the shape of the module it checks, and that the `pg` Prisma's adapter brings is one more to patch.
  */
 export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): Armed {
   return armDriver<PgModule>({
     driver: "pg",
     from: deps.from ?? applicationEntry(),
+    // Prisma 7 queries through `@prisma/adapter-pg`, and from 6.11 that adapter has `pg` as a dependency of its own and
+    // not as a peer, so the copy its queries go through is not always the application's: with pnpm the application has
+    // none at its root, and with npm a `pg` of the application's that the adapter's range does not take is a second
+    // module beside the adapter's. Measured with 7.10.0, and what a query through it is counted by is the patch on
+    // the copy that ran it (DT-92).
+    beside: ["@prisma/adapter-pg"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (pg, version) => {
