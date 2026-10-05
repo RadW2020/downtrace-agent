@@ -436,7 +436,7 @@ describe("what goes wrong, said (COB-01)", () => {
       "NODE_OPTIONS",
       "node",
       "app.mjs",
-      "--test-force-exit",
+      "--pool=threads",
     ]);
     expect(checked.code).toBe(2);
     expect(checked.report.failure).toMatchObject({
@@ -444,8 +444,8 @@ describe("what goes wrong, said (COB-01)", () => {
       side: "base",
       message: "the run left no profile",
     });
-    expect(checked.report.failure?.advice).toContain("This happens with node --test --test-force-exit");
-    expect(checked.report.failure?.advice).toContain("drop --test-force-exit");
+    expect(checked.report.failure?.advice).toContain("This happens with Vitest with the threads or vmThreads pool");
+    expect(checked.report.failure?.advice).toContain("use --pool=forks");
     expect(checked.report.summary).toBeNull();
     const text = (
       await downtrace(["check", "--base", "HEAD", "--", "env", "-u", "NODE_OPTIONS", "node", "app.mjs"], {
@@ -456,15 +456,16 @@ describe("what goes wrong, said (COB-01)", () => {
     expect(text).not.toMatch(/unchanged/i);
   });
 
-  it("a run that ends the process without waiting is compared with a profile or said to have none, never unchanged on nothing", async () => {
+  // What this test used to allow: a run that ends with `process.exit()` was said to have no profile, or compared on
+  // part of one. The instrumentation writes what it holds when the process exits when it only writes a file, which
+  // is what a run of `check` is, so the profile is there and the comparison is made (DT-79, ADR 0230).
+  it("a run that ends the process without waiting keeps its profile and is compared", async () => {
     const made = await project({ ...appFiles({}), "app.mjs": `${appFiles({})["app.mjs"] ?? ""}\nprocess.exit(0);\n` });
     const checked = await check(made, ["--base", "HEAD"]);
-    if (checked.report.status === "failed") {
-      expect(checked.report.failure?.code).toMatch(/^(no-profile|nothing-evaluated)$/);
-      return;
-    }
-    // A run that kept its profile is compared; one that kept part of it says which part is missing.
-    for (const one of checked.report.routes.filter((r) => r.verdict !== "not-evaluated")) {
+    expect(checked.report.status, JSON.stringify(checked.report.failure)).toBe("compared");
+    const evaluated = checked.report.routes.filter((r) => r.verdict !== "not-evaluated");
+    expect(evaluated.length, "a route was evaluated").toBeGreaterThan(0);
+    for (const one of evaluated) {
       expect(one.profiledRequests.base, one.id).toBeGreaterThan(0);
       expect(one.profiledRequests.change, one.id).toBeGreaterThan(0);
     }

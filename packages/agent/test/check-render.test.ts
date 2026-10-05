@@ -173,7 +173,8 @@ describe("a comparison that could not be made", () => {
       code: "no-profile",
       side: "base",
       message: "the run left no profile",
-      advice: "This happens with Jest --forceExit: drop --forceExit.",
+      advice:
+        "This happens with Vitest with the threads or vmThreads pool: use --pool=forks, which is Vitest's default.",
       outputTail: "line one\nline two",
     },
     base: side("main", { requests: 0, routes: 0 }),
@@ -183,7 +184,9 @@ describe("a comparison that could not be made", () => {
     const text = renderText(report);
     expect(text).toContain("no comparison could be made");
     expect(text).toContain("base: the run left no profile");
-    expect(text).toContain("This happens with Jest --forceExit: drop --forceExit.");
+    expect(text).toContain(
+      "This happens with Vitest with the threads or vmThreads pool: use --pool=forks, which is Vitest's default.",
+    );
     expect(text).toContain("Last output of the base run:");
     expect(text).toContain("  line two");
   });

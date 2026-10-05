@@ -438,22 +438,47 @@ export class Sender {
       this.captureReports.length > 0 ||
       this.exceptions.length > 0 ||
       this.triggers.length > 0 ||
-      // The ending, while no batch that carries it has landed: a leaving process says how it is leaving in its
-      // last batch, even a last interval with nothing else in it (gh-617, ADR 0148).
-      (this.ending !== undefined && !this.endingLanded)
+      this.endingPending
     );
   }
 
-  async flush(deadline: Deadline = this.timeoutMs): Promise<boolean> {
-    // Something to say is an interval, a profile **or** a capture report. Asking only about the interval
-    // queue meant a profile with no interval to ride on never left — at shutdown, always (gh-375) — and the
-    // same trap caught the capture reports the moment they existed: a capture watching a route with no
-    // traffic would have gone unreported for as long as the quiet lasted (gh-379).
-    if (this.inflight || !this.hasSomethingToSay()) return false;
-    // The cloud asked for time. Aggregating carries on and the queue keeps dropping its oldest past six: not
-    // being able to send is no reason to stop measuring what will be sendable later (gh-205).
-    if (this.now() < this.silentUntil) return false;
-    this.inflight = true;
+  /**
+   * The ending, while no batch that carries it has landed: a leaving process says how it is leaving in its last
+   * batch, even a last interval with nothing else in it (gh-617, ADR 0148).
+   */
+  private get endingPending(): boolean {
+    return this.ending !== undefined && !this.endingLanded;
+  }
+
+  /** Whether nothing can be sent anywhere: a destination to write to, and no cloud behind it (gh-181). */
+  private get local(): boolean {
+    return this.opts.url === "" || this.opts.token === "";
+  }
+
+  /**
+   * Whether this sender only writes: the inspection mode with no cloud, where the file is the whole destination.
+   * The one case in which a blocking write on the way out is allowed (DT-79, ADR 0230). With a cloud behind it
+   * the file records what was sent, and a batch that went nowhere would make it say what never left.
+   */
+  get writesOnly(): boolean {
+    return this.opts.inspector !== undefined && this.local;
+  }
+
+  /**
+   * The next batch, as it would be sent, and what went into it, for the landing to take off and nothing else.
+   *
+   * One place for the two ways a batch is written, the regular one and the one on the way out, so that what the
+   * file shows is the same thing in both and the second cannot drift from the first (DT-79).
+   */
+  private assemble(): {
+    body: string;
+    intervals: Interval[];
+    profile: Profile | undefined;
+    exceptions: PendingException[];
+    triggers: LocalTrigger[];
+    resources: AgentResources | undefined;
+    reported: string[];
+  } {
     const intervals = this.queue.slice(0, this.maxQueued);
     const profile = this.profiles[0];
     // Copies, as they are now: what reaches the sender while this batch is in flight changes the entries, and what
@@ -480,12 +505,52 @@ export class Sender {
       ...(this.ending !== undefined ? { ending: this.ending } : {}),
     };
     const reported = this.captureReports.map((c) => c.id);
-    const body = JSON.stringify(batch);
+    return { body: JSON.stringify(batch), intervals, profile, exceptions, triggers, resources, reported };
+  }
+
+  /**
+   * Writes what is queued **now, and blocking**, to the file or stream the operator named, saying the process
+   * left by `ending`. Only for `process.on("exit")`, and only when `writesOnly`: the one moment after which
+   * nothing asynchronous runs again, and the way a process that called `process.exit()` without waiting keeps
+   * what it was holding (DT-79, ADR 0230).
+   *
+   * It writes when there is an interval or a profile to keep, or an ending that no batch has said yet, and not
+   * for the rest a batch can carry: an exception or a local ask written for itself would be a batch that says
+   * nothing new, and a process that observed nothing has nothing to keep. An ending declared before this one
+   * stays — the first wins, as it does everywhere (ADR 0148).
+   *
+   * A write that is in flight does not stop it. The one thing known about that one is that it may not finish,
+   * and the batch it carries is still queued, so it is written again here: if the first lands as well, the file
+   * has the same interval twice, and if it does not, the interval is not lost. A repeat is the lesser loss.
+   */
+  dumpOnExit(ending: Ending): void {
+    const inspector = this.opts.inspector;
+    if (inspector === undefined || !this.local) return;
+    if (this.queue.length === 0 && this.profiles.length === 0 && !this.endingPending) return;
+    this.declareEnding(ending);
+    const { body, intervals, profile } = this.assemble();
+    inspector.writeOnExit(body);
+    this.queue = this.queue.filter((iv) => !intervals.includes(iv));
+    if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
+    this.endingLanded = true;
+  }
+
+  async flush(deadline: Deadline = this.timeoutMs): Promise<boolean> {
+    // Something to say is an interval, a profile **or** a capture report. Asking only about the interval
+    // queue meant a profile with no interval to ride on never left — at shutdown, always (gh-375) — and the
+    // same trap caught the capture reports the moment they existed: a capture watching a route with no
+    // traffic would have gone unreported for as long as the quiet lasted (gh-379).
+    if (this.inflight || !this.hasSomethingToSay()) return false;
+    // The cloud asked for time. Aggregating carries on and the queue keeps dropping its oldest past six: not
+    // being able to send is no reason to stop measuring what will be sendable later (gh-205).
+    if (this.now() < this.silentUntil) return false;
+    this.inflight = true;
+    const { body, intervals, profile, exceptions, triggers, resources, reported } = this.assemble();
     // Written before sending, and written the same whether the send succeeds or not: what the inspection mode
     // shows is what this instrumentation produced, which is the question it exists to answer (gh-181).
     await this.opts.inspector?.write(body);
     // No cloud configured: inspecting is the whole job, and there is nothing to fail at.
-    if (this.opts.url === "" || this.opts.token === "") {
+    if (this.local) {
       this.queue = this.queue.filter((iv) => !intervals.includes(iv));
       if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
       if (this.ending !== undefined) this.endingLanded = true;

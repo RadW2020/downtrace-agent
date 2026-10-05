@@ -8,10 +8,6 @@ import { adviceForNoProfile, LOSING_RUNNERS } from "../src/check/hints.ts";
 
 /** A command line that has each runner's setting in it, written the way a person writes one. */
 const COMMANDS: Record<string, string> = {
-  "node --test --test-force-exit": "node --test --test-force-exit test/",
-  "Jest --forceExit": "npx jest --forceExit --runInBand",
-  "Mocha --exit": "mocha --exit 'test/**/*.js'",
-  "Mocha --parallel": "mocha --parallel test",
   "Vitest with the threads or vmThreads pool": "vitest run --pool=threads",
 };
 
@@ -35,7 +31,14 @@ describe("what is said of a run that left no profile", () => {
     },
   );
 
+  // Until DT-79 these four lost the profile, and this list named them. With no cloud the instrumentation writes
+  // what it holds when the process exits, so a run that ends with an explicit exit keeps it, and blaming one of
+  // them would send a person to drop a flag that does nothing to the result (ADR 0230).
   it.each([
+    "node --test --test-force-exit test/",
+    "npx jest --forceExit --runInBand",
+    "mocha --exit 'test/**/*.js'",
+    "mocha --parallel test",
     "vitest run",
     "vitest run --pool=forks",
     "jest --forceExitNever",
@@ -48,15 +51,7 @@ describe("what is said of a run that left no profile", () => {
 
   it("lists every runner when it cannot tell which one: the generic sentence is the table", () => {
     const generic = adviceForNoProfile("npm test");
-    for (const flag of ["--test-force-exit", "--forceExit", "--exit", "--parallel", "threads"]) {
-      expect(generic).toContain(flag);
-    }
+    expect(generic).toContain("Vitest with the threads or vmThreads pool");
     expect(generic).toContain("--pool=forks");
-  });
-
-  it("names two when the command has two", () => {
-    const advice = adviceForNoProfile("mocha --exit --parallel");
-    expect(advice).toContain("Mocha --exit");
-    expect(advice).toContain("Mocha --parallel");
   });
 });

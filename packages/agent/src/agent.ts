@@ -231,13 +231,22 @@ export class Agent {
    * trace becomes exit 0 with nothing. That is what invariant 2 forbids (gh-386).
    */
   private readonly onThrown = (err: unknown, origin: string): void =>
-    this.guard(() =>
+    this.guard(() => {
       this.exceptions.record(origin === "unhandledRejection" ? UNHANDLED_REJECTION : UNCAUGHT, err, {
         // In minimal mode the signature keeps its identity and loses its words: the hash is a digest and
         // says nothing, and the text is the user's (ADR 0105).
         sign: this.signature(),
-      }),
-    );
+      });
+      // Nobody is listening for it, so this is the exception that kills the process. Said here, where Node calls
+      // the monitor before any handler, because the way out cannot tell it from `process.exit(1)` afterwards.
+      if (process.listenerCount("uncaughtException") === 0) this.dying = true;
+    });
+  /**
+   * Whether an exception nobody handles is on its way to ending the process. The one way of ending that keeps
+   * nothing on the way out, in every mode: ERR-04 says the exception that kills the process is lost, and the
+   * interval in hand with it (DT-79, ADR 0230).
+   */
+  private dying = false;
   /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
   private readonly excludedEndpoints: Excluded;
   private readonly excludedDependencies: Excluded;
@@ -283,6 +292,22 @@ export class Agent {
   private readonly onBeforeExit = (): void => {
     // The loop is emptying and the process is leaving with it: the last batch says `idle` (gh-617, ADR 0148).
     void this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending: "idle" } });
+  };
+  /**
+   * A process that called `process.exit()` without waiting for anything is leaving now, and `exit` is the last
+   * thing that runs: no promise, no timer, no `beforeExit`. When the instrumentation only writes — the
+   * inspection mode with no cloud — it writes what it holds here, blocking, and says the process left by
+   * `exit`. With a cloud behind it nothing is written here and nothing is sent: the loss stays what the README
+   * says it is (DT-79, ADR 0230).
+   */
+  private readonly onExit = (): void => {
+    if (this.dying) return;
+    try {
+      this.enqueueHeld({ leaving: true });
+      this.sender.dumpOnExit("exit");
+    } catch (err) {
+      this.internalError(err);
+    }
   };
 
   constructor(config: AgentConfig, deps: AgentDeps = {}) {
@@ -593,6 +618,7 @@ export class Agent {
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
     this.timer.unref();
     process.once("beforeExit", this.onBeforeExit);
+    if (this.sender.writesOnly) process.once("exit", this.onExit);
     if (this.handleSignals) for (const s of SIGNALS) process.on(s, this.onSignal[s]);
     this.log.debug(
       `started: ${this.config.url} · ${this.config.environment} · ${this.config.version} · every ${this.config.intervalMs} ms`,
@@ -639,6 +665,9 @@ export class Agent {
     this.stopping = stopping;
     const forget = (): void => {
       this.stopping = undefined;
+      // Not before: an application that calls `shutdown()` and exits without awaiting it leaves while this drain
+      // is still in flight, and the way out is what writes what the drain had queued (DT-79).
+      process.removeListener("exit", this.onExit);
     };
     stopping.then(forget, forget);
     return stopping;
@@ -704,33 +733,7 @@ export class Agent {
       // takes off only what it carried (gh-626). The flushes under way are not cut when the deadline passes; each
       // keeps its own timeout.
       if (deadline) await settledWithin(params.underWay, deadline);
-      // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
-      const profile = leaving ? this.profile.drain() : this.profile.rotate();
-      if (profile) this.sender.enqueueProfile(profile);
-      // What the cloud asked for and this process really started, said once (ADR 0098).
-      this.sender.enqueueCaptures(this.captures.toReport());
-      // What died outside a request. Taken rather than copied: a batch that lands has said them, and one
-      // that does not gets them back (ADR 0103). The occurrences the register's own cap did not admit ride
-      // with the ones it did admit, so the loss is said by the same batch that says the rest (gh-659).
-      this.sender.enqueueExceptions({ exceptions: this.exceptions.take(), dropped: this.exceptions.takeDropped() });
-      this.declareWithholding();
-      const interval = this.recorder.rotate();
-      if (interval) {
-        // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
-        const runtime = this.runtime.rotate();
-        this.sender.enqueue(runtime ? { ...interval, runtime } : interval);
-        // The same reading the batch carries, read once more by the side that can act on it. A process
-        // whose event loop is running late knows it long before any aggregate crosses the network, and by
-        // the time the cloud could notice, the detail that would explain it is overwritten (gh-409).
-        const ask = this.triggers.interval(runtime, this.now());
-        if (ask) this.sender.enqueueTriggers([ask]);
-        // And the routes whose requests keep queueing for a connection get armed, which asks the cloud for
-        // nothing: it only keeps their detail out of reach of everyone else's traffic until the arm expires
-        // (ADR 0122). Read from the interval that was just built, so it costs nothing per request.
-        for (const label of this.triggers.endpoints(interval, this.now())) {
-          this.prearm.arm(label, this.now(), ARM_FOR_MS);
-        }
-      }
+      this.enqueueHeld({ leaving });
       const sent = await this.sender.flush(deadline ?? params.timeoutMs);
       // Said, because it is the last thing this process will say about it: nothing is queued in a process that
       // is leaving, and there is no next batch to count the loss in (gh-650).
@@ -746,6 +749,43 @@ export class Agent {
     } catch (err) {
       this.internalError(err);
       return false;
+    }
+  }
+
+  /**
+   * Takes what the registers hold and queues it for the sender: the profile, what the captures report, what died
+   * outside a request, the interval and what the process's own signals ask.
+   *
+   * Synchronous, and the same for the regular flush and for the one on the way out of a process that did not wait
+   * for any (`onExit`), so that what a file shows does not depend on which of them wrote it (DT-79).
+   */
+  private enqueueHeld(options: { leaving: boolean }): void {
+    // A profile covers a whole minute, so it rotates on its own cadence and rides whichever flush comes next.
+    const profile = options.leaving ? this.profile.drain() : this.profile.rotate();
+    if (profile) this.sender.enqueueProfile(profile);
+    // What the cloud asked for and this process really started, said once (ADR 0098).
+    this.sender.enqueueCaptures(this.captures.toReport());
+    // What died outside a request. Taken rather than copied: a batch that lands has said them, and one
+    // that does not gets them back (ADR 0103). The occurrences the register's own cap did not admit ride
+    // with the ones it did admit, so the loss is said by the same batch that says the rest (gh-659).
+    this.sender.enqueueExceptions({ exceptions: this.exceptions.take(), dropped: this.exceptions.takeDropped() });
+    this.declareWithholding();
+    const interval = this.recorder.rotate();
+    if (interval) {
+      // Only alongside traffic: an interval with no requests has nothing to correlate the process with.
+      const runtime = this.runtime.rotate();
+      this.sender.enqueue(runtime ? { ...interval, runtime } : interval);
+      // The same reading the batch carries, read once more by the side that can act on it. A process
+      // whose event loop is running late knows it long before any aggregate crosses the network, and by
+      // the time the cloud could notice, the detail that would explain it is overwritten (gh-409).
+      const ask = this.triggers.interval(runtime, this.now());
+      if (ask) this.sender.enqueueTriggers([ask]);
+      // And the routes whose requests keep queueing for a connection get armed, which asks the cloud for
+      // nothing: it only keeps their detail out of reach of everyone else's traffic until the arm expires
+      // (ADR 0122). Read from the interval that was just built, so it costs nothing per request.
+      for (const label of this.triggers.endpoints(interval, this.now())) {
+        this.prearm.arm(label, this.now(), ARM_FOR_MS);
+      }
     }
   }
 

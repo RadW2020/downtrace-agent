@@ -66,10 +66,20 @@ const WAIT = /\bAtomics\.wait\b/;
  *   gave, beside it and for the same reason: at start-up, before the application registers anything, once per
  *   process, from `Agent.start()`, never in a request (invariant 1), and a fixed cost that does not grow with
  *   anything (invariant 3).
+ * - `appendFileSync` and `writeSync`, in `inspect.ts` (DT-79, ADR 0230). A process that calls `process.exit()`
+ *   without waiting runs nothing asynchronous after the call: the last thing that runs is the `exit` event, and a
+ *   promise started there never settles. In the inspection mode with no cloud behind it, where the file is the
+ *   whole destination, the instrumentation writes what it holds there, once, and says the process left by
+ *   `exit`. That is how a short test run that ends with an explicit exit keeps its profile. It is the way out
+ *   and never a request: `Inspector.writeOnExit` has no other caller, the sender refuses to call it with a cloud
+ *   configured, and an exception that is killing the process writes nothing. Invariant 1 is about the path of a
+ *   request, and no request is served after `exit`.
  */
 const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [
   { file: "entry.ts", name: "realpathSync" },
   { file: "entry.ts", name: "statSync" },
+  { file: "inspect.ts", name: "appendFileSync" },
+  { file: "inspect.ts", name: "writeSync" },
 ];
 
 /** Every name of the convention on a line, where `SYNC` stops at the first. */

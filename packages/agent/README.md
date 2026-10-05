@@ -260,7 +260,9 @@ That is decided, not pending: the instrumentation does not write the exception t
 next start. A container's disk is usually ephemeral and the next start may be another instance, so a spool
 would only help a machine with a persistent disk; and writing on the way down is synchronous I/O, with a
 bound of its own to keep, at the one moment the instrumentation must not change how your process ends. What
-it does instead is say the loss, and the cloud shows it per process (below).
+it does instead is say the loss, and the cloud shows it per process (below). The one write on the way down
+that does exist is for someone who is only inspecting: it goes to a file they named, and it never carries this
+exception (below).
 
 ### What each way of ending keeps, and what it loses
 
@@ -275,6 +277,7 @@ and the one claim no test can reach says so in those words.
 | The event loop empties: nothing is left to do | the same, by the same path: the interval in hand (`endings.test.ts`) | nothing it was holding |
 | `process.exit()`, after `await shutdown()` | the same, by the same path: the last batch (`shutdown.test.ts`) | nothing it was holding |
 | `process.exit()`, without waiting | nothing of the last flush — the call waits for no promise and fires no `beforeExit` (`shutdown.test.ts`) | the interval in hand, the profile's window, any capture evidence |
+| `process.exit()`, without waiting, **inspecting with no cloud** (below) | everything it was holding, written on `exit` with `ending: "exit"` (`exit.test.ts`) | nothing it was holding |
 | An exception nobody caught | what had already been sent: the earlier intervals with their runtime signals, and the exceptions that rode an earlier batch (`endings.test.ts`) | **the exception that killed it** and the interval in hand (`endings.test.ts`); and with them the profile's window and any capture evidence — **stated by reasoning and not by a test**, because nothing runs after the process is gone and what delivers those two is the flush that never happens |
 
 The three orderly ways out — the signal, the emptied loop and `shutdown()` — are one path, and on it the
@@ -287,9 +290,21 @@ samples — never leaves your process except inside a capture, so it always goes
 what it is for. And a send that fails on the very last flush is the one loss the instrumentation cannot
 report to you, because what it lost travels in the next batch and there is no next batch.
 
+**Inspecting with no cloud keeps what `process.exit()` would cut.** When `DOWNTRACE_INSPECT` names a file or
+`stderr` and there is neither a token nor a URL, that destination is the whole of where the batches go, and the
+instrumentation writes what it holds on the `exit` event: the last thing a process runs, with no promise and no timer
+after it. The write is blocking, once, and the batch says `ending: "exit"`. It is the only blocking write the
+instrumentation makes, and it is made there and nowhere else: not in a request, and not in a process that has nothing to
+keep. It is why a short run that ends with an explicit exit keeps its profile (*A test run*, below), and it has two
+limits, both asserted (`exit.test.ts`). With a **cloud** behind the file, nothing is written on the way out: what you
+read there is what went out, and a batch written and never sent would make it say what did not. And an **exception nobody
+caught** that is ending the process writes nothing, in this mode as in every other: the exception that kills the process
+is lost, and the interval in hand with it.
+
 And the last batch of the orderly endings says how the process was leaving — `ending: "signal"` for the signal,
-`ending: "exit"` for an application that awaited `shutdown()`, `ending: "idle"` for one that ran out of work —
-and the cloud shows that per process, beside the instant the batch arrived. One that stopped without saying so
+`ending: "exit"` for an application that awaited `shutdown()` — or, inspecting with no cloud, one that called
+`process.exit()` without waiting —, `ending: "idle"` for one that ran out of work — and the cloud shows that per
+process, beside the instant the batch arrived. One that stopped without saying so
 is shown as having stopped, with the sentence that if it died, what it had not sent is lost — and that none of
 that is evidence that nothing went wrong.
 
@@ -388,7 +403,9 @@ instance of your service delivers them. With `DOWNTRACE_DEBUG=1` the log says wh
 handles itself, and the flush when the event loop empties, keep the same second.
 
 You do not need it if you let the process end on its own: closing your servers and letting the event loop
-empty is what runs `beforeExit`, and the instrumentation flushes there.
+empty is what runs `beforeExit`, and the instrumentation flushes there. Nor do you need it when you only inspect:
+with no token and no URL the instrumentation writes what it holds when the process exits (see *What each way of
+ending keeps*, above, and *A test run*, below).
 
 ## What leaves your server
 
@@ -677,6 +694,54 @@ Two things worth knowing: **the file grows and nothing rotates it** — it is yo
 with it — and it may contain the normalised text of your queries, which is the point, so give it the same care
 you would give an application log.
 
+### A test run: what each runner keeps of its profile
+
+A profile covers a minute and a test run lasts seconds, so what a run keeps of its profile is what each process hands
+over as it ends, and how a process ends is the runner's doing and not your application's. To profile a run, load the
+instrumentation into **every** process the runner starts, and name a file:
+
+```sh
+DOWNTRACE_INSPECT=./downtrace-run.jsonl NODE_OPTIONS="--import @downtrace/agent/register" npx vitest run
+```
+
+`NODE_OPTIONS` is inherited by every process and thread a runner starts. `--import` on the command line is not: a
+runner decides which of its own flags it passes on, and Vitest's workers do not get it, so a run started with
+`node --import @downtrace/agent/register node_modules/vitest/vitest.mjs run` is observed in the process that started
+it and in none that ran a test (by hand, on Vitest 4.1.11; `node --test` and Mocha's workers do get it). With no token
+and no URL nothing leaves the machine, and each process writes what it holds as it ends — on `exit` too, so a runner
+that ends a process with `process.exit()` and waits for nothing loses nothing. What each runner does, and what the
+file holds when the run is over:
+
+| Runner | How it ends the processes its tests ran in | The profile of every route the tests called |
+| --- | --- | --- |
+| Vitest, `forks` pool (the default) | a signal, which the instrumentation's own handler answers | kept (`runners.test.ts`) |
+| Vitest, `threads` or `vmThreads` pool | terminates the thread, and a terminated thread runs nothing | **lost** (`runners.test.ts`) |
+| `node --test` | each file's process ends when its loop empties | kept (`runners.test.ts`) |
+| `node --test --test-force-exit` | `process.exit()` | kept, written on `exit` (`runners.test.ts`) |
+| Jest — in band, in workers or in worker threads, with or without `--forceExit` | workers end on their own; in band, `--forceExit` ends the process with `process.exit()` | kept, written on `exit` when forced — **by hand** |
+| Mocha — default, `--exit` or `--parallel` | ends on its own; `--exit` and the workers of `--parallel` end with `process.exit()` | kept, written on `exit` when it exits — **by hand** |
+
+The rows with a test were run by the real runner, Vitest 4.1.11 on Node 24. The two marked **by hand** were run once,
+against Jest 30.5.2 and Mocha 12.0.3 on Node 24, and no test asserts them: adding either to this package so that a
+sentence has a test would be a dependency whose only use is to be run here. Also by hand, on Vitest 4.1.11, its `vmForks`
+pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool as the `threads` row does; and Vitest
+5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
+
+**Vitest's thread pools are the one case that loses it, and nothing in a thread can change that.** A terminated thread
+fires no `beforeExit`, no `exit` and no signal: what it held goes with it, and the file does not have its routes. Use
+the `forks` pool, which is the default. If you need threads, end each test file with `await shutdown()` from a setup
+file — `afterAll(() => shutdown())` — and the thread hands over before it is terminated. That works with isolated
+threads, a thread per file, which is Vitest's default for the pool; in a thread that runs more than one file only the
+first is observed, because `shutdown()` stops the observation. Checked by hand against the built package, not by a
+test.
+
+Three things about reading the file. It is written by every process, not only the ones that ran tests: a helper process
+a runner starts that ended in order writes one batch with no interval and only its `ending`, and you can ignore it. A
+route is in a profile only when it ran something — a query, an outgoing call, a Redis command or an error — so a route
+that ran nothing is in the aggregates and has no profile at all. And a profile that never arrived, like the one of a
+terminated thread, is not an empty one: the file does not say it was lost, so a route you cannot find in it is a route
+you did not observe, never a route that did not change.
+
 ## Compare two runs before you deploy: `downtrace check`
 
 ```sh
@@ -716,14 +781,10 @@ If **no route** could be evaluated, `check` does not print a green result: it sa
 
 ### When a run leaves no profile
 
-The instrumentation writes what it holds when its process ends in an orderly way, and after every second of the runs `check` makes; a runner that ends the process without waiting, or stops the workers that run the tests, can lose what was not yet written. The file does not say that anything was lost — a process that wrote nothing looks like one that served nothing — so `check` reads the command it ran. When a run left no profile it says «the run left no profile», names the cause it can tell from the command, and says what to use instead:
+The instrumentation writes what it holds when its process ends, in an orderly way or on `exit`, and after every second of the runs `check` makes, so a runner that ends its processes with `process.exit()` — `node --test --test-force-exit`, Jest `--forceExit`, Mocha `--exit` or `--parallel` — keeps its profile (*A test run*, above). What can still lose it is a runner that stops the threads that run the tests: a terminated thread runs nothing, and nothing in it can write. The file does not say that anything was lost — a process that wrote nothing looks like one that served nothing — so `check` reads the command it ran. When a run left no profile it says «the run left no profile», names the cause it can tell from the command, and says what to use instead:
 
 | In the test command | Use |
 |---|---|
-| `node --test --test-force-exit` | drop `--test-force-exit` |
-| Jest `--forceExit` | drop `--forceExit` |
-| Mocha `--exit` | drop `--exit` |
-| Mocha `--parallel` | drop `--parallel` |
 | Vitest with the `threads` or `vmThreads` pool | use `--pool=forks`, which is Vitest's default |
 
 The instrumentation is loaded into every process of the run through `NODE_OPTIONS`, and not with `--import` on the runner's command line: a runner's workers do not inherit the command line (Vitest's do not), and `NODE_OPTIONS` reaches every process. Every process writes its own lines into one file, so `check` merges them by route and counts a window or an interval that was written twice once. A route whose requests made calls that no profile covers is evaluated over the requests that a profile does cover, and the report says how many that was; one with none is `no-profile-in-base` or `no-profile-in-change`.
