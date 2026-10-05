@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import Router from "@koa/router";
 import Koa from "koa";
 import { describe, expect, it } from "vitest";
-import { armContextRecording, attachKoa, koaMatchedRoute } from "../src/koa.ts";
+import { armContextRecording, attachKoa, koaMatchedRoute, koaRouterSawRequest } from "../src/koa.ts";
 import type { Logger } from "../src/log.ts";
 import { routeOf } from "../src/routes.ts";
 
@@ -137,6 +137,54 @@ describe("koaMatchedRoute", () => {
     new Application().createContext(req);
     expect(() => koaMatchedRoute(req)).not.toThrow();
     expect(koaMatchedRoute(req)).toBeUndefined();
+  });
+});
+
+describe("koaRouterSawRequest", () => {
+  /** A request whose context holds what a router left on it, read through the recording. */
+  function requestWith(left: Record<string, unknown>): object {
+    const Application = fakeApplication();
+    armContextRecording(Application.prototype, () => {});
+    const req = {};
+    Object.assign(new Application().createContext(req, {}), left);
+    return req;
+  }
+
+  it("is false for a request Koa never made a context for, and for a context no router touched", () => {
+    expect(koaRouterSawRequest({})).toBe(false);
+    expect(koaRouterSawRequest(requestWith({}))).toBe(false);
+    expect(koaRouterSawRequest(requestWith({ _matchedRoute: "/users/:id" })), "a route with no list of layers").toBe(
+      false,
+    );
+  });
+
+  it("is true once a router left the layers it matched, whether or not there are any, or a route among them", () => {
+    expect(koaRouterSawRequest(requestWith({ matched: [] }))).toBe(true);
+    expect(koaRouterSawRequest(requestWith({ matched: [{ path: "([^/]*)", methods: [] }] }))).toBe(true);
+  });
+
+  it("is false for what is not a list of layers", () => {
+    for (const matched of [undefined, null, "layers", 0, {}, true]) {
+      expect(koaRouterSawRequest(requestWith({ matched })), String(matched)).toBe(false);
+    }
+  });
+
+  it("is false, and throws nothing, when reading the context throws", () => {
+    const Application = class {
+      createContext(req: object): object {
+        return {
+          req,
+          get matched(): unknown[] {
+            throw new Error("a getter of the application's own");
+          },
+        };
+      }
+    };
+    armContextRecording(Application.prototype, () => {});
+    const req = {};
+    new Application().createContext(req);
+    expect(() => koaRouterSawRequest(req)).not.toThrow();
+    expect(koaRouterSawRequest(req)).toBe(false);
   });
 });
 
@@ -308,11 +356,16 @@ describe("attachKoa", () => {
 
 describe("routeOf with a Koa request", () => {
   /** A request and the context a real Koa makes for it, with the route a router would have matched on it. */
-  function koaRequest(url: string, matched: string | undefined): { url: string } {
+  function koaRequest(url: string, matched: string | RegExp | undefined, seen?: { router: boolean }): { url: string } {
     const app = new Koa();
     armContextRecording(Object.getPrototypeOf(app), () => {});
     const req = { url, headers: {} } as { url: string };
-    const ctx = app.createContext(req as never, {} as never) as unknown as { _matchedRoute?: string };
+    const ctx = app.createContext(req as never, {} as never) as unknown as {
+      _matchedRoute?: unknown;
+      matched?: unknown[];
+    };
+    // What a router leaves before it looks for a route to run: the layers it matched, none of them a route yet.
+    if (seen?.router) ctx.matched = [];
     if (matched !== undefined) ctx._matchedRoute = matched;
     return req;
   }
@@ -332,9 +385,19 @@ describe("routeOf with a Koa request", () => {
     expect(routeOf(koaRequest("/", ""))).toBe("/");
   });
 
-  it("is the heuristic's, as it was, when no router matched", () => {
+  it("is the heuristic's, as it was, when there is no router at all", () => {
     expect(routeOf(koaRequest("/users/42", undefined))).toBe("/users/:id");
     expect(routeOf(koaRequest("/nope/ana@cliente.com", undefined))).toBe("/nope/:id");
+  });
+
+  it("is (unmatched) when a router saw the request and none of its routes matched (DT-56)", () => {
+    expect(routeOf(koaRequest("/users/42", undefined, { router: true }))).toBe("(unmatched)");
+    expect(routeOf(koaRequest("/webhook/plainsecret", undefined, { router: true }))).toBe("(unmatched)");
+    // A route registered with a regular expression has matched, and has no words to be written back: the
+    // same, and not the path.
+    expect(routeOf(koaRequest("/users/42", /^\/users\/(\d+)$/, { router: true }))).toBe("(unmatched)");
+    // And a matched route is still the route.
+    expect(routeOf(koaRequest("/users/42", "/users/:id", { router: true }))).toBe("/users/:id");
   });
 
   it("wins over what Express says, when a Koa application is called from one", () => {

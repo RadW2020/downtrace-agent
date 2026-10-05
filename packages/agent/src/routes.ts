@@ -1,5 +1,5 @@
 import type { Endpoint } from "@downtrace/protocol";
-import { koaMatchedRoute } from "./koa.ts";
+import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
 import { nextMatchedPathname } from "./next.ts";
 import { segmentLooksLikeValue } from "./sanitize.ts";
@@ -20,6 +20,13 @@ export const MAX_ROUTE_LABEL_LENGTH = Math.max(...[...METHODS, "OTHER"].map((m) 
 
 /** Route used when the per-interval cardinality cap is hit. */
 export const OTHER_ROUTE = "(other)";
+
+/**
+ * Route of a request that a framework with routes was there to name and none of them did: a 404, a file served
+ * by a mount with no route, a middleware that answered at the first level, a path asked before the application
+ * registered its routes. It is one name per method, and nothing of the path travels (invariant 5, DT-56).
+ */
+export const UNMATCHED_ROUTE = "(unmatched)";
 
 export function normalizeMethod(method: string | undefined): Method {
   const m = (method ?? "").toUpperCase();
@@ -55,17 +62,45 @@ export interface RouteSource {
  * or a catch-all. A request only carries the record of the framework that handled it, so asking them costs a
  * lookup that finds nothing for every other request (DT-90).
  *
- * Without a template, the heuristic starts from the path the client asked for, `originalUrl`, when it is a
- * string: Express trims `url` as the request passes through the mounts, and a middleware that answers before
- * any route matched would lose the mount's prefix (gh-766). `originalUrl` is what the request was born with,
- * and it stays what it was whatever `next()` did, which is why it can be read at the end of the response,
- * where `baseUrl` plus `url` could not be.
+ * Without a template, a request that Express or a Koa router was answering is `(unmatched)` and nothing of
+ * its path travels: no route named it, and no rule of shape can tell a word of the path that is a secret
+ * from one that is the route's own (invariant 5, DT-56). A request that no framework with routes saw — a
+ * server on `node:http` alone, a Koa application with no router, Next.js's own assets — has nothing else to be
+ * named by, and the heuristic starts from the path the client asked for, `originalUrl`, when it is a string:
+ * Express trims `url` as the request passes through the mounts, and a middleware that answers before any route
+ * matched would lose the mount's prefix (gh-766). `originalUrl` is what the request was born with, and it stays
+ * what it was whatever `next()` did, which is why it can be read at the end of the response, where `baseUrl`
+ * plus `url` could not be.
  */
 export function routeOf(req: RouteSource): string {
   const template = nextTemplate(req) ?? koaTemplate(req) ?? expressTemplate(req);
-  const asked = typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/");
-  const route = template ?? heuristicTemplate(asked);
+  const route = template ?? unnamedRoute(req);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
+}
+
+/**
+ * What a request is called when no framework template, and no mount, named it: `(unmatched)` when a framework
+ * with routes was answering and none of them was the request's, and the heuristic over the path otherwise,
+ * because with no routes registered there is nothing else to name it by.
+ */
+function unnamedRoute(req: RouteSource): string {
+  if (expressAnswered(req) || koaRouterSawRequest(req)) return UNMATCHED_ROUTE;
+  return heuristicTemplate(typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/"));
+}
+
+/**
+ * Whether Express was answering the request: it puts its app on the request as `app`, before any route or
+ * middleware of the application runs, and the app is a function with the `handle` Express dispatches with.
+ * A server with no Express has nothing of the kind, and a read of the request that throws is no Express seen
+ * (invariant 2).
+ */
+function expressAnswered(req: RouteSource): boolean {
+  return (
+    safeRead(() => {
+      const app = req.app;
+      return typeof app === "function" && typeof (app as { handle?: unknown }).handle === "function";
+    }) === true
+  );
 }
 
 /**
@@ -111,9 +146,9 @@ function expressTemplate(req: RouteSource): string | undefined {
  * before any route matched, and `baseUrl` is what the mounts it went through took of the path (gh-899).
  *
  * The mount comes out as the patterns it was registered with, and what is left of the path, `url`, goes
- * through the heuristic. With nothing on `baseUrl` there is no mount to name, and the path the client asked
- * for stands, as gh-766 decided: a 404 of finalhandler, a middleware of the first level. Where an error
- * answered by the app's handler has already put `baseUrl` back to nothing, this does not reach it.
+ * through the heuristic. With nothing on `baseUrl` there is no mount to name and no template at all — a 404
+ * of finalhandler, a middleware of the first level, and an error answered by the app's handler after Express
+ * put `baseUrl` back to nothing — and the request is `(unmatched)`, as `routeOf` says (DT-56).
  */
 function unmatchedTemplate(req: RouteSource): string | undefined {
   const base = typeof req.baseUrl === "string" ? req.baseUrl : "";

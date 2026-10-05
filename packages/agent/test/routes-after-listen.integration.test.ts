@@ -91,12 +91,13 @@ const ASSETS = ["ActionPill-CwmQU5UK.js", "AgentCredentialSelect-uXdretI_.js"];
  * yet and Express answers a 404; seconds later `start()` registers the webhooks (`app.all("/webhook/*path")`)
  * and the editor's files (`app.use("/", express.static(…))`, a mount with no route at all). A request in that
  * window has no template to be named by, and in a webhook URL the path is what fires the workflow: whoever
- * knows it can call it (invariant 5). What it gets is the heuristic the README promises for whatever Express
- * answers with nothing matched — the value collapsed — and from the moment the route exists, its template.
+ * knows it can call it (invariant 5). It was named by the heuristic, which leaves a plain word as written;
+ * DT-56 decided that what Express answers with nothing matched is `(unmatched)` and no word of the path
+ * travels, and from the moment the route exists, its template. The files of the editor are `(unmatched)` too.
  * Neither is ever the URL the client asked for.
  */
 describe.each(kits)("a route registered after the server listens, on $name (DT-35)", (kit) => {
-  it("names what arrives before the route by the heuristic and what arrives after by the template", async () => {
+  it("names what arrives before the route (unmatched) and what arrives after by the template", async () => {
     await kit.arm();
     const files = await mkdtemp(path.join(os.tmpdir(), "dt35-static-"));
     cleanups.push(() => rm(files, { recursive: true, force: true }));
@@ -147,9 +148,9 @@ describe.each(kits)("a route registered after the server listens, on $name (DT-3
     expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
     expect(agent.stats.internalErrors, "the instrumentation stays on").toBe(0);
     expect(Object.fromEntries(routesOf(batch))).toEqual({
-      "/webhook/:id": 2,
+      // The gate's answer and the 404, and the two files of the editor: nothing of what was asked is a name.
+      "(unmatched)": 4,
       [kit.webhooks]: 2,
-      "/assets/:id": 2,
     });
     const bytes = JSON.stringify(batch);
     for (const value of ["nope-", "plainsecret", ...ASSETS.map((a) => a.split("-")[0] ?? a)]) {

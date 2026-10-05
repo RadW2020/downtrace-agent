@@ -225,7 +225,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Normalised route template, e.g. /products/:id, or (other)."
+          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56)."
         },
         "count": {
           "type": "integer",
@@ -486,7 +486,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Normalised route template, e.g. /products/:id, or (other)."
+          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56)."
         },
         "operations": {
           "type": "array",

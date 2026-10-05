@@ -329,7 +329,7 @@ export interface Interval {
 export interface Endpoint {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "OTHER";
   /**
-   * Normalised route template, e.g. /products/:id, or (other).
+   * Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56).
    */
   route: string;
   count: number;
@@ -534,7 +534,7 @@ export interface Profile {
 export interface ProfileEndpoint {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "OTHER";
   /**
-   * Normalised route template, e.g. /products/:id, or (other).
+   * Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56).
    */
   route: string;
   /**

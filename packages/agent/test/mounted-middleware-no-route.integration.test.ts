@@ -427,7 +427,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
     expect(out.bytes).not.toContain("globex");
   });
 
-  it("keeps what gh-766 decided: a literal mount stays a word, and a 404 of finalhandler is unchanged", async () => {
+  it("keeps a literal mount that answers as a word, and names a 404 of finalhandler (unmatched) (gh-766, DT-56)", async () => {
     const out = await run(
       kit,
       (app) => {
@@ -438,6 +438,9 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/static/app.css", "/nothing/here"],
     );
     expect(out.statuses).toEqual([200, 404]);
-    expect([...out.routes].map(([route]) => route).sort()).toEqual(["/nothing/here", "/static/app.css"]);
+    // What a mount took is still named by it, and the rest of the path by the heuristic. What no mount took
+    // and no route matched is nothing to be named by, and the path the client asked for does not travel.
+    expect([...out.routes].map(([route]) => route).sort()).toEqual(["(unmatched)", "/static/app.css"]);
+    expect(out.bytes).not.toContain("nothing");
   });
 });

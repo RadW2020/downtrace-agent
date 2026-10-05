@@ -173,13 +173,37 @@ describe.each([
     }
   });
 
-  it("names a request no route matched, and one with no router at all, by the heuristic, as before", async () => {
+  it("names a request no route of the router matched (unmatched), and nothing of its path travels (DT-56)", async () => {
+    // Routes were there to name it and none did: a path nobody registered, and a path that is registered for
+    // another method. A plain word in the path is no more a name here than it is in Express's 404.
     const { url, agent, sink } = await serve((app) => {
       const router = new RouterClass();
       router.get("/users/:id", (ctx) => {
         ctx.body = {};
       });
       app.use(router.routes());
+      app.use((ctx) => {
+        ctx.status = 404;
+      });
+    });
+
+    expect(await hit(url, "/orders/42")).toBe(404);
+    expect(await hit(url, "/webhook/plainsecret")).toBe(404);
+    expect(await hit(url, "/orders/ana@cliente.com")).toBe(404);
+    expect(await hit(url, "/users/7")).toBe(200);
+    expect(await agent.flushNow()).toBe(true);
+    const batch = sink.batches[0];
+    expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
+    expect(Object.fromEntries(routesOf(batch))).toEqual({ "(unmatched)": 3, "/users/:id": 1 });
+    const body = JSON.stringify(batch);
+    for (const word of ["orders", "plainsecret", "ana@cliente"]) {
+      expect(body, `«${word}» does not leave`).not.toContain(word);
+    }
+  });
+
+  it("names a request no route matched in a Koa application with no router by the heuristic, as before", async () => {
+    // With no router there are no routes to name it by, and the heuristic is all there is.
+    const { url, agent, sink } = await serve((app) => {
       app.use((ctx) => {
         ctx.status = 404;
       });

@@ -377,11 +377,13 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
     expect(routeOf(request(app))).toBe("/tenants/:tenant/users/:id");
   });
 
-  it("keeps the path the client asked for when nothing is left on baseUrl", () => {
+  it("is (unmatched), and not the path the client asked for, when nothing is left on baseUrl (DT-56)", () => {
+    // Where an error answered by the app's handler has put `baseUrl` back to nothing, no mount is left to name,
+    // and the path the client asked for carries the tenant: DT-26.
     const { app } = mounted();
     expect(
       routeOf({ url: "/tenants/acme-corp/users/42", originalUrl: "/tenants/acme-corp/users/42", baseUrl: "", app }),
-    ).toBe("/tenants/acme-corp/users/:id");
+    ).toBe("(unmatched)");
   });
 
   it("says :param for the stretch when a matcher of the mount throws, and throws nothing", () => {
@@ -444,6 +446,75 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
     });
     expect(() => routeOf(request(app))).not.toThrow();
     expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+  });
+});
+
+// DT-56. A request that Express was answering and no route named is `(unmatched)`: the path the client asked
+// for is not read at all. What Express puts on the request is what says it was Express answering, and a
+// request with none of it is the heuristic's, as it was.
+describe("routeOf for a request no route named (DT-56)", () => {
+  const asked = { url: "/webhook/plainsecret", originalUrl: "/webhook/plainsecret" };
+
+  it("is (unmatched) when Express was answering and nothing matched, whatever the path", () => {
+    const app = express();
+    for (const url of ["/webhook/plainsecret", "/.env", "/wp-login.php", "/assets/ActionPill-CwmQU5UK.js", "/"]) {
+      expect(routeOf({ url, originalUrl: url, baseUrl: "", app }), url).toBe("(unmatched)");
+    }
+    // The same in Express 4, whose app is a function with the same `handle`.
+    expect(routeOf({ ...asked, baseUrl: "", app: express4() })).toBe("(unmatched)");
+  });
+
+  it("is (unmatched) for a route that has no path to be written back, with nothing mounted", () => {
+    const app = express();
+    expect(routeOf({ ...asked, route: { path: /^\/webhook\/.+/ }, baseUrl: "", app })).toBe("(unmatched)");
+    expect(routeOf({ ...asked, route: { path: 42 }, app })).toBe("(unmatched)");
+  });
+
+  it("is the route when a route matched, and the mount's pattern when a middleware answered under one", () => {
+    const app = express();
+    expect(routeOf({ ...asked, route: { path: "/webhook/*path" }, baseUrl: "", app })).toBe("/webhook/*path");
+    armMountRecording(express.Router.prototype);
+    const mounted = express();
+    mounted.use("/tenants/:tenant", (_req, res) => {
+      res.status(401).json({});
+    });
+    expect(
+      routeOf({
+        url: "/users/42",
+        originalUrl: "/tenants/acme-corp/users/42",
+        baseUrl: "/tenants/acme-corp",
+        app: mounted,
+      }),
+    ).toBe("/tenants/:tenant/users/:id");
+  });
+
+  it("is the heuristic's, as it was, for a request Express did not answer", () => {
+    // Plain Node: no `app` on the request, so there are no routes to have named it.
+    expect(routeOf({ url: "/webhook/nope-9" })).toBe("/webhook/:id");
+    expect(routeOf({ url: "/webhook/plainsecret" })).toBe("/webhook/plainsecret");
+    // Whatever else sits in `app` is not an Express app: it has no `handle` to dispatch with.
+    for (const app of [undefined, null, 0, "app", {}, { router: {} }, () => {}, { handle() {} }]) {
+      expect(routeOf({ url: "/webhook/nope-9", app }), String(app)).toBe("/webhook/:id");
+    }
+  });
+
+  it("reads nothing that throws: an `app` that cannot be read is no Express seen, and the heuristic names it", () => {
+    const hostile = {
+      url: "/webhook/nope-9",
+      get app(): unknown {
+        throw new Error("a getter of the application's own");
+      },
+    };
+    expect(() => routeOf(hostile)).not.toThrow();
+    expect(routeOf(hostile)).toBe("/webhook/:id");
+    // An app whose `handle` cannot be read is the same.
+    const app = Object.defineProperty(() => {}, "handle", {
+      get() {
+        throw new Error("no handle");
+      },
+    });
+    expect(() => routeOf({ url: "/webhook/nope-9", app })).not.toThrow();
+    expect(routeOf({ url: "/webhook/nope-9", app })).toBe("/webhook/:id");
   });
 });
 

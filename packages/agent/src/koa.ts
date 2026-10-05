@@ -48,6 +48,26 @@ export function koaMatchedRoute(req: object): string | undefined {
 }
 
 /**
+ * Whether a Koa router dispatched this request: it leaves the layers it matched on the context, as an array
+ * (`ctx.matched`, in `@koa/router` and in `koa-router`), before it looks for a route to run, and whether or not
+ * any of them is a route. It is the sign that routes were there to name the request, so a request that has it
+ * and no template is one that no route named (DT-56). A Koa application with no router leaves nothing of the
+ * kind and has no routes to speak of: its requests are the heuristic's.
+ *
+ * A read of the context that throws is a context nothing can be said of, as in `koaMatchedRoute`: no router
+ * seen, and the heuristic names the request (invariant 2).
+ */
+export function koaRouterSawRequest(req: object): boolean {
+  try {
+    const ctx = contexts.get(req);
+    if (ctx === null || typeof ctx !== "object") return false;
+    return Array.isArray((ctx as { matched?: unknown }).matched);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The path of the last layer with methods — a route, not a middleware — at or before the last layer whose path
  * is `matched`. `undefined` when the router keeps no such list, or no route is in it before that layer, and
  * then `matched` stands as the router wrote it.

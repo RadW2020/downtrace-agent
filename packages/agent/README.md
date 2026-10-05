@@ -88,12 +88,12 @@ and your deployed version travel as stable digests of themselves — same name, 
 the analysis still groups — and query text, the labels of outgoing calls and Redis commands, error messages and
 exception signatures do not travel at all. A call's or a command's identity is then a digest of its withheld name.
 
-The digest is of what the route is called: for a route the framework did not template, that is the collapsed
-route, so a value the heuristic folds — an email, a token, a file name with a number — never enters the
-digest. The limit is a plain word in a path without a template, a name or a slug: the heuristic cannot tell
-it from the route's own words, so it enters the digest, and the digest is keyless, which means whoever
-guesses the word can confirm it. An endpoint exclusion keeps it out entirely, because excluding is not
-observing.
+The digest is of what the route is called. A request that Express or a Koa router answered and no route named is
+`(unmatched)`, and nothing of its path enters the digest. For a request that no framework with routes saw, it is the
+collapsed route, so a value the heuristic folds — an email, a token, a file name with a number — never enters the
+digest. The limit is a plain word in a path of that kind, a name or a slug: the heuristic cannot tell it from the
+route's own words, so it enters the digest, and the digest is keyless, which means whoever guesses the word can
+confirm it. An endpoint exclusion keeps it out entirely, because excluding is not observing.
 
 What stays is what is not yours: the protocol version, the agent's own name, the HTTP method, the kind of
 each dependency, the counts and the timings. Downtrace keeps detecting and comparing; what it loses is the
@@ -737,25 +737,40 @@ registered on a copy of Express different from the one the agent wrapped (a dupl
 answers under a mount before any route matched — a 401 from `app.use("/tenants/:tenant", auth)` — keeps the mount's
 pattern too: the mount is read from the routers the request went through, and the rest of the path goes through the
 heuristic below. Where the same stretch is matched by two mounts registered with different patterns, or by routers the
-walk cannot tell apart, the stretch comes out as `:param` per segment — and so does a mount registered with several paths on Express 4, which keeps no matcher per path. A middleware whose error the app's handler
-answers after Express has put `baseUrl` back to nothing is not reached by this yet. Without a framework template — and for
-whatever Express answers when nothing is left of the mount, a 404 or a first-level middleware, read as the path the
-client asked for — a segment that carries a value is collapsed into `:id`: anything with
+walk cannot tell apart, the stretch comes out as `:param` per segment — and so does a mount registered with several paths on Express 4, which keeps no matcher per path.
+
+**A request that no route names is `(unmatched)`.** When Express is answering and no route matched the request and
+no mount is left to name it, its route is `(unmatched)`, one per method — `GET (unmatched)`, `POST (unmatched)` —
+and nothing of its path travels. That is a 404; a file served by a mount with no route,
+`app.use("/", express.static(dir))`; a middleware of the first level that answers, a proxy, a CORS preflight a
+`cors` middleware answers, or a gate that says «starting up»; a path asked before the application registered its route; a route registered with a regular
+expression, which has no words to be written back; and a middleware that hands an error on to the app's handler
+(`express-jwt` rejecting, passport with `failWithError`), which leaves `baseUrl` back at nothing by the time the
+handler answers, even when the middleware sat under `app.use("/tenants/:tenant", auth)`. It is named so because
+the path of such a request is not a template, and in some applications it is a secret: n8n fires a workflow for
+whoever knows the path of a webhook, and a word without digits is a segment no rule of shape can tell from a route's
+own words. A scanner's thousand paths (`/.env`, `/wp-login.php`), and the hundreds of files a bundler writes, are
+one route and not as many, and they stop competing for the 500 routes of an interval. What is lost is which URL no
+route named, and the name of a mount for a middleware that hands an error on; the lasting answer to both is a route
+registered with its template. To keep the requests out altogether, the endpoint exclusion matches it like any
+other name: `DOWNTRACE_EXCLUDE_ENDPOINTS=(unmatched)`.
+
+Where there is no Express to ask — a server on `node:http` alone, a framework that keeps no routes Downtrace reads —
+there is no route to have named the request, and the heuristic is the reserve: a segment that carries a value is
+collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
 version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
 A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a
 parameter from a route's own words, and the ways to keep it out are an endpoint exclusion, matched against
-the template, and minimal mode.
+the template, and minimal mode. The same heuristic names the rest of the path after a mount that answered, as
+above.
 
 A route registered after the server starts listening is that case until it exists. n8n listens first, answers
 «starting up» from a middleware while it migrates, then lets Express answer a 404, and registers
-`/webhook/*path` seconds later: a request in that window has no template to be named by, so it is named as a 404
-is — `/webhook/nope-9` is `/webhook/:id` — and from the moment the route exists, it is `/webhook/*path`. A
-webhook path that is a plain word is a plain word: in that window it travels as written. Minimal mode sends a
-digest of it, which whoever guesses the word can confirm; the exclusion that keeps it out entirely is
-`/webhook/*`, and it takes the template with it. A file served by a mount with no route,
-`app.use("/", express.static(dir))`, is named the same way: a bundler's hash comes out as `:id` when it has a
-digit or makes a long mixed-case run with the name, and as written otherwise.
+`/webhook/*path` seconds later: a request in that window is `POST (unmatched)`, whatever the webhook's path —
+a plain word included — and from the moment the route exists it is `POST /webhook/*path`. The files of n8n's
+editor, which it serves with `app.use("/", express.static(dir))`, are `GET (unmatched)` too: from a route per
+file, a thousand of them, to one.
 
 **Koa** routes are named by the path the router registered the matched route with: `/users/:id` for `@koa/router` and
 `koa-router`, which leave it on the context as `ctx._matchedRoute`. **Strapi 5** runs on Koa and on that router, so a
@@ -763,10 +778,14 @@ request to `/api/articles/1` and one to `/api/articles/2` are one route, `/api/a
 router and of the routers it is nested in; nothing of either path travels. The instrumentation finds the Koa your
 application loaded in the module cache, wherever it is installed — Strapi brings its own, which under pnpm is not
 reachable from your application's root — from the first request on. A route that hands on to the middleware after it
-(Strapi's public files and its 404s do) is named by the route, and not by the last middleware that ran. Without a
-template, the heuristic below names the request as it did: a Koa that is loaded after the first request (a lazy
-`import()`), a Koa bundled into one file with the rest of the application, a Koa router that does not write
-`_matchedRoute` and a route registered with a regular expression, which has no words to be written back.
+(Strapi's public files and its 404s do) is named by the route, and not by the last middleware that ran. A request
+a router dispatched and none of its routes matched — a path nobody registered, or one registered for another
+method — is `(unmatched)`, as in Express, and so is one matched by a route registered with a regular expression,
+which has no words to be written back: the router leaves the layers it matched on the context (`ctx.matched`) before
+it looks for a route, and a request that has them and no template is one that no route named. A Koa application
+with no router has no routes to name a request by, and the heuristic names it as it did, and so for what the
+instrumentation cannot reach: a Koa that is loaded after the first request (a lazy `import()`), a Koa bundled into one
+file with the rest of the application, and a router that leaves nothing of what it matched on the context.
 
 **Next.js** routes are named by the pathname Next matched, as the file system names it: `app/api/products/[id]/route.ts`
 is `/api/products/[id]` for every product, and so are `pages/api/…`, pages and the edge runtime — with Next's own
@@ -779,6 +798,11 @@ versions — is the heuristic's too.
 A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
 catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then
 Express.
+
+**The first version that names a request no route named `(unmatched)` changes their route identities, once**: a
+request that was a path — `/webhook/:id`, `/assets/:id`, a 404's path, a path with a plain word in it — is seen as
+`GET (unmatched)` or the method's own, a finding on the old route receives no data and is not declared recovered,
+and an exclusion written against such a path has to be rewritten against `(unmatched)`.
 
 **The first version that names Koa and Next.js routes by their templates changes their route identities, once**, as the
 one below did for the values: a route that was a path — a Koa one with a plain word in it, a Next.js one with its

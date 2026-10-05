@@ -39,6 +39,13 @@ export {
   MAX_CONTEXT_VALUE_LENGTH,
   sanitizeContext,
 } from "./report.ts";
-export { heuristicTemplate, type Method, normalizeMethod, OTHER_ROUTE, routeOf } from "./routes.ts";
+export {
+  heuristicTemplate,
+  type Method,
+  normalizeMethod,
+  OTHER_ROUTE,
+  routeOf,
+  UNMATCHED_ROUTE,
+} from "./routes.ts";
 export { DEFAULT_MAX_QUEUED, type Deadline, type Ending, Sender, type SenderOptions } from "./transport.ts";
 export { AGENT_VERSION } from "./version.ts";
