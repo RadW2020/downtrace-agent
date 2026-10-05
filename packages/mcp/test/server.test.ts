@@ -452,6 +452,8 @@ describe("the schemas", () => {
     expect(instants.map(({ at }) => at).sort()).toEqual(
       [
         "verify_recovery.since",
+        "changes_since.since",
+        "changes_since.until",
         "read_history.from",
         "read_history.to",
         "read_history.baselineFrom",
@@ -2454,5 +2456,131 @@ describe("errors", () => {
     expect(out.isError).toBe(true);
     expect(said(out)).toContain("DOWNTRACE_TOKEN");
     expect(said(out)).toContain("operate");
+  });
+});
+
+/**
+ * DT-88: what changed since an instant, the one bounded question a coding agent asks at the start of a session
+ * (`product.md`, «Woken, not watching»). The tool is a read like the others: its answer is the cloud's, verbatim.
+ */
+describe("what changed since an instant", () => {
+  const tool = toolNamed("changes_since");
+
+  it("is a read with a project and an instant required, and no operation's arguments", () => {
+    expect(tool).toBeDefined();
+    expect(tool?.operates).toBeUndefined();
+    expect(tool?.inputSchema.required).toEqual(["project", "since"]);
+    expect(tool?.method).toBe("GET");
+    expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
+      "limit",
+      "offset",
+      "project",
+      "since",
+      "until",
+    ]);
+  });
+
+  it("declares the window as two instants and the page as two whole numbers", () => {
+    const properties = tool?.inputSchema.properties ?? {};
+    expect(properties.since).toMatchObject({ type: "string", format: "date-time" });
+    expect(properties.until).toMatchObject({ type: "string", format: "date-time" });
+    expect(properties.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 50 });
+    expect(properties.offset).toMatchObject({ type: "integer", minimum: 0 });
+    expect(properties.offset?.maximum).toBeUndefined();
+  });
+
+  it("asks the cloud for the window and the page it was given, and for nothing it was not", async () => {
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", {
+      name: "changes_since",
+      arguments: {
+        project: "tienda",
+        since: "2026-10-05T09:00:00Z",
+        until: "2026-10-05T11:00:00Z",
+        limit: 5,
+        offset: 10,
+      },
+    });
+    expect(only(calls, 0).method).toBe("GET");
+    expect(only(calls, 0).url).toBe(
+      "https://cloud.test/api/p/tienda/changes?since=2026-10-05T09%3A00%3A00Z&until=2026-10-05T11%3A00%3A00Z&limit=5&offset=10",
+    );
+    await s.handle("tools/call", {
+      name: "changes_since",
+      arguments: { project: "tienda", since: "2026-10-05T09:00:00Z" },
+    });
+    expect(only(calls, 1).url).toBe("https://cloud.test/api/p/tienda/changes?since=2026-10-05T09%3A00%3A00Z");
+  });
+
+  it("refuses to call the cloud without the instant, and says which argument is missing", async () => {
+    const { s, calls } = server();
+    const out = (await s.handle("tools/call", { name: "changes_since", arguments: { project: "tienda" } })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toBe("missing required argument(s): since");
+    expect(calls.length).toBe(0);
+  });
+
+  const answer = JSON.stringify({
+    version: "abc",
+    since: "2026-10-05T09:00:00Z",
+    until: "2026-10-05T11:00:00Z",
+    telemetry: { arrivedSince: false, environments: [], says: "No batch has arrived since 2026-10-05T09:00:00Z" },
+    total: 21,
+    offset: 0,
+    limit: 20,
+    leftOut: 1,
+    next: "/api/p/tienda/changes?limit=20&offset=20&since=2026-10-05T09%3A00%3A00Z&until=2026-10-05T11%3A00%3A00Z",
+    changes: [{ kind: "error", id: "abc123", error: { fromService: { text: "TypeError: x" } } }],
+  });
+
+  it("hands back what the cloud answered, the structured result included, with what it left out", async () => {
+    const { s } = server([{ body: answer }]);
+    await opened(s, "2025-06-18");
+    const out = (await s.handle("tools/call", {
+      name: "changes_since",
+      arguments: { project: "tienda", since: "2026-10-05T09:00:00Z" },
+    })) as Called;
+    expect(out.isError).toBeUndefined();
+    expect(said(out)).toBe(answer);
+    const structured = out.structuredContent as { leftOut: number; next: string; telemetry: { arrivedSince: boolean } };
+    expect(structured.leftOut).toBe(1);
+    expect(structured.next).toContain("offset=20");
+    expect(structured.telemetry.arrivedSince).toBe(false);
+  });
+
+  it("hands back a refusal as a failure with its status and the cloud's own sentence", async () => {
+    const refusal = JSON.stringify({ error: "`limit` must be a whole number from 1 to 50", minimum: 1, maximum: 50 });
+    const { s } = server([{ status: 400, body: refusal }]);
+    const out = (await s.handle("tools/call", {
+      name: "changes_since",
+      arguments: { project: "tienda", since: "2026-10-05T09:00:00Z", limit: 51 },
+    })) as Called;
+    expect(out.isError).toBe(true);
+    expect(said(out)).toContain("400");
+    expect(said(out)).toContain("from 1 to 50");
+  });
+
+  it("is annotated as a read, as every query is", async () => {
+    const { s } = server();
+    await opened(s, "2025-06-18");
+    const listed = (await s.handle("tools/list", {})) as Listed;
+    const found = listed.tools.find((t) => t.name === "changes_since");
+    expect(found?.annotations).toMatchObject({ readOnlyHint: true });
+  });
+
+  /**
+   * A coding agent decides from the description what the tool is for, and what an empty answer is worth: the four
+   * things it lists, the events each carries, and that no data is not the same as no change.
+   */
+  it("says in its description what it lists, which events, that no data is not no change, and how to page", () => {
+    const description = String(tool?.description ?? "");
+    for (const kind of ["finding", "error", "deploy", "coverage"]) expect(description).toContain(`\`${kind}\``);
+    for (const event of ["opened", "closed", "first-seen", "ended"]) expect(description).toContain(`\`${event}\``);
+    expect(description).toContain("missing telemetry");
+    expect(description).toContain("not** a project where nothing changed");
+    expect(description).toContain("`leftOut`");
+    expect(description).toContain("`next`");
+    expect(description).toContain("`resource.version`");
+    expect(description).toContain("ask it first");
   });
 });

@@ -196,6 +196,69 @@ export const tools: Tool[] = [
     query: ["sort", "order"],
   },
   {
+    name: "changes_since",
+    description:
+      "What changed in a project since an instant: **ask it first when a session starts**, with the instant you " +
+      "last looked, instead of listing the findings, the errors, the deploys and the coverage and diffing them " +
+      "yourself. It lists what opened, closed or was first seen after `since` and up to `until`, newest first, one " +
+      "item for each thing with all its `events` in the window: a `finding` that opened (when a second check " +
+      "confirmed it) or closed, an `error` first seen, a `deploy` first seen —with the version it followed and, " +
+      "when it is the newest of its environment, its comparison with that one reduced to counts, or why there is " +
+      "none— and an episode of lost coverage (`coverage`) that opened or ended; the `events` of an item are " +
+      "`opened` or `closed` for a finding, `first-seen` for an error and a deploy, `opened` or `ended` for an " +
+      "episode. Something that was already there " +
+      "and still is, is not a change: `list_findings`, `list_errors` and `project_status` say how the project is " +
+      "now. Each item has its `id`, the one the other tools take, and under `resource` where to read what it is " +
+      "about and `resource.version`, the version it has there: a finding's is its report's, the one " +
+      "`read_report` gives and `close_finding` takes, and an error's is `read_error`'s; a deploy's and an " +
+      "episode's are null, because they are records of the status. The answer is bounded: `total` is the " +
+      "window's, `leftOut` is how many this page does not hold and `next` is the address of the page that does " +
+      "—the same question with `offset` moved on, and `until` fixed, so the pages are one answer. " +
+      "`telemetry.arrivedSince` is false when no batch arrived after `since`, and then the answer is missing " +
+      "telemetry and **not** a project where nothing changed, however short the list; `telemetry.environments` " +
+      "says it for each environment. A `since` in the future is refused with 400, and so are an `until` not " +
+      "after it and a `limit` or an `offset` out of range. Pass the `until` of this answer as the `since` of " +
+      "the next: what happened at that instant is in exactly one of them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        since: {
+          type: "string",
+          format: "date-time",
+          description:
+            "RFC 3339 instant: when you last looked. Required, and not in the future. What happened at this " +
+            "instant was already seen and is not in the answer.",
+        },
+        until: {
+          type: "string",
+          format: "date-time",
+          description:
+            "RFC 3339 instant: the end of the window, after `since` and not in the future. Leave it out: the " +
+            "answer fixes it at the instant it was prepared and gives it back in `until` and in `next`. What " +
+            "happened at this instant is in the answer.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 50,
+          description: "How many items to return. Twenty by default.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "The place of the first item to return, up to the window's `total`. 0 by default; `next` has it " +
+            "for the page after this one.",
+        },
+      },
+      required: ["project", "since"],
+    },
+    method: "GET",
+    path: "/api/p/{slug}/changes",
+    query: ["since", "until", "limit", "offset"],
+  },
+  {
     name: "list_findings",
     description:
       "The findings of a project, as one flat list: every open one, the most recently confirmed first, then every " +
