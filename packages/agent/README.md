@@ -16,7 +16,7 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 
 It watches only the process it is loaded into: one process, one service.
 
-The package also installs a command, `downtrace`. `downtrace check` compares two runs of your tests, before you deploy, with no account and with nothing leaving your machine: see [Compare two runs before you deploy](#compare-two-runs-before-you-deploy-downtrace-check).
+The package also installs a command, `downtrace`. `downtrace init` configures a project for it, asking nothing and making no network request: see [Configure a project](#configure-a-project-downtrace-init). `downtrace check` compares two runs of your tests, before you deploy, with no account and with nothing leaving your machine: see [Compare two runs before you deploy](#compare-two-runs-before-you-deploy-downtrace-check).
 
 > **On the word «agent».** Two things in Downtrace could be called that, and this README never uses it alone: the **instrumentation** is this library, and a **coding agent** is whoever queries and operates Downtrace — a first-class user of the product, not a part of it. The npm name `@downtrace/agent` keeps the older sense on purpose: renaming a published package costs its users more than the ambiguity costs them, and the ambiguity is bounded by saying which is which everywhere else.
 
@@ -66,16 +66,20 @@ Error: Cannot find package '@downtrace/agent'
 
 ### Next.js
 
-Use [`instrumentation.ts`](https://nextjs.org/docs/app/building-your-application/optimizing/instrumentation), which Next runs once before it serves anything. Three lines, no change to your Dockerfile, no `NODE_OPTIONS`, no change to your start command:
+Use [`instrumentation.ts`](https://nextjs.org/docs/app/building-your-application/optimizing/instrumentation), which Next runs once before it serves anything. A few lines, no change to your Dockerfile, no `NODE_OPTIONS`, no change to your start command — and [`downtrace init`](#configure-a-project-downtrace-init) writes them for you when it finds `output: "standalone"`:
 
 ```ts
 // instrumentation.ts, at the root of your project (or in src/)
 export async function register() {
-  await import("@downtrace/agent/register");
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    await import("@downtrace/agent/register");
+  }
 }
 ```
 
 Because your code imports it, Next traces it and ships it. Verified on Next 15 with `output: "standalone"`: the instrumentation starts, finds your `pg` and reports queries per route, and names each route by the file that serves it (`/api/products/[id]`; see Requirements).
+
+The condition is not optional. Next calls `register` in every runtime it builds for, and a project with a `middleware.ts` has the edge runtime too, which cannot load Node's own modules: without the condition, `next build` fails with `Reading from "node:module" is not handled by plugins`. Checked on Next 15.5 with `output: "standalone"`, with a middleware and without one: the hook above builds in both and the built server loads the instrumentation; the same hook without the condition builds only without the middleware.
 
 Your `tsconfig.json` needs `"moduleResolution"` set to `bundler`, `node16` or `nodenext` — the classic `node` setting cannot resolve the `/register` subpath. Next puts one of those in new projects; older ones may still be on `node`.
 
@@ -741,6 +745,39 @@ route is in a profile only when it ran something — a query, an outgoing call, 
 that ran nothing is in the aggregates and has no profile at all. And a profile that never arrived, like the one of a
 terminated thread, is not an empty one: the file does not say it was lost, so a route you cannot find in it is a route
 you did not observe, never a route that did not change.
+
+## Configure a project: `downtrace init`
+
+```sh
+npx @downtrace/agent init
+```
+
+It reads the project in the directory it runs in — its `package.json`, the lockfile beside it (or above it, up to the top of its git repository, where a workspace keeps the one lockfile), its `next.config` and its `tsconfig.json` — and writes what the project needs. It asks for no token and no URL, asks no question, and makes no network request: locally there is no cloud. Installed with the project, `npx downtrace init` is the same command; where `@downtrace/agent` is not installed, `npx downtrace` is not (see [`downtrace check`](#compare-two-runs-before-you-deploy-downtrace-check)), and every command `init` prints is spelled for whether the project has the package.
+
+| It looks for | Where | What it does with it |
+|---|---|---|
+| The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
+| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa) or `next` among the dependencies | says which |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `mysql2` and `ioredis` among the dependencies; outgoing HTTP always | says which |
+| A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
+
+An integration suite comes before the unit one because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: which routes the project has is in its code, and declaring them is yours (below).
+
+**Run it again whenever you like.** It writes `check.command` only where there is none: a `downtrace.json` that has one is left as it is, byte for byte, and one without it gets the command and keeps every other key, inside `check` and outside it. The hook is written only where the project has no `instrumentation` file at the root or in `src/`.
+
+When something cannot be detected or done, it says what and what to do instead, writes what it could, and ends with 1:
+
+| Code | What it means, and what to do |
+|---|---|
+| no-package-json | There is no `package.json` where it runs: run it at the root of the Node.js project, and in a monorepo in the directory of the service. |
+| no-framework | None of the frameworks above. In a monorepo, run it in the directory of the service. Elsewhere `check` still compares the runs: the instrumentation observes every request through `node:http` and names its route by the shape of its path (see Requirements). |
+| no-test-command | None of the scripts above. Give `check` a command that sends requests to the routes with their real dependencies: a test script, or a walk of the routes — a script that starts the application, sends a request to each route and stops it — in `downtrace.json` or after `--`. |
+| not-a-repository | No git repository holds the project, and `check` compares the working tree against a commit. |
+| not-installed | The build prunes and `@downtrace/agent` is not a dependency, so a hook that imports it would break the build: install it and run `npx downtrace init` again. |
+| instrumentation-exists | The project has a hook that does not load the instrumentation. It is not touched; add the `if` and its `import` above inside its `register()`. |
+| module-resolution | `tsconfig.json` sets `moduleResolution` to `node`, `node10` or `classic`, which cannot resolve `@downtrace/agent/register`: set it to `bundler`, `node16` or `nodenext`, and run it again. |
+
+The exit status: **0 configured**, **1 something could not be detected or done**, **2 a file it reads could not be read** — a `package.json` that is not JSON or not shaped as one (`bad-package-json`), a `downtrace.json` that `check` would refuse (`bad-config`; it is the person's, and not rewritten), or a file the system would not give (`io-error`) — and nothing was written. `--json` prints one object for a coding agent, `schema: "downtrace-init/1"`: `status` (`configured`, `incomplete` or `failed`), `project`, `detected` (the package manager, the frameworks, the observed packages, the test script and its command, and `bundler`), `command` (what `check` runs now: the one `init` wrote, or the one a person had put there), `files` (each `created`, `updated` or `unchanged`), `missing` (each with a `code`, a `message` and `advice`), `failure`, and `next`, the command to run next.
 
 ## Compare two runs before you deploy: `downtrace check`
 

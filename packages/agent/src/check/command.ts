@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { runInit } from "../init/command.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
 import { type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
 import { renderJson, renderText } from "./render.ts";
@@ -39,8 +40,8 @@ async function loadConfig(cwd: string, asked: string | undefined, env: NodeJS.Pr
 }
 
 /**
- * `downtrace`, as a function: reads the command line and the configuration, runs the check and says the result.
- * Returns the exit status, so that nothing in here ends the process.
+ * `downtrace`, as a function: reads the command line and the configuration, runs the check and says the result,
+ * or hands `init` to its own command. Returns the exit status, so that nothing in here ends the process.
  *
  * What goes to stdout is the result and nothing else — the text, or the JSON — so that `--json` can be piped;
  * the progress of a run that takes minutes goes to stderr.
@@ -59,6 +60,7 @@ export async function runCli(deps: CliDeps): Promise<number> {
     deps.stderr(`downtrace: ${parsed.message}\n\n${USAGE}`);
     return 2;
   }
+  if (parsed.kind === "init") return runInit({ cwd: deps.cwd, json: parsed.json, stdout: deps.stdout });
 
   const say = (report: CheckReport): number => {
     deps.stdout(parsed.json ? renderJson(report) : renderText(report));

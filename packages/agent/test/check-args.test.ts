@@ -47,11 +47,20 @@ describe("the command line of downtrace", () => {
     [["check", "--timeout", "0"], "--timeout wants a number of seconds above zero"],
     [["check", "--frobnicate"], "unknown option --frobnicate"],
     [["check", "npm", "test"], 'unexpected "npm": the test command goes after --'],
-    [["init"], 'unknown command "init"'],
+    [["deploy"], 'unknown command "deploy": the ones there are are "check" and "init"'],
+    [["init", "--frobnicate"], "unknown option --frobnicate for init"],
+    [["init", "src"], 'unexpected "src": init looks at the directory it runs in'],
   ])("says what is wrong with %j", (argv, message) => {
     const parsed = parseArgs(argv);
     expect(parsed.kind).toBe("error");
     expect(parsed.kind === "error" ? parsed.message : "").toContain(message);
+  });
+
+  it("reads init, with --json or without, and its help", () => {
+    expect(parseArgs(["init"])).toEqual({ kind: "init", json: false });
+    expect(parseArgs(["init", "--json"])).toEqual({ kind: "init", json: true });
+    expect(parseArgs(["init", "--help"])).toEqual({ kind: "help" });
+    expect(USAGE).toContain("downtrace init [--json]");
   });
 
   it("documents every option it reads", () => {
