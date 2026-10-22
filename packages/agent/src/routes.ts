@@ -315,7 +315,7 @@ function walkRouterLinks(anchor: RouterLike, route: object, remaining: string): 
       if (!ownsRoute(handle, route, 0)) continue;
       const matched = matchedValue(layer, remaining);
       if (matched === undefined) continue; // a double mount: this is not the one the request went through
-      links.push({ value: matched.value, pattern: linkPattern(layer, matched.index) });
+      links.push({ value: matched.value, pattern: candidatePattern(layer, matched.index) });
       remaining = remaining.slice(matched.value.length);
       current = handle;
       descended = true;
@@ -397,8 +397,9 @@ function mountCandidates(router: RouterLike, remaining: string, depth = 0): Moun
 }
 
 /**
- * The pattern a candidate was registered with. Express 4 keeps one regexp for a mount registered with several
- * paths and no matcher per path, so which of them matched cannot be told: no pattern, and `:param` follows.
+ * The pattern a mount was registered with, for the walk of a route and of `baseUrl` alike. Express 4 keeps one
+ * regexp for a mount registered with several paths and no matcher per path, so which of them matched cannot be
+ * told: no pattern, and `:param` follows, rather than the first path named for all of them (DT-25).
  */
 function candidatePattern(layer: LayerLike, index: number): string | undefined {
   const raw = mountPathOf(layer);

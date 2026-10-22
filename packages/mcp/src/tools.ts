@@ -339,7 +339,8 @@ export const tools: Tool[] = [
     description:
       "What a project looked like further back than the fine-grained data goes, hour by hour. `to` must be " +
       "after `from`, and a window longer than 3 × 366 days, more than any history this cloud keeps, is refused " +
-      "with 400. " +
+      "with 400. `environment` reads one environment, the same one in both windows; without it every " +
+      "environment is read together, and they share each window's cut. " +
       "`baselineFrom` and `baselineTo`, both or neither, are the other window the history page compares " +
       "against: with them the answer adds `baseline`, the window as asked for with whether the series covers " +
       "it, and `comparison`, one row per endpoint and metric with before, after, the change and whether it " +
@@ -356,6 +357,10 @@ export const tools: Tool[] = [
         project,
         from: { type: "string", format: "date-time", description: "RFC 3339 instant." },
         to: { type: "string", format: "date-time", description: "RFC 3339 instant." },
+        environment: {
+          type: "string",
+          description: "The environment to read, in both windows. Without it, every environment together.",
+        },
         baselineFrom: {
           type: "string",
           format: "date-time",
@@ -375,7 +380,7 @@ export const tools: Tool[] = [
     },
     method: "GET",
     path: "/api/p/{slug}/history",
-    query: ["from", "to", "baselineFrom", "baselineTo"],
+    query: ["from", "to", "environment", "baselineFrom", "baselineTo"],
   },
   {
     name: "list_errors",
@@ -550,7 +555,8 @@ export const tools: Tool[] = [
       "(`requests.links.first`); read them a page at a time, or one by its index, with `read_captured_requests`. " +
       "The coverages are what arrived; a delivery that did not fit whole in the evidence budget was stored with " +
       "its oldest requests left out, and `coverage.notStored` says how many, beyond what one delivery may hold " +
-      "and beyond what the capture had left — requests that were served and are not in the evidence. " +
+      "and beyond what the capture had left — requests that were served and are not in the evidence; and " +
+      "`coverage.dependenciesTruncated` says how many that arrived had their list of dependencies cut. " +
       "A capture is finished when `pending` is false, and not before: evidence can be there while it is still " +
       "`collecting`, waiting for the other instances that served its footprint to deliver theirs until " +
       "`collectingUntil`, at most its window and two minutes after the first delivery, because an instance that " +

@@ -106,6 +106,36 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     expect(body).not.toContain("otro");
   });
 
+  it("names each path of a mount registered with several, by the one that matched (DT-25)", async () => {
+    const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
+    const router = express.Router();
+    router.get("/users/:id", (req, res) => {
+      res.json({ id: req.params.id });
+    });
+    const app = express();
+    app.use(["/alpha/:x", "/beta/:x"], router);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    cleanups.push(
+      () => agent.stop(),
+      () => new Promise<void>((r) => server.close(() => r())),
+      sink.close,
+    );
+
+    await hit(url, "/alpha/secret1/users/1");
+    await hit(url, "/beta/secret2/users/2");
+    expect(await agent.flushNow()).toBe(true);
+    expect(sink.batches).toHaveLength(1);
+    const byRoute = routesOf(sink.batches[0]);
+    expect(Object.fromEntries(byRoute)).toEqual({ "/alpha/:x/users/:id": 1, "/beta/:x/users/:id": 1 });
+    const body = JSON.stringify(sink.batches[0]);
+    expect(body).not.toContain("secret1");
+    expect(body).not.toContain("secret2");
+  });
+
   it("keeps a mount without parameters as it was written", async () => {
     const sink = await startSink();
     const agent = createAgent(config(sink.url), { log: quiet });

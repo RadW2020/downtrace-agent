@@ -229,4 +229,42 @@ describe("a mounted router on Express 4 carries its pattern, and the instrumenta
     expect([...byRoute.keys()], "the pathless mount adds nothing to the template").toEqual(["/users/:id"]);
     expect(JSON.stringify(batch)).not.toContain("/users/42");
   });
+
+  it("names a mount registered with several paths as :param per segment, not as its first path (DT-25)", async () => {
+    const root = await express4Root();
+    cleanups.push(root.close);
+    armMounts(path.join(root.base, "app.js"));
+    const router = express4.Router();
+    router.get("/users/:id", (req, res) => {
+      res.json({ id: req.params.id });
+    });
+    const app = express4();
+    // Express 4 compiles the paths into one regexp and keeps no matcher per path: which of them matched
+    // cannot be told, so neither is named.
+    app.use(["/alpha/:x", "/beta/:x"], router);
+    const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    cleanups.push(
+      () => agent.stop(),
+      () => new Promise<void>((r) => server.close(() => r())),
+      sink.close,
+    );
+
+    expect(await hit(url, "/alpha/secret1/users/1")).toBe(200);
+    expect(await hit(url, "/beta/secret2/users/2")).toBe(200);
+    expect(await agent.flushNow()).toBe(true);
+    expect(sink.batches).toHaveLength(1);
+    const batch = sink.batches[0];
+    expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
+    const byRoute = routesOf(batch);
+    expect([...byRoute.keys()], "neither path is named for the other's traffic").toEqual(["/:param/:param/users/:id"]);
+    expect(byRoute.get("/:param/:param/users/:id")).toBe(2);
+    const body = JSON.stringify(batch);
+    expect(body, "the mount's values do not leave").not.toContain("secret1");
+    expect(body).not.toContain("secret2");
+  });
 });
