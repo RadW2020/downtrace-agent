@@ -171,7 +171,10 @@ function catchFetchConnectFailures(
           const target = hostOfInput(input);
           recordCallIn(ctx, "http", target, now - started, true);
           recordCall(ctx, calls, methodOfInput(input, init), target, started, now, true);
-          recordErrorIn(ctx, errors, true, error, target, started, now);
+          // Signed without its stack: what it holds depends on the Node — undici's frame, this wrapper's and
+          // the caller's on 20, 22 and an early 24; nothing on a late 24 — so the same error would have two
+          // identities, one with a frame of the instrumentation in it (DT-29, gh-907).
+          recordErrorIn(ctx, errors, true, error, target, started, now, { stack: false });
         }
       } catch (failure) {
         internalError(failure);

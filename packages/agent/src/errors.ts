@@ -92,17 +92,27 @@ function messageOf(err: unknown): string {
 }
 
 /**
+ * How a thrown thing is signed. `stack: false` leaves the place out, for a path whose stack says where the
+ * instrumentation caught it rather than where the application threw it (DT-29).
+ */
+export interface SignOptions {
+  stack?: boolean;
+}
+
+/**
  * The signature of a thrown thing: type, sanitised message and where it came from.
  *
  * Everything a person needs to recognise it, and nothing a person could not have written themselves. Two
  * occurrences of the same error at the same place share a hash; the same message thrown somewhere else does
  * not, which is what makes the signature about the code and not about the sentence.
+ *
+ * Without its stack, the signature is the one an error with no usable stack already has: type and message.
  */
-export function errorFingerprint(err: unknown): Fingerprint {
+export function errorFingerprint(err: unknown, options: SignOptions = {}): Fingerprint {
   const type = typeOf(err);
   const sanitised = sanitizeMessage(messageOf(err));
   const message = meaningful(sanitised) ? sanitised : "";
-  const where = stackSignature(err instanceof Error ? err.stack : undefined);
+  const where = options.stack === false ? "" : stackSignature(err instanceof Error ? err.stack : undefined);
   let text = type;
   if (message !== "") {
     text = `${type}: ${message}`;
@@ -149,15 +159,20 @@ export class ErrorFingerprintCache {
     return this.entries.size;
   }
 
-  get(err: unknown): Fingerprint {
+  get(err: unknown, options: SignOptions = {}): Fingerprint {
+    // Signed without its stack, an Error is keyed without it too: the stack is not read, and two throws of it
+    // from different places are one entry.
+    const signsStack = options.stack !== false;
     const key =
       err instanceof Error
-        ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
+        ? signsStack
+          ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
+          : `Bare\n${err.name}\n${err.message}`
         : `${typeOf(err)}\n${messageOf(err)}`;
     const cached = this.entries.get(key);
     if (cached) return cached;
     this.misses += 1;
-    const fingerprint = errorFingerprint(err);
+    const fingerprint = errorFingerprint(err, options);
     if (this.entries.size < this.max) this.entries.set(key, fingerprint);
     return fingerprint;
   }

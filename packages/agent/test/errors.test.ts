@@ -273,3 +273,42 @@ describe("ErrorFingerprintCache, keyed on what the signature actually reads", ()
     expect(real.hash).not.toBe(plain.hash);
   });
 });
+
+// DT-29. A rejection only the fetch wrapper sees carries, on Node 20, 22 and an early 24, undici's frame, the
+// wrapper's own and the caller's; on a late 24, none. Signed with its stack, the same error had two identities
+// depending on the Node, and one of them held a frame of the instrumentation. That path signs it without a place.
+describe("an error signed without its stack", () => {
+  const failed = (): TypeError => {
+    const err = new TypeError("fetch failed");
+    err.stack = [
+      "TypeError: fetch failed",
+      "    at node:internal/deps/undici/undici:13510:13",
+      "    at async wrapped (/srv/app/node_modules/@downtrace/agent/dist/instrument/http.js:163:14)",
+      "    at async checkout (/srv/app/src/orders.js:42:5)",
+    ].join("\n");
+    return err;
+  };
+
+  it("is its type and its message, whatever frames the stack holds", () => {
+    expect(errorFingerprint(failed(), { stack: false }).text).toBe("TypeError: fetch failed");
+    expect(errorFingerprint(failed()).text).toContain(" · ");
+  });
+
+  it("is the identity of the same error with no frame in its stack", () => {
+    const bare = new TypeError("fetch failed");
+    bare.stack = "TypeError: fetch failed";
+    expect(errorFingerprint(failed(), { stack: false }).hash).toBe(errorFingerprint(bare).hash);
+  });
+
+  it("is cached apart from the same error signed with its stack", () => {
+    const cache = new ErrorFingerprintCache();
+    const err = failed();
+    const placed = cache.get(err);
+    const bare = cache.get(err, { stack: false });
+    expect(bare.text).toBe("TypeError: fetch failed");
+    expect(bare.hash).not.toBe(placed.hash);
+    expect(cache.get(err).hash, "the first one keeps its own").toBe(placed.hash);
+    cache.get(err, { stack: false });
+    expect(cache.misses).toBe(2);
+  });
+});

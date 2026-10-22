@@ -536,3 +536,50 @@ describe("an outgoing call is an operation", () => {
     expect(ctx.operations).toBeUndefined();
   });
 });
+
+/**
+ * DT-29. What a real `fetch` that never connected carries in its stack depends on the Node: on 20, 22 and an
+ * early 24 it holds undici's frame, the wrapper's own and the caller's; on a late 24, none. The test above sees
+ * only the Node it runs on, so this one hands the wrapper the rejection the older ones throw.
+ */
+describe("a fetch that never connected, on a Node whose rejection carries frames", () => {
+  const errors = new ErrorFingerprintCache();
+  let real: typeof fetch;
+
+  beforeEach(() => {
+    stop();
+    real = globalThis.fetch;
+    globalThis.fetch = async () => {
+      const err = new TypeError("fetch failed");
+      err.stack = [
+        "TypeError: fetch failed",
+        "    at node:internal/deps/undici/undici:13510:13",
+        "    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)",
+        "    at async wrapped (/srv/app/node_modules/@downtrace/agent/dist/instrument/http.js:163:14)",
+        "    at async checkout (/srv/app/src/orders.js:42:5)",
+      ].join("\n");
+      throw err;
+    };
+    stop = instrumentHttp({ ...deps, errors });
+  });
+
+  afterEach(() => {
+    stop();
+    globalThis.fetch = real;
+    stop = instrumentHttp(deps);
+  });
+
+  it("identifies it by its type and its message, with no frame of the instrumentation nor of the caller", async () => {
+    const ctx = enterRequest();
+    await expect(fetch("http://127.0.0.1:1/nowhere")).rejects.toThrow("fetch failed");
+    const error = (await opsOf(ctx)).find((o) => o.kind === "error");
+    expect(error?.text).toBe("TypeError: fetch failed");
+  });
+
+  it("hands the application the error it threw, stack and all", async () => {
+    enterRequest();
+    const thrown = await fetch("http://127.0.0.1:1/nowhere").catch((err: unknown) => err);
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).stack).toContain("checkout (/srv/app/src/orders.js:42:5)");
+  });
+});

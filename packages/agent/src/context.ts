@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dependency, Operation } from "@downtrace/protocol";
-import type { ErrorFingerprintCache } from "./errors.ts";
+import type { ErrorFingerprintCache, SignOptions } from "./errors.ts";
 import type { FineRegister } from "./fine.ts";
 import type { QueryClass } from "./fingerprint.ts";
 
@@ -357,6 +357,7 @@ export function recordErrorIn(
   target: string,
   startedAt: number,
   endedAt: number,
+  sign: SignOptions = {},
 ): void {
   // Nothing thrown, or nobody asked for signatures: a failure with no error object still counts as a failed
   // call above, which is what it is.
@@ -364,7 +365,7 @@ export function recordErrorIn(
   if (ctx.excluded?.has(target)) return;
   recordOperationIn(ctx, {
     kind: "error",
-    fingerprint: errors.get(err),
+    fingerprint: errors.get(err, sign),
     startedAt,
     endedAt,
     failed: true,
