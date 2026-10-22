@@ -944,8 +944,12 @@ Where there is no Express to ask — a server on `node:http` alone, a framework 
 there is no route to have named the request, and the heuristic is the reserve: a segment that carries a value is
 collapsed into `:id`: anything with
 an `@` (an email, a handle), a `%` (a percent-encoding), a digit of any script unless the whole segment is a
-version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, and a run of 24 or 32+ hex.
-A plain word — a name, a slug, a file name with no number — travels as written: no rule of shape can tell a
+version (`v1`, `v2`, `v1.2`), a run of 16 or more with an uppercase in it, a UUID, a run of 24 or 32+ hex,
+and a bundler's content hash: a file name that ends in a dash, eight letters, digits, `_` or `-` with an
+uppercase among them, and an extension (`/assets/en-BAKsNXTF.js` and its `.js.map` are `/assets/:id`), which
+every build renames. Its cost is a camelCase word of exactly eight after the last dash: `app-MainView.js` is
+`:id` too, while `user-settings.js` keeps its name.
+A plain word — a name, a slug, a file name with no number and no hash — travels as written: no rule of shape can tell a
 parameter from a route's own words, and the ways to keep it out are an endpoint exclusion, matched against
 the template, and minimal mode. The same heuristic names the rest of the path after a mount that answered, as
 above.

@@ -38,4 +38,8 @@ export const SEGMENT_CASES: readonly SegmentCase[] = [
   { segment: "abcdefab-cdef-abcd-abcd-abcdefabcdef", value: "abcdefab-cdef-abcd-abcd-abcdefabcdef" },
   // And a run of hex the same way: 24 characters of the hex class with no digit and no uppercase.
   { segment: "abcdefabcdefabcdefabcdef", value: "abcdefabcdefabcdefabcdef" },
+  // A bundler's content hash with no digit in it, the way Vite and Rollup name a file (`[name]-[hash].ext`):
+  // eight characters too short for the mixed-case run, and the whole segment is its route only until the
+  // next build renames it (DT-57).
+  { segment: "en-BAKsNXTF.js", value: "BAKsNXTF" },
 ];

@@ -113,6 +113,31 @@ describe("routeOf", () => {
     expect(routeOf({ url: "/storage/s3/upload" })).toBe("/storage/:id/upload");
     expect(routeOf({ url: "/api/trpc/user.getProfileWithSettings" })).toBe("/api/trpc/:id");
     expect(routeOf({ url: "/checksums/sha256" })).toBe("/checksums/:id");
+    // A file name ending in a dash and eight characters with an uppercase reads as a bundler's hash, and so
+    // does a camelCase word of exactly that length (DT-57).
+    expect(routeOf({ url: "/assets/app-MainView.js" })).toBe("/assets/:id");
+  });
+
+  it("folds a bundler's content hash with no digit, which every build renames (DT-57)", () => {
+    // Vite and Rollup write `[name]-[hash].ext` with eight base64url characters; n8n's editor carries dozens
+    // with no digit in the hash, and each version would be a new set of routes.
+    expect(routeOf({ url: "/assets/en-BAKsNXTF.js" })).toBe("/assets/:id");
+    expect(routeOf({ url: "/assets/agents-E_QlcVoD.css" })).toBe("/assets/:id");
+    expect(routeOf({ url: "/assets/button-D_uLtVjX.js" })).toBe("/assets/:id");
+    expect(routeOf({ url: "/assets/chat.store-CcwiNgGw.js" })).toBe("/assets/:id");
+    expect(routeOf({ url: "/assets/assert-fQsdKKkY.js" })).toBe("/assets/:id");
+    // All uppercase, as esbuild writes a base32 hash, and a hash with a dash in it.
+    expect(routeOf({ url: "/assets/context.store-BPIZNWMT.js" })).toBe("/assets/:id");
+    expect(routeOf({ url: "/assets/index-D-uLtVjX.js" })).toBe("/assets/:id");
+    // And its source map, two extensions after the hash.
+    expect(routeOf({ url: "/assets/en-BAKsNXTF.js.map" })).toBe("/assets/:id");
+    // A file name of plain words keeps its name: eight lowercase letters are a word, not a hash; a hash with
+    // no extension is not a file; and a shorter or longer tail is not the bundler's.
+    expect(routeOf({ url: "/assets/user-settings.js" })).toBe("/assets/user-settings.js");
+    expect(routeOf({ url: "/assets/node_modules" })).toBe("/assets/node_modules");
+    expect(routeOf({ url: "/docs/en-BAKsNXTF" })).toBe("/docs/en-BAKsNXTF");
+    expect(routeOf({ url: "/assets/en-BAKsNXT.js" })).toBe("/assets/en-BAKsNXT.js");
+    expect(routeOf({ url: "/assets/en-BAKsNXTFG.js" })).toBe("/assets/en-BAKsNXTFG.js");
   });
 
   it("never copies the query or the fragment, and the template wins over the heuristic", () => {

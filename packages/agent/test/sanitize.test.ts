@@ -151,15 +151,17 @@ describe("what the heuristic upgrade leaves where it was", () => {
     return joined.length > 1 && joined.endsWith("/") ? joined.slice(0, -1) : joined;
   };
 
-  // What a segment none of the new rules reads: no `@`, no `%`, no digit outside a version, and no run of 16
-  // or more letters, digits, `_` or `-` with an uppercase in it. Written from the shapes and not from the
-  // rules, so it bounds what the corpus may carry instead of copying the rules.
+  // What a segment none of the new rules reads: no `@`, no `%`, no digit outside a version, no run of 16
+  // or more letters, digits, `_` or `-` with an uppercase in it, and no bundler's hash before an extension.
+  // Written from the shapes and not from the rules, so it bounds what the corpus may carry instead of
+  // copying the rules.
   const RUN = /[\p{L}\p{M}\p{N}_-]{16,}/gu;
   const noNewShape = (piece: string): boolean =>
     !piece.includes("@") &&
     !piece.includes("%") &&
     (!/\p{N}/u.test(piece) || /^[vV][0-9]+(?:\.[0-9]+)*$/.test(piece)) &&
-    ![...piece.matchAll(RUN)].some((run) => /\p{Lu}/u.test(run[0]));
+    ![...piece.matchAll(RUN)].some((run) => /\p{Lu}/u.test(run[0])) &&
+    !/-(?=[A-Za-z0-9_-]{0,7}[A-Z])[A-Za-z0-9_-]{8}(?:\.[A-Za-z0-9]+)+$/.test(piece);
 
   it("is every path made of segments none of the new shapes touches: it comes out as it did before gh-756", () => {
     // Built from pieces each old rule or no rule catches, glued with `/` so the segments meet. Seeded, so a

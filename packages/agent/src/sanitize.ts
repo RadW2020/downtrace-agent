@@ -256,8 +256,8 @@ export function meaningful(sanitised: string): boolean {
  * A segment is a value when any rule says it is, and then it becomes `:id` whole: the unit is the segment,
  * because collapsing only the part a rule matched would leave a half-value beside the mark.
  *
- * A plain word is not a value to any rule of shape — a name, a slug, a file name with no number — and it
- * stays as written, which is what the README says and what `product.md:106` does not guarantee. The lasting
+ * A plain word is not a value to any rule of shape — a name, a slug, a file name with no number and no
+ * bundler's hash — and it stays as written, which is what the README says and what `product.md:106` does not guarantee. The lasting
  * answer for one is the template the developer writes.
  *
  * Each rule decides a case that no other rule does, and `sanitize.test.ts` checks it by taking each one out
@@ -277,6 +277,11 @@ const SEGMENT_UPPER = /\p{Lu}/u;
 const SEGMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 24 hex characters, or 32 or more, whole segment. */
 const SEGMENT_HEX_ID = /^(?:[0-9a-f]{24}|[0-9a-f]{32,})$/i;
+/** A file name as Vite, Rollup and esbuild write it: a name, a dash, eight base64url characters, and one or more
+ * extensions (`en-BAKsNXTF.js`, `en-BAKsNXTF.js.map`). The hash is the captured group. */
+const SEGMENT_BUNDLER_FILE = /^.+-([A-Za-z0-9_-]{8})(?:\.[A-Za-z0-9]+)+$/;
+/** An ASCII uppercase letter, the only kind a bundler's hash carries. */
+const SEGMENT_ASCII_UPPER = /[A-Z]/;
 
 /** The `@` of an email or a handle. The email rule of a message would not take a handle, and a segment is
  * not a message: the `@` alone is what says it is somebody's. */
@@ -300,8 +305,25 @@ const aUuid: SegmentRule = (segment) => SEGMENT_UUID.test(segment);
  * of the class with no digit and no uppercase. */
 const aHexId: SegmentRule = (segment) => SEGMENT_HEX_ID.test(segment);
 
+/** A bundler's content hash with no digit in it, before the extension (DT-57): eight characters are too short for
+ * the mixed-case run, and every build renames the file, so each version would be a new set of routes. The hash
+ * needs an uppercase, which eight letters of a word do not carry: `user-settings.js` stays as written. The cost,
+ * pinned in a test: a camelCase word of exactly eight after the last dash, `app-MainView.js`, reads as a hash. */
+const aBundlerHash: SegmentRule = (segment) => {
+  const hash = SEGMENT_BUNDLER_FILE.exec(segment)?.[1];
+  return hash !== undefined && SEGMENT_ASCII_UPPER.test(hash);
+};
+
 /** The list the heuristic of `src/routes.ts` runs over each segment of a route without a template. */
-export const SEGMENT_RULES: readonly SegmentRule[] = [anAt, aPercent, aDigit, aMixedCaseRun, aUuid, aHexId];
+export const SEGMENT_RULES: readonly SegmentRule[] = [
+  anAt,
+  aPercent,
+  aDigit,
+  aMixedCaseRun,
+  aUuid,
+  aHexId,
+  aBundlerHash,
+];
 
 /**
  * What the heuristic asks of each segment of a route without a template: is it a value?
