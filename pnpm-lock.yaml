@@ -83,6 +83,8 @@ importers:
         specifier: workspace:*
         version: link:../reference-app
 
+  packages/coding-agent: {}
+
   packages/mcp: {}
 
   packages/protocol:

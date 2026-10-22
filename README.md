@@ -17,6 +17,7 @@ This repository is a **read-only mirror** of the public packages of Downtrace, s
 | [`packages/protocol`](packages/protocol) | `@downtrace/protocol` — the ingestion contract: JSON Schema, fixtures, generated types |
 | [`packages/reference-app`](packages/reference-app) | A reference backend with switchable regressions (N+1, slow dependency, aggressive retries, pool leak, new error) used as benchmark target and test bed |
 | [`packages/mcp`](packages/mcp) | `@downtrace/mcp` — the same queries and operations as tools a coding agent can discover and use, over MCP |
+| [`packages/coding-agent`](packages/coding-agent) | What a coding agent reads to use Downtrace: a block for a project's `AGENTS.md`, and a Claude Code plugin (`claude plugin marketplace add RadW2020/downtrace-agent`) |
 | [`packages/bench`](packages/bench) | The agent overhead benchmark: the agent must add < 1 ms at p99, < 3 pp of CPU and < 64 MiB, measured against the reference app. [Its README](packages/bench#readme) says how it is run and when its number is worth anything |
 
 ```sh

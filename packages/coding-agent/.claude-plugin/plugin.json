@@ -1,0 +1,9 @@
+{
+  "name": "downtrace",
+  "description": "Downtrace for Claude Code: when a change can make a Node.js backend slower or heavier, compare what each route runs before declaring it done, and start each session with what changed in production.",
+  "author": { "name": "Raúl Jiménez", "url": "https://github.com/RadW2020" },
+  "homepage": "https://github.com/RadW2020/downtrace-agent/tree/main/packages/coding-agent#readme",
+  "repository": "https://github.com/RadW2020/downtrace-agent",
+  "license": "MIT",
+  "keywords": ["downtrace", "performance", "regression", "n+1", "observability"]
+}

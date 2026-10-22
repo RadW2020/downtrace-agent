@@ -1,0 +1,11 @@
+{
+  "name": "@downtrace/coding-agent",
+  "private": true,
+  "description": "What a coding agent reads to use Downtrace: a skill and a Claude Code plugin, and a block for a project's AGENTS.md.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "license": "MIT"
+}

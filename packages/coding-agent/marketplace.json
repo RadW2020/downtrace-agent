@@ -1,0 +1,12 @@
+{
+  "name": "downtrace",
+  "owner": { "name": "Raúl Jiménez" },
+  "description": "Downtrace for coding agents",
+  "plugins": [
+    {
+      "name": "downtrace",
+      "source": "./packages/coding-agent",
+      "description": "When to use Downtrace, the check before a task is done, and what changed in production at the start of a session"
+    }
+  ]
+}
