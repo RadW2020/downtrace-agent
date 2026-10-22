@@ -198,11 +198,12 @@ describe("the evidence marks the rows whose dependency list did not fit", () => 
     const body = evidenceAt(evidence, 0);
     expect(body.requests).toHaveLength(2);
     for (const r of body.requests) expect(r.dependenciesTruncated).toBeUndefined();
-    // The zero is omitted, as `shed` is when there was no shedding in the window: a counter of zero says
-    // nothing, and the evidence that says nothing keeps the shape of the evidence of before the field.
-    expect(body.coverage.dependenciesTruncated).toBeUndefined();
+    // The zero is said (DT-124): absent is what a sender older than the field sends, and a count of none is a
+    // count. Unlike `shed`, which is absent when there was nothing to describe.
+    expect(body.coverage.dependenciesTruncated).toBe(0);
     expect(Object.keys(body.coverage).sort()).toEqual([
       "attachedRequests",
+      "dependenciesTruncated",
       "detailLost",
       "observedRequests",
       "truncated",

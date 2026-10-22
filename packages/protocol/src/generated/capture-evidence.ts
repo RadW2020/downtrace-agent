@@ -56,7 +56,7 @@ export interface CaptureCoverage {
   truncated: number;
   shed?: Shed;
   /**
-   * Requests whose list of dependencies was truncated. Their count is real and their list is not complete.
+   * Requests whose list of dependencies was truncated. Their count is real and their list is not complete. A sender that knows the field sends it, zero included. Absent in an evidence of protocol 0.9.0 or later is zero: @downtrace/agent 0.9.0 omitted it at zero. Absent in an earlier protocol is a sender older than the field, which did not say, and that is not none.
    */
   dependenciesTruncated?: number;
 }

@@ -848,9 +848,9 @@ export class Agent {
           // field (ADR 0210).
           ...(shedMs > 0 && shedReason !== undefined ? { shed: { ms: shedMs, reason: shedReason } } : {}),
           // How many of the rows this evidence carries kept a dependency list that did not fit the row —
-          // counted, like the mark on each, on what the rows say (ADR 0215). Omitted at zero, as `shed` is:
-          // a counter of zero says nothing.
-          ...(slice.dependenciesTruncated > 0 ? { dependenciesTruncated: slice.dependenciesTruncated } : {}),
+          // counted, like the mark on each, on what the rows say (ADR 0215). Said at zero too: absent is what a
+          // sender older than the count sends, and none is a count (DT-124).
+          dependenciesTruncated: slice.dependenciesTruncated,
         },
         reference: this.referenceFor(),
         coarse: this.coarseFor(),

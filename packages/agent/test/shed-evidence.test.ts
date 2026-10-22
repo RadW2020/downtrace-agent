@@ -256,6 +256,7 @@ describe("the evidence says when the fine detail was not being written", () => {
     expect(validateEvidence(body), ajv.errorsText(validateEvidence.errors)).toBe(true);
     expect(Object.keys(body.coverage).sort()).toEqual([
       "attachedRequests",
+      "dependenciesTruncated",
       "detailLost",
       "observedRequests",
       "truncated",
