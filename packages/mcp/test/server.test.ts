@@ -911,6 +911,17 @@ describe("a retry of an operation", () => {
     expect(description).not.toContain("nobody closed it by hand");
   });
 
+  // DT-12: an action says on whose behalf it was made, from the credential and never declared per call.
+  it("says on whose behalf an action was made, in close_finding and read_credential", () => {
+    for (const name of ["close_finding", "read_credential"]) {
+      const description = toolNamed(name)?.description ?? "";
+      for (const what of ["onBehalfOf", "null when that was not recorded"]) {
+        expect(description, `${name}: ${what}`).toContain(what);
+      }
+    }
+    expect(toolNamed("close_finding")?.description).toContain("closedOnBehalfOf");
+  });
+
   it("hands the 409 of a closed finding back with how it stands, and sends exactly one request", async () => {
     const standing =
       `{"error":"this finding is already closed, so nothing was changed","finding":7,"state":"closed",` +

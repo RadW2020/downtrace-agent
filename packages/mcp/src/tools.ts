@@ -132,8 +132,9 @@ export const tools: Tool[] = [
     name: "read_credential",
     description:
       "What the credential this server was given can do, asked before attempting anything: the project it belongs " +
-      "to, with its slug and name; its own name, id and level —read, operate or admin—; when it expires, null when " +
-      "it does not; the environments it reaches; and every route of a project with the level it needs and whether " +
+      "to, with its slug and name; its own name, id and level —read, operate or admin—; `onBehalfOf`, the person " +
+      "who answers for what it does, named by whoever created it, null when that was not recorded; when it " +
+      "expires, null when it does not; the environments it reaches; and every route of a project with the level it needs and whether " +
       "this credential opens it. Call it first when you do not know the project's slug: a project's credential " +
       "belongs to one project, this names it, and the list of projects does not open with it. Given the shared " +
       "administration password, it answers level admin and no project, and every route closed: through this " +
@@ -649,7 +650,10 @@ export const tools: Tool[] = [
       "409, changes nothing, and says how it stands closed — `closedReason`, `closedBy`, `closedNote`, " +
       "`closedByDeclared` and `closedAt`: `closedBy` is who closed it by hand or accepted its reference, and " +
       "there is none on an observed recovery, which nobody performed, nor on an acceptance whose who was not " +
-      "recorded. If that close is your own and its answer never reached you, the 409 is it." +
+      "recorded. Its answer's `closedBy` says who closed it and, in `onBehalfOf`, on whose behalf —the person " +
+      "your credential was created for, never something you declare—, null when that was not recorded; the " +
+      "finding carries it as `closedOnBehalfOf`. If that close is your own and its answer never reached you, " +
+      "the 409 is it." +
       idempotentRetry,
     inputSchema: {
       type: "object",
