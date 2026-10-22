@@ -348,8 +348,12 @@ requests, calls per request, errors — against each one running alone:
   operations and outgoing calls per request, same errors, whether the tracker is there or not.
 - **Its own cost does not change either**: no internal errors, and the meter never has to give anything up.
   The hook time it reports is sampled inside its own hooks, so your tracker's work is never counted as ours.
-- **Your tracker's ingestion is not reported as one of your dependencies.** It sends outside the request
-  that produced what it is sending, so there is no request to charge it to.
+- **Your tracker's ingestion is not reported as one of your dependencies.** `@sentry/node` sends an error
+  from inside the request that reported it, so its send would otherwise be a call and a dependency of that
+  route, coming and going with whether it answers before the request ends. This instrumentation recognises
+  that send by the request its transport makes — a `POST` to `…/api/<project>/envelope/?sentry_version=…&sentry_key=…`
+  with the `node:http` client — and does not observe it. Nothing wider: a `tunnel` you configure is a URL of
+  yours, and a call your application makes to it is counted like any other.
 
 ### Two `captureException`s while the migration lasts
 

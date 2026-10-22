@@ -508,8 +508,9 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
       expect(product(seen?.redis ?? {}), order).toEqual(product(base?.redis ?? {}));
       expect(product(seen?.operations ?? {}), order).toEqual(product(base?.operations ?? {}));
       // Including the outgoing calls, under the names above: the tracker's own ingestion never shows up as a
-      // dependency of a route. It sends outside the request that produced the error, so there is no request
-      // to charge it to — and if that ever changed, a migration would start reading as a new dependency.
+      // dependency of a route. It does send from inside the request that reported the error, and when its
+      // answer came back before the checkout ended it used to be charged to that route (DT-123); the
+      // instrumentation recognises that send and leaves it out, or a migration would read as a new dependency.
       expect(product(seen?.outgoing ?? {}), order).toEqual(product(base?.outgoing ?? {}));
       // What it says about itself, and first that it says anything at all. Inside `resources` an absent field
       // means zero (ADR 0093), so the two assertions below read a default when the field is missing and a
@@ -552,8 +553,8 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
       "GET /me": { callsPerRequest: [0, 1, 0, 0, 0, 0, 0, 0], errors: 0 },
       "POST /checkout": { callsPerRequest: [0, 0, 0, 1, 0, 0, 0, 0], errors: 0 },
     });
-    // The provider, and nothing else: the tracker's own ingestion is not in here, because it sends outside
-    // the request that produced what it is sending.
+    // The provider, and nothing else: the tracker's own ingestion is not in here, because the instrumentation
+    // does not observe the tracker's sends, even from inside the request that reported the error (DT-123).
     expect(base?.outgoing).toEqual({
       "POST /checkout": { provider: { callsPerRequest: [0, 1, 1, 0, 0, 0, 0, 0], errors: 1 } },
     });

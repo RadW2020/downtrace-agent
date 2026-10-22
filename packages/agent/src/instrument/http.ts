@@ -95,6 +95,7 @@ export function instrumentHttp(deps: InstrumentHttpDeps): () => void {
       "http.client.request.start",
       (message) => {
         const request = (message as { request?: HttpClientRequest }).request;
+        if (isTrackerIngestion(request)) return;
         begin(request, hostOfClientRequest(request), request?.method);
       },
     ],
@@ -247,7 +248,27 @@ function hostOf(origin: unknown): string {
 interface HttpClientRequest {
   host?: unknown;
   method?: unknown;
+  path?: unknown;
   getHeader?: (name: string) => unknown;
+}
+
+/**
+ * The envelope endpoint of `@sentry/node`, as its transport builds it (`@sentry/core` api.js, 10.75.0):
+ * `<dsn path>/api/<project id>/envelope/?sentry_version=7&sentry_key=<public key>&…`. The project id of a
+ * valid DSN is digits, and the key is always there, because a DSN without one is not valid.
+ */
+const TRACKER_ENVELOPE = /\/api\/\d+\/envelope\/\?sentry_version=\d+&sentry_key=/;
+
+/**
+ * The tracker this replaces sending to its own ingestion (ESC-16, DT-123). Its Node transport sends with the
+ * `node:http` client from wherever `captureException` was called, so from inside the request that reported the
+ * error, and that send would become a dependency and a call of the route — one that comes and goes with whether
+ * it answers before the request ends. It is the tracker's work, not the application's, so it is not observed:
+ * recognised by the request its transport makes and nothing wider. A `tunnel` the operator configured is a URL of
+ * theirs and is not recognised. The path is read here and goes nowhere (invariant 5).
+ */
+function isTrackerIngestion(request: HttpClientRequest | undefined): boolean {
+  return request?.method === "POST" && typeof request.path === "string" && TRACKER_ENVELOPE.test(request.path);
 }
 
 /**

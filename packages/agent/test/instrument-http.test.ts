@@ -169,6 +169,77 @@ describe("instrumentHttp", () => {
 });
 
 /**
+ * ESC-16, DT-123: the tracker this replaces, loaded beside it, sends its envelopes with the `node:http` client
+ * from inside the request that reported the error. That send is the tracker's, not the application's, and a
+ * route that reports an error mid-request must not gain a dependency and a call for it. The request below is
+ * the one `@sentry/node` 10.75.0 makes (`@sentry/node-core` transports/http.js, `@sentry/core` api.js): a POST
+ * to `<dsn path>/api/<project id>/envelope/?sentry_version=7&sentry_key=…`.
+ */
+describe("the tracker's own ingestion, sent from inside a request", () => {
+  const calls = new CallFingerprints("call");
+
+  beforeEach(() => {
+    stop();
+    stop = instrumentHttp({ ...deps, calls });
+  });
+
+  afterEach(() => {
+    stop();
+    stop = instrumentHttp(deps);
+  });
+
+  const post = (path: string) =>
+    new Promise<void>((done, fail) => {
+      const request = http.request({ host: "127.0.0.1", port, path, method: "POST" }, (res) => {
+        res.resume();
+        res.on("end", () => done());
+      });
+      request.on("error", fail);
+      request.end("{}");
+    });
+
+  const envelope =
+    "/api/1/envelope/?sentry_version=7&sentry_key=publickey&sentry_client=sentry.javascript.node%2F10.75.0";
+
+  it("is neither a dependency nor a call of the route, even when it answers before the request ends", async () => {
+    const ctx = enterRequest();
+    await post(envelope);
+    expect(await workOf(ctx)).toEqual([]);
+    expect(await opsOf(ctx)).toEqual([]);
+  });
+
+  it("is recognised under a DSN with a path of its own too", async () => {
+    const ctx = enterRequest();
+    await post(`/sentry${envelope}`);
+    expect(await workOf(ctx)).toEqual([]);
+    expect(await opsOf(ctx)).toEqual([]);
+  });
+
+  it("leaves the application's own calls where they were, in the same request", async () => {
+    const ctx = enterRequest();
+    await post(envelope);
+    await post("/authorize");
+    const [dep] = await workOf(ctx);
+    expect(dep?.target).toBe(`127.0.0.1:${port}`);
+    expect(dep?.calls).toBe(1);
+    expect((await opsOf(ctx)).map((o) => [o.kind, o.count])).toEqual([["call", 1]]);
+  });
+
+  it("is only that shape: an envelope path without the tracker's key, or not a POST, is the application's", async () => {
+    const ctx = enterRequest();
+    await post("/api/1/envelope/");
+    await new Promise<void>((done) => {
+      http.get({ host: "127.0.0.1", port, path: envelope }, (res) => {
+        res.resume();
+        res.on("end", () => done());
+      });
+    });
+    const [dep] = await workOf(ctx);
+    expect(dep?.calls).toBe(2);
+  });
+});
+
+/**
  * ERR-01, the half this ticket adds: an outgoing call that fails inside a request is an operation with its
  * identity, not only a failed call of the dependency. The identity is the one a failed query already had
  * (gh-338): the same signature, the same bounds, beside the same counters.
