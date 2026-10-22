@@ -393,9 +393,10 @@ export class Sender {
    * Sends one capture's evidence, on its own path and with its own size (ADR 0073).
    *
    * Never queued and never retried. A capture's evidence is worth something inside its window and nothing
-   * after it, and the cloud settles the race between instances by itself: the first evidence ends the
-   * capture and the rest get a `409`, which is not a failure here — it is another process having been
-   * quicker (gh-379).
+   * after it. The cloud gathers what the instances send by itself: the first evidence starts the collection
+   * and the capture keeps every one that arrives while it waits (ADR 0221). A `409` is evidence that arrived
+   * after the capture stopped waiting — closed, past its grace, or already holding what it waited for — and
+   * is not a failure here (gh-379).
    *
    * Returns whether the cloud took it, for the log and for the tests. Nothing upstream depends on it.
    */
@@ -413,7 +414,7 @@ export class Sender {
         return true;
       }
       if (res.status === 409) {
-        this.opts.log.debug(`evidence for ${id} was not needed: another instance got there first`);
+        this.opts.log.debug(`evidence for ${id} was not stored: the capture had stopped waiting for it`);
         return false;
       }
       this.opts.log.debug(`evidence for ${id} refused with ${res.status}`);

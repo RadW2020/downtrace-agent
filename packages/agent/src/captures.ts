@@ -13,7 +13,8 @@ import type { PendingCapture } from "./transport.ts";
  * **Every instance obeys.** The same answer reaches all of them, and none can know what the others are
  * doing without a coordination this instrumentation deliberately does not have. Observing costs nothing —
  * the fine register is always on (ADR 0067/0068) — and the only thing that costs is the upload, which the
- * cloud settles by itself: the first evidence ends the capture and the rest get a 409.
+ * cloud gathers by itself: the first evidence starts the collection, the capture keeps what every instance
+ * that served it sends while it waits, and what arrives after it stopped waiting gets a 409 (ADR 0221).
  */
 
 /** How many captures may be watched at once. Bounded like everything else the agent holds. */

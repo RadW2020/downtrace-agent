@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
   AGGREGATES_SCHEMA_V0,
+  type CaptureEvidence,
   type CaptureProgress,
   type Interval,
   type LocalTrigger,
@@ -109,6 +110,31 @@ describe("Sender", () => {
     const [a, b] = await Promise.all([s.flush(), s.flush()]);
     expect([a, b].sort()).toEqual([false, true]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+/**
+ * A capture gathers the evidence of every instance that served its fingerprint while it collects, and the cloud
+ * answers `409` to whatever arrives after it stopped waiting: closed, past its grace, or already holding what it
+ * waited for (ADR 0221). Not another instance having been quicker, which is what the log said before (DT-54).
+ */
+describe("Sender, when the capture no longer waits for the evidence", () => {
+  const evidence: CaptureEvidence = {
+    protocol: PROTOCOL_VERSION,
+    instance: { id: "i" },
+    startedAt: "2026-09-24T00:00:00.000Z",
+    endedAt: "2026-09-24T00:00:10.000Z",
+    coverage: { observedRequests: 0, attachedRequests: 0, detailLost: 0, truncated: 0 },
+    requests: [],
+  };
+
+  it("takes a 409 as not stored, does not retry and says the capture had stopped waiting", async () => {
+    const debug: string[] = [];
+    const { s, calls } = sender([409, 202], { warn: () => {}, debug: (m) => debug.push(m) });
+    expect(await s.sendEvidence("cap-1", evidence)).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(debug).toEqual(["evidence for cap-1 was not stored: the capture had stopped waiting for it"]);
+    expect(debug.join("\n")).not.toMatch(/another instance|got there first/);
   });
 });
 

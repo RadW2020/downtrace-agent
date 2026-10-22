@@ -603,7 +603,7 @@ export class Agent {
     this.agentInfo.observers = observers;
     // The other half of the control channel: the orders come back in the answer to a batch (ADR 0071), and
     // until now nobody was listening. Every instance obeys — none can know what the others are doing — and
-    // the cloud settles the race with a `409` on the second evidence (gh-379).
+    // the cloud gathers their evidence while the capture waits, with a `409` for what arrives after (ADR 0221).
     this.sender.onCaptures = (pending) =>
       this.guard(() => {
         // The shed reading and the start are sealed together: both are this capture's beginning, and the
@@ -794,8 +794,8 @@ export class Agent {
    *
    * A capture that saw nothing sends **empty** evidence and not silence: «a capture with no requests does not prove
    * recovery» (CAP-01), and the cloud already knows how to answer that. Failures are logged and
-   * dropped — a `409` is another instance having been quicker, and nothing here is worth retrying after its
-   * window has closed (gh-379).
+   * dropped — a `409` is evidence the capture had stopped waiting for (ADR 0221), and nothing here is worth
+   * retrying after its window has closed (gh-379).
    *
    * On the way out they share the deadline the batch had. Once it has passed nothing more is built or sent: the
    * request in flight is cut, the rest are dropped, and how many captures went without their evidence is said.
