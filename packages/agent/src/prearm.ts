@@ -120,9 +120,17 @@ export interface ObservedRequest {
   startedAt: number;
   durationMs: number;
   poolWaitMs?: number;
-  /** As the ring gave them, kind included: the evidence names the kind of every operation (ADR 0219). */
-  operations: FineOperation[];
-  dependencies: string[];
+  /**
+   * As the ring gave them, kind included: the evidence names the kind of every operation (ADR 0219).
+   *
+   * Asked for, not handed over: read back only when the route is armed. Every request in the process
+   * finishes through `observe`, and almost none is armed, so a list built before the question was a list
+   * built per request and per operation for nothing (DT-50, invariant 3) — the same reason
+   * `reference.consider` takes its operations as a function (gh-307).
+   */
+  operations: () => FineOperation[];
+  /** The same: asked for only when the route is armed (DT-50). */
+  dependencies: () => Iterable<string>;
 }
 
 export interface PrearmOptions {
@@ -175,6 +183,12 @@ export class PrearmRegister {
   private readonly arms: (Arm | undefined)[];
   private opCursor = 0;
   private shedding = false;
+  /**
+   * The latest instant any arm reaches. Past it nothing is armed, which is the normal case, and `observe`
+   * answers that without building the label or walking the arms (DT-50). Only ever raised: an arm that ends
+   * early does not exist, so it is a bound, never a promise that something is armed.
+   */
+  private liveUntil = Number.NEGATIVE_INFINITY;
   /** Routes a signal asked to arm and that did not fit. Counted, never silent (invariant 14). */
   routesDropped = 0;
   /** What the label tables had no room for, per row that asked (COB-01). */
@@ -211,12 +225,14 @@ export class PrearmRegister {
     if (existing >= 0) {
       const arm = this.arms[existing];
       if (arm) arm.until = now + forMs;
+      this.liveUntil = Math.max(this.liveUntil, now + forMs);
       return true;
     }
     for (let i = 0; i < this.routeCapacity; i++) {
       const arm = this.arms[i];
       if (arm === undefined || arm.until <= now) {
         this.arms[i] = { label, armedAt: now, until: now + forMs, written: 0 };
+        this.liveUntil = Math.max(this.liveUntil, now + forMs);
         return true;
       }
     }
@@ -244,9 +260,13 @@ export class PrearmRegister {
     this.shedding = on;
   }
 
-  /** Records a request, if its route is armed. Costs nothing for every other request in the process. */
+  /**
+   * Records a request, if its route is armed. For every other request it costs the questions and nothing
+   * else: the operations and the dependencies are read only for a row it keeps (DT-50), and with no arm
+   * alive it does not even build the label.
+   */
   observe(r: ObservedRequest): void {
-    if (this.shedding) return;
+    if (this.shedding || r.startedAt >= this.liveUntil) return;
     const label = `${r.method} ${r.armRoute}`;
     const slot = this.slotOf(label, r.startedAt);
     if (slot < 0) return;
@@ -260,7 +280,7 @@ export class PrearmRegister {
     const at = index * R_FIELDS;
     const from = this.opCursor;
     let kept = 0;
-    for (const op of r.operations) {
+    for (const op of r.operations()) {
       if (kept >= this.opCapacity) break;
       const o = (this.opCursor % this.opCapacity) * O_FIELDS;
       this.operations[o + O_FINGERPRINT] = packOperation(this.fingerprintLabels.intern(op.hash), op.kind);
@@ -279,7 +299,7 @@ export class PrearmRegister {
     const depAt = index * DEPS_PER_REQUEST;
     let deps = 0;
     let overflow = false;
-    for (const dependency of r.dependencies) {
+    for (const dependency of r.dependencies()) {
       if (deps >= DEPS_PER_REQUEST) {
         overflow = true;
         break;

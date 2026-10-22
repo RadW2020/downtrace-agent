@@ -29,8 +29,8 @@ describe("the prearmed reserve carries what a capture needs", () => {
       startedAt: 1_100,
       durationMs: 42,
       poolWaitMs: 7,
-      operations: [{ hash: "abc", startMs: 1, endMs: 5 }],
-      dependencies: [dependencyKey("postgres", "db:5432")],
+      operations: () => [{ hash: "abc", startMs: 1, endMs: 5 }],
+      dependencies: () => [dependencyKey("postgres", "db:5432")],
     });
 
     const reserve = prearm.reserveFor("GET", "/cart", 1_200);
@@ -65,8 +65,8 @@ describe("the prearmed reserve carries what a capture needs", () => {
       status: 200,
       startedAt: 1_100,
       durationMs: 42,
-      operations: [{ hash: "abc", startMs: 1, endMs: 5 }],
-      dependencies: [],
+      operations: () => [{ hash: "abc", startMs: 1, endMs: 5 }],
+      dependencies: () => [],
     });
 
     const reserve = prearm.reserveFor("GET", "/cart", 1_200);
@@ -143,5 +143,62 @@ describe("what the agent puts in the reserve", () => {
     expect(only?.dependencies).toEqual([dependencyKey("postgres", "db:5432")]);
     // The one the shipped version threw away.
     expect(only?.operations.length).toBeGreaterThan(0);
+  });
+
+  // DT-50. Every request in the process finishes through the reserve, and almost none is armed: the detail is
+  // read back from the ring only for a row the reserve keeps. Counted on the ring itself, which is where the
+  // copy came from — `operationsAt` builds an array, and an object per operation.
+  it("reads nothing back from the ring for a request of a route nobody armed", async () => {
+    const reads = { count: 0 };
+    class CountingFine extends FineRegister {
+      override operationsAt(opFrom: number, opCount: number) {
+        reads.count += 1;
+        return super.operationsAt(opFrom, opCount);
+      }
+    }
+    const prearm = new PrearmRegister();
+    const agent = new Agent(
+      testConfig("http://127.0.0.1:1/x", {
+        environment: "test",
+        version: "t1",
+        intervalMs: 60_000,
+        instrument: new Set(["http"]),
+      }),
+      { fine: new CountingFine(), prearm, log: { warn: () => {}, debug: () => {} } },
+    );
+    const serve = (url: string) => {
+      const request = { method: "GET", url };
+      channel("http.server.request.start").publish({ request });
+      recordCall("postgres", "db:5432", 3, false);
+      const ctx = currentContext();
+      if (!ctx) throw new Error("the agent did not open a request context");
+      recordOperationIn(ctx, {
+        kind: "query",
+        fingerprint: { hash: "b7c1d0f2", text: "SELECT id FROM cart WHERE id = ?" },
+        startedAt: 1,
+        endedAt: 3,
+      });
+      channel("http.server.response.finish").publish({ request, response: { statusCode: 200 } });
+    };
+    agent.start();
+    try {
+      // Nothing armed at all: the normal case.
+      for (let i = 0; i < 5; i += 1) serve("/cart");
+      expect(reads.count).toBe(0);
+      // Another route armed: this one still copies nothing.
+      prearm.arm("GET /orders", Date.now() - 1_000, 60_000);
+      for (let i = 0; i < 5; i += 1) serve("/cart");
+      expect(reads.count).toBe(0);
+      expect(prearm.reserveFor("GET", "/cart", Date.now())).toBeNull();
+      // And the armed one is read once per request it keeps, with what it kept unchanged.
+      serve("/orders");
+      expect(reads.count).toBe(1);
+    } finally {
+      await agent.stop();
+    }
+    const reserve = prearm.reserveFor("GET", "/orders", Date.now());
+    expect(reserve?.requests).toHaveLength(1);
+    expect(reserve?.requests[0]?.dependencies).toEqual([dependencyKey("postgres", "db:5432")]);
+    expect(reserve?.requests[0]?.operations.length).toBeGreaterThan(0);
   });
 });

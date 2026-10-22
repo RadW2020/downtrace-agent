@@ -561,8 +561,8 @@ describe("a capture without a route at the registers' worst case", () => {
         status: 200,
         startedAt: at + 1 + i,
         durationMs: 10,
-        operations: [],
-        dependencies: [pg],
+        operations: () => [],
+        dependencies: () => [pg],
       });
     }
   };

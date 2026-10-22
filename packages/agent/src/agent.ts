@@ -1145,8 +1145,9 @@ export class Agent {
         // wait of zero.
         poolWaitOf(ctx?.work),
       );
-      // And into the armed route's own reserve, if this route is one. Costs nothing for every other request:
-      // `observe` looks up the arm and returns (ADR 0122). Routes are armed a few lines above, from the pool
+      // And into the armed route's own reserve, if this route is one. For every other request it costs the
+      // look-up and nothing more: the operations and the dependencies are functions, called only for a row the
+      // reserve keeps (ADR 0122, DT-50) — built here they were a copy per request and per operation. Routes are armed a few lines above, from the pool
       // wait of the interval just built — this comment used to say nothing armed yet, which stopped being
       // true when gh-476 landed and is how the rest of this went unnoticed (gh-498).
       this.prearm.shed(!this.overhead.keeping(Sheddable.Fine));
@@ -1164,8 +1165,8 @@ export class Agent {
         // The same detail the ring was just given, read back from the range this request wrote: a row with
         // no operations and no dependencies is a request with its evidence thrown away, which is the
         // opposite of what a reserve is for. They used to be empty lists here (gh-498).
-        operations: this.fine.operationsAt(ctx?.fineFrom ?? 0, ctx?.fineOps ?? 0).operations,
-        dependencies: ctx?.work ? [...ctx.work.keys()] : [],
+        operations: () => this.fine.operationsAt(ctx?.fineFrom ?? 0, ctx?.fineOps ?? 0).operations,
+        dependencies: () => ctx?.work?.keys() ?? [],
         poolWaitMs: poolWaitOf(ctx?.work),
       });
       // And the same request is offered to the reference samples. The operations are read back from the

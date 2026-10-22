@@ -12,8 +12,8 @@ const request = (route: string, startedAt: number, durationMs = 10) => ({
   status: 200,
   startedAt,
   durationMs,
-  operations: [{ hash: "a", startMs: 1, endMs: 2 }],
-  dependencies: [],
+  operations: () => [{ hash: "a", startMs: 1, endMs: 2 }],
+  dependencies: () => [],
 });
 
 describe("the prearm reserve", () => {
@@ -36,6 +36,36 @@ describe("the prearm reserve", () => {
     r.observe(request("/cart", 1_000));
 
     expect(r.requestsFor("GET /cart", 0).length).toBe(0);
+  });
+
+  // DT-50. The detail is asked for, and only a row the reserve keeps asks: not a route nobody armed, not
+  // when nothing is armed at all, not after every arm ran out, and not while the reserve sheds.
+  it("asks for the operations and the dependencies only of a row it keeps", () => {
+    const asked: string[] = [];
+    const counted = (route: string, startedAt: number) => ({
+      ...request(route, startedAt),
+      operations: () => {
+        asked.push(`operations ${route}`);
+        return [{ hash: "a", startMs: 1, endMs: 2 }];
+      },
+      dependencies: () => {
+        asked.push(`dependencies ${route}`);
+        return [dependencyKey("postgres", "db:5432")];
+      },
+    });
+    const r = new PrearmRegister();
+    r.observe(counted("/cart", 900));
+    r.arm("GET /cart", 1_000, 5_000);
+    r.observe(counted("/other", 1_100));
+    r.shed(true);
+    r.observe(counted("/cart", 1_200));
+    r.shed(false);
+    r.observe(counted("/cart", 7_000));
+    expect(asked).toEqual([]);
+
+    r.observe(counted("/cart", 1_300));
+    expect(asked).toEqual(["operations /cart", "dependencies /cart"]);
+    expect(r.requestsFor("GET /cart", 1_400)).toHaveLength(1);
   });
 
   // An arm ends on its own. Nothing has to remember to disarm it, and what it held stops being held.
@@ -109,7 +139,7 @@ describe("the prearm reserve", () => {
     r.arm("GET /cart", 1_000, 60_000);
     r.observe({
       ...request("/cart", 1_100),
-      operations: [
+      operations: () => [
         { hash: "q", kind: "query", startMs: 1, endMs: 2 },
         { hash: "c", kind: "call", startMs: 2, endMs: 9 },
         { hash: "r", kind: "command", startMs: 3, endMs: 4 },
@@ -159,8 +189,8 @@ describe("the label tables of the reserve", () => {
     status: 200,
     startedAt,
     durationMs: 10,
-    operations: [{ hash: String(i).padStart(16, "0"), startMs: 1, endMs: 2 }],
-    dependencies: [dependencyKey("postgres", `db-${i}:5432`)],
+    operations: () => [{ hash: String(i).padStart(16, "0"), startMs: 1, endMs: 2 }],
+    dependencies: () => [dependencyKey("postgres", `db-${i}:5432`)],
   });
 
   it("counts the names it interns, and stops growing at the cap", () => {
@@ -210,8 +240,8 @@ describe("the label tables of the reserve", () => {
       status: 200,
       startedAt: 1_100,
       durationMs: 10,
-      operations: [],
-      dependencies: [
+      operations: () => [],
+      dependencies: () => [
         dependencyKey("postgres", "db-0:5432"),
         dependencyKey("redis", "cache-0:6379"),
         dependencyKey("http", "service-0:443"),
@@ -234,8 +264,8 @@ describe("the label tables of the reserve", () => {
       status: 200,
       startedAt: 1_110,
       durationMs: 10,
-      operations: [],
-      dependencies: [dependencyKey("postgres", "db-0:5432")],
+      operations: () => [],
+      dependencies: () => [dependencyKey("postgres", "db-0:5432")],
     });
     expect(r.requestsFor("GET /cart", 1_200)[1]?.dependenciesTruncated).toBeUndefined();
   });
@@ -245,7 +275,7 @@ describe("the label tables of the reserve", () => {
     r.arm("GET /cart", 1_000, 60_000);
     r.observe({
       ...fresh(0, 1_100),
-      dependencies: [
+      dependencies: () => [
         dependencyKey("postgres", "db-0:5432"),
         dependencyKey("redis", "cache-0:6379"),
         dependencyKey("http", "service-0:443"),
@@ -312,14 +342,16 @@ describe("the label tables of the reserve", () => {
           status: 200,
           startedAt: 1_000 + i,
           durationMs: 10,
-          operations: Array.from({ length: 16 }, (_, j) => ({
-            hash: String(i * 16 + j).padStart(16, "0"),
-            startMs: j,
-            endMs: j + 1,
-          })),
-          dependencies: Array.from({ length: 4 }, (_, j) =>
-            dependencyKey("postgres", `${"t".repeat(252)}${String(i * 4 + j).padStart(4, "0")}`),
-          ),
+          operations: () =>
+            Array.from({ length: 16 }, (_, j) => ({
+              hash: String(i * 16 + j).padStart(16, "0"),
+              startMs: j,
+              endMs: j + 1,
+            })),
+          dependencies: () =>
+            Array.from({ length: 4 }, (_, j) =>
+              dependencyKey("postgres", `${"t".repeat(252)}${String(i * 4 + j).padStart(4, "0")}`),
+            ),
         });
         i += 1;
       }
