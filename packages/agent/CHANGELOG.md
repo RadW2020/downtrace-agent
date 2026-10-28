@@ -1,5 +1,63 @@
 # @downtrace/agent
 
+## 0.10.0
+
+### Minor Changes
+
+- 81b3e1f: A `downtrace` command, with no account and nothing leaving the machine.
+
+  `downtrace check` runs the project's tests on a base (default `HEAD`) and on the working tree, with the
+  instrumentation writing locally, and compares them route by route by composition: which queries, outgoing calls
+  and Redis commands each request ran, and how many times. Durations are shown, never judged. A route the tests did
+  not call is said to be not evaluated, never unchanged. `--json` prints the result for a coding agent; the exit
+  status is 0 when no route got worse, 1 when one did, 2 when no comparison could be made.
+
+  `downtrace init` reads the project (package.json, its lockfile, next.config, tsconfig.json) and writes
+  `downtrace.json` with its test command, plus the `instrumentation.ts` a Next.js `output: "standalone"` build
+  needs. It asks nothing and makes no network request.
+
+- 6f5b75c: A bundler's content hash with no digit in it no longer names a route of its own.
+  
+  Where no framework names a request and the route comes from the shape of its path, a file name as Vite, Rollup
+  or esbuild writes it — a name, a dash, eight characters with an uppercase among them, and an extension, such as
+  `/assets/en-BAKsNXTF.js` or its `.js.map` — is now `/assets/:id`. Each build renames those files, so each deploy
+  used to start a new set of routes and orphan the previous one. The cost: a file name ending in a camelCase word
+  of exactly eight characters, `app-MainView.js`, is folded too; `user-settings.js` keeps its name.
+
+### Patch Changes
+
+- bb7db0f: A `fetch` that never connected is identified by its type and its message alone, on every Node.
+  
+  On Node 20, 22 and an early 24 the rejection of such a `fetch` carries undici's frame, the instrumentation's own
+  wrapper and the caller's, so its identity read `TypeError: fetch failed · (node) ← (@downtrace/agent) ← …`; on a
+  recent 24 it carries none and read `TypeError: fetch failed`. It is now `TypeError: fetch failed` everywhere. On
+  Node 20 and 22 that identity changes once, at the upgrade.
+- bca2f0e: A `409` on a capture's evidence is logged as what it is since a capture collects the evidence of every instance that served it: the capture had stopped waiting for it, not another instance having got there first.
+- 37c9e0a: On Express 4, a router mounted with several paths no longer files every request under the first of them.
+  
+  `app.use(["/alpha/:x", "/beta/:x"], router)` used to name a request to `/beta/…/users/2` as `/alpha/:x/users/:id`.
+  Express 4 keeps one regexp for all the paths and nothing that says which one matched, so the mount now comes out as
+  `:param` per segment, `/:param/:param/users/:id`, as the README already said. Express 5 keeps naming each path.
+- 69b2888: A capture's evidence says `coverage.dependenciesTruncated` at zero too.
+  
+  The count of requests whose list of dependencies was cut was left out when it was zero, and the cloud read its
+  absence as an instrumentation older than the count: every ordinary capture said its instrumentation was out of
+  date. The count is now always sent; the cloud also reads its absence from protocol 0.9.0 on as zero, so an
+  instrumentation already installed is described correctly too.
+- 50a544c: A request of a route nobody armed no longer pays for the prearmed reserve.
+  
+  Every finished request used to build a copy of its operations and its dependencies for the reserve before the
+  reserve looked whether its route was armed, which is almost never. The reserve now asks for them only for a row
+  it keeps, and with no arm alive it answers without building the route's label. What an armed route keeps is
+  unchanged.
+- da278c8: With `@sentry/node` loaded beside it, the tracker's send to its own ingestion is no longer counted as a call
+  and a dependency of the route whose request reported the error.
+  
+  `@sentry/node` sends from inside that request, so when its ingestion answered before the request ended the
+  route gained a `POST <ingest host>` call and an `http` dependency, and lost them again when it did not. The send
+  is recognised by the request the tracker's transport makes — a `POST` to
+  `…/api/<project>/envelope/?sentry_version=…&sentry_key=…` with the `node:http` client — and is not observed.
+
 ## 0.9.0
 
 ### Minor Changes
