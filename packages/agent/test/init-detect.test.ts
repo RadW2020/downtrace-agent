@@ -127,6 +127,23 @@ describe("the package manager and the command", () => {
 });
 
 describe("what the project runs", () => {
+  it("knows a NestJS project: its platform as the framework, slonik's pg, and its end-to-end suite as the test", async () => {
+    // As Nest's CLI writes a project: `test` is the unit suite, with mocks, and `test:e2e` the one that calls the
+    // application in process with its real modules — the one `check` can judge (Sairyss/domain-driven-hexagon).
+    const dir = await project({ ".git/": "" });
+    const found = await detect(
+      dir,
+      pkg({
+        dependencies: { "@nestjs/core": "^10", "@nestjs/platform-express": "^10", slonik: "^37" },
+        scripts: { test: "jest --config .jestrc.json", "test:e2e": "jest -i --config jest-e2e.json" },
+      }),
+    );
+    expect(found.frameworks).toEqual(["@nestjs/platform-express"]);
+    expect(found.observed).toEqual(["slonik"]);
+    expect(found.testScript).toBe("test:e2e");
+    expect(found.testCommand).toBe("npm run test:e2e");
+  });
+
   it("names the frameworks and the observed dependencies it depends on, and nothing else", async () => {
     const dir = await project({ ".git/": "" });
     const found = await detect(

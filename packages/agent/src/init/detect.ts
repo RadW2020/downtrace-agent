@@ -13,24 +13,54 @@ export const AGENT_PACKAGE = "@downtrace/agent";
 
 /**
  * The packages that say a project runs a framework whose routes the instrumentation names by their templates:
- * Express, Koa (and Strapi, which runs on it), Fastify and Next.js. Elsewhere a request is still observed, through
+ * Express, Koa (and Strapi, which runs on it), Fastify, Next.js, and NestJS on either of its platforms — Nest
+ * serves through Express or Fastify, which name its routes. Elsewhere a request is still observed, through
  * `node:http`, and its route is named by the shape of its path.
  */
-export const FRAMEWORK_PACKAGES = ["express", "koa", "@strapi/strapi", "fastify", "next"] as const;
+export const FRAMEWORK_PACKAGES = [
+  "express",
+  "koa",
+  "@strapi/strapi",
+  "fastify",
+  "next",
+  "@nestjs/platform-express",
+  "@nestjs/platform-fastify",
+] as const;
 
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
- * does: Postgres through `pg` (and Prisma's adapter for it) and through postgres.js (`postgres`), MySQL through
- * `mysql2`, Redis through `ioredis` and `redis` (node-redis, from 5.12).
+ * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
+ * postgres.js (`postgres`), MySQL through `mysql2`, Redis through `ioredis` and `redis` (node-redis, from 5.12). A
+ * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
+ * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
-export const OBSERVED_PACKAGES = ["pg", "@prisma/adapter-pg", "postgres", "mysql2", "ioredis", "redis"] as const;
+export const OBSERVED_PACKAGES = [
+  "pg",
+  "@prisma/adapter-pg",
+  "slonik",
+  "postgres",
+  "mysql2",
+  "ioredis",
+  "redis",
+] as const;
 
 /**
- * The scripts that can be the test command, in the order they are preferred. An integration suite comes first
- * because `check` judges what each request ran: a suite whose database is simulated observes nothing, and its
- * routes are not evaluated.
+ * The scripts that can be the test command, in the order they are preferred. An integration suite comes first, and
+ * an end-to-end one next, because `check` judges what each request ran: a suite whose database is simulated
+ * observes nothing, and its routes are not evaluated. NestJS's CLI writes `test:e2e` into every project it makes,
+ * for the suite that calls the application in process with its real modules, and `test` for the unit one with
+ * mocks: `test` first was the unit suite, in which no route runs anything (the stranger campaign of 2026-10-29).
  */
-export const TEST_SCRIPTS = ["test:integration", "test-integration", "test:int", "integration", "test"] as const;
+export const TEST_SCRIPTS = [
+  "test:integration",
+  "test-integration",
+  "test:int",
+  "integration",
+  "test:e2e",
+  "test-e2e",
+  "e2e",
+  "test",
+] as const;
 
 /** What `npm init` writes as the test script, which is no test at all. */
 const NPM_PLACEHOLDER = /no test specified/;
