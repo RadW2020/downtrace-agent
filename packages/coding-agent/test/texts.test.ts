@@ -232,7 +232,10 @@ describe("the plugin", () => {
     };
     const server = config.mcpServers.downtrace;
     expect(server?.command).toBe("npx");
-    expect(server?.args).toEqual(["-y", "@downtrace/mcp"]);
+    // The version released with the plugin, exact: the directory of Claude plugins refuses an npx that is not
+    // pinned. `scripts/sync-mcp-version.sh` writes it with the versions PR.
+    const mcp = (await readJson("../mcp/package.json")) as { version: string };
+    expect(server?.args).toEqual(["-y", `@downtrace/mcp@${mcp.version}`]);
     // Never a value written here: a credential in a file is a credential in a repository.
     // Claude Code expands `${NAME:-}` from its environment: empty when unset, which the server says, by name.
     const fromEnvironment = (name: string): string => `$\{${name}:-}`;

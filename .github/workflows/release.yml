@@ -67,3 +67,29 @@ jobs:
             published=$((published + 1))
           done
           echo "published $published package(s)"
+      # The MCP Registry lists `@downtrace/mcp` by `packages/mcp/server.json`, once npm has the version it names: the
+      # registry fetches that version from npm and refuses it unless its `mcpName` is the listing's name. Idempotent
+      # as the step above: nothing is done for a version the registry already has. GitHub's OIDC token proves the
+      # namespace `io.github.RadW2020/`, so there is no registry token anywhere either.
+      - name: List the MCP server's version on the MCP Registry when it is not there yet
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./packages/mcp/server.json').name")
+          version=$(node -p "require('./packages/mcp/server.json').version")
+          listed=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            "https://registry.modelcontextprotocol.io/v0.1/servers/$(node -p 'encodeURIComponent(process.argv[1])' "$name")/versions/$version")
+          if [ "$listed" = 200 ]; then
+            echo "$name $version is already on the MCP Registry, nothing to do"
+            exit 0
+          fi
+          if [ "$(npm view "@downtrace/mcp@$version" mcpName 2>/dev/null)" != "$name" ]; then
+            echo "@downtrace/mcp@$version on npm does not carry the mcpName $name; the registry would refuse it"
+            exit 0
+          fi
+          # Pinned and checked: a binary fetched by a workflow that holds an OIDC token runs as this repository.
+          curl -sfL --max-time 60 -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish packages/mcp/server.json

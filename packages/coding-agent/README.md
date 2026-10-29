@@ -27,7 +27,7 @@ Or, for one session, from a clone of the repository: `claude --plugin-dir packag
 | Part | What it does |
 |---|---|
 | `skills/downtrace/SKILL.md` | The block, word for word, as a skill whose description says when it applies, so Claude Code reaches for it when a task is about performance without Downtrace being named |
-| `.mcp.json` | Starts `@downtrace/mcp` as the server `downtrace`, with `DOWNTRACE_URL` and `DOWNTRACE_TOKEN` taken from the environment Claude Code runs in |
+| `.mcp.json` | Starts `@downtrace/mcp`, at the version released with the plugin, as the server `downtrace`, with `DOWNTRACE_URL` and `DOWNTRACE_TOKEN` taken from the environment Claude Code runs in |
 | `hooks/hooks.json` | At the start of a session (and after `/clear`), puts [`hooks/session-start.md`](hooks/session-start.md) in front of the coding agent: if the server's tools are there, ask `changes_since` and say in one line what changed |
 
 **Connecting it to production is optional.** `check` needs no account and sends nothing. To have the MCP server answer, set in the environment that starts Claude Code `DOWNTRACE_URL`, the address of your Downtrace, and `DOWNTRACE_TOKEN`, an **access credential** of the project — not the ingest token the instrumentation sends with: that one only ingests, and every read would be refused. Without `DOWNTRACE_URL` the server does not start, Claude Code shows it as failed, and the rest of the plugin works as it does without it. See [`@downtrace/mcp`](../mcp#readme) for what the server offers and what each credential level opens.

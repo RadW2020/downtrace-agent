@@ -9,7 +9,8 @@
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
     "build": "pnpm --filter @downtrace/protocol --filter @downtrace/agent --filter @downtrace/mcp run build",
-    "release": "pnpm run build && pnpm changeset publish"
+    "release": "pnpm run build && pnpm changeset publish",
+    "version-packages": "changeset version && scripts/sync-mcp-version.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.11",

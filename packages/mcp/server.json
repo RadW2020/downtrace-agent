@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.RadW2020/downtrace",
+  "title": "Downtrace",
+  "description": "Ask a Downtrace project what changed in a Node.js backend in production, and why.",
+  "repository": {
+    "url": "https://github.com/RadW2020/downtrace-agent",
+    "source": "github",
+    "subfolder": "packages/mcp"
+  },
+  "websiteUrl": "https://github.com/RadW2020/downtrace-agent/tree/main/packages/mcp#readme",
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@downtrace/mcp",
+      "version": "0.3.0",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "DOWNTRACE_URL",
+          "description": "The address of your Downtrace",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "DOWNTRACE_TOKEN",
+          "description": "An access credential of the project, of level operate; without it the server is read-only",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
