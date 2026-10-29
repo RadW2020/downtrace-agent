@@ -16,6 +16,27 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 
 It watches only the process it is loaded into: one process, one service.
 
+## Before you deploy, with no account
+
+Your tests pass, and a change made a route run a query once per row. `downtrace check` runs your tests on `HEAD` and on your working tree, and tells you, route by route, what each request now runs that it did not:
+
+```sh
+npm install --save-dev @downtrace/agent
+npx downtrace init     # finds your test command, writes downtrace.json; asks nothing
+npx downtrace check    # exit 0: no route got worse · 1: one did · 2: no comparison could be made
+```
+
+```
+Worse (1)
+  GET /orders   3 requests in the base, 3 in the change
+    appeared   SELECT name FROM users WHERE id = ?  [query 0ee1294e0ade7fb8]  0 -> 50 per request
+    appeared   SELECT id, total, user_id FROM orders ORDER BY id  [query fb36696aebd98a68]  0 -> 1 per request
+    gone       SELECT o.id, o.total, u.name FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id  [query 0ad9139c76ae524a]  1 -> 0 per request
+    request duration, shown and not judged: 1 ms -> 14.82 ms
+```
+
+Nothing leaves the machine: the runs get no token and no URL. Durations are shown and never judged, since a test run is not production; the verdict comes from what each request ran — queries, outgoing calls, Redis commands — and how many times. A route the tests did not reach is said to be not evaluated, by name, and never unchanged. A coding agent reads the same result with `--json`. The whole of it is in [Compare two runs before you deploy](#compare-two-runs-before-you-deploy-downtrace-check); production, with the cloud, starts below.
+
 The package also installs a command, `downtrace`. `downtrace init` configures a project for it, asking nothing and making no network request: see [Configure a project](#configure-a-project-downtrace-init). `downtrace check` compares two runs of your tests, before you deploy, with no account and with nothing leaving your machine: see [Compare two runs before you deploy](#compare-two-runs-before-you-deploy-downtrace-check).
 
 > **On the word «agent».** Two things in Downtrace could be called that, and this README never uses it alone: the **instrumentation** is this library, and a **coding agent** is whoever queries and operates Downtrace — a first-class user of the product, not a part of it. The npm name `@downtrace/agent` keeps the older sense on purpose: renaming a published package costs its users more than the ambiguity costs them, and the ambiguity is bounded by saying which is which everywhere else.
