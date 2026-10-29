@@ -1,5 +1,22 @@
 # @downtrace/agent
 
+## 0.13.0
+
+### Minor Changes
+
+- b207410: MongoDB is observed, through its official driver (6 and 7) and so through Mongoose: the commands each request sends, as operations named by the command and the collection (`find users`), never the filter or the documents, with their time and their failures, as a dependency `mongodb`. A new `mongodb` switch of `DOWNTRACE_INSTRUMENT`; a suite Jest runs is observed too. `init` counts `mongodb` and `mongoose` among what it observes.
+- 3b7e302: When `downtrace check` could not see something it is there to see — a run that left no profile, a run in which no route could be evaluated, routes in which nothing was observed in a project that depends on a driver the instrumentation does not observe, a Postgres or Redis observer that was unavailable in a project that depends on its driver — the report has a `feedback` with `why` and a `url`: a new issue on the public repository, filled in with versions, known framework and data package names, the test runner and the codes of what went wrong, and nothing of the code. Nothing is sent: the link opens a form the person submits if they want. Otherwise `feedback` is null and the text says nothing. The coding-agent block tells a coding agent to give the person the link and never submit it for them.
+- f54f642: Hono routes are named by their templates, `/v1/users/:userId`, and a suite that calls the application with `app.request()` — as Hono's testing guide does — is observed: `downtrace check` judges its requests and names the routes no test called. `init` recognises `hono`. A request opened apart from a caller in no request no longer leaves that caller inside it.
+- f0cf2fa: `init` says which of the project's data packages the instrumentation does not observe (`detected.unobserved`): Mongoose, the SQLite and libsql clients, and Prisma's client without its `pg` adapter among them. A route whose work all goes there is not evaluated, and that is now said before `check` runs, not after.
+- 686c0c6: A suite Jest runs is observed as any other, on Node 22 and later. Jest runs a test file's modules in a registry of its own, so the `pg`, `mysql2`, postgres.js and Express the tests used were not the ones the instrumentation patched: `downtrace check` saw no query at all and named mounted Express routes `/:param/:param/:userId`. The instrumentation now wraps `jest-runtime`'s `requireModule` when Node announces it on the `module.require` channel and patches the copies Jest hands the tests; Express 4 mounts and errors thrown in Jest's context are read across realms. On Node 20, which has no such channel, a suite Jest runs stays as it was.
+
+### Patch Changes
+
+- fdbd237: `downtrace check` links the environment files of the working tree that the base lacks — `.env`, `.env.test`, `.env.local` — into the base's checkout, as it links `node_modules`. A project whose tests read an ignored `.env` failed in the base before a request was made, unless `prepare` copied it. A `.env` the repository tracks is the base's own and is left alone.
+- 709072b: `downtrace init` knows a NestJS project. It takes `test:e2e` — the suite Nest's CLI writes, which calls the application in process with its real modules — before `test`, which in a Nest project is the unit suite with mocks, where no route runs anything (`test-e2e` and `e2e` too, after the integration scripts). It names `@nestjs/platform-express` and `@nestjs/platform-fastify` as frameworks whose routes are named by their templates, as they are, instead of saying the project has none, and `slonik` among what it observes, through `pg`.
+- Updated dependencies [b207410]
+  - @downtrace/protocol@0.10.0
+
 ## 0.12.0
 
 ### Minor Changes

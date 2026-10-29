@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.10.0
+
+### Minor Changes
+
+- b207410: Protocol 0.10.0: a dependency may be of kind `mongodb`, whose commands are operations of kind `query` labelled by the command and the collection (`find users`), never the filter or the documents.
+
 ## 0.9.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@downtrace/agent",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Catch N+1 queries and new calls before you deploy: downtrace check compares your test runs route by route, with no account. In production, a flight recorder for your Node.js backend, never in your request path.",
   "type": "module",
   "bin": {
