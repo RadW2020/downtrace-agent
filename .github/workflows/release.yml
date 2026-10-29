@@ -42,14 +42,32 @@ jobs:
           # somebody remembered to put in it, and on 2026-09-11 that was `@downtrace/mcp`, versioned to
           # 0.1.0 by changesets and published by nobody, with both workflows green (gh-416). `private` is
           # the same mark pnpm and changesets already read, so the three agree by construction.
+          # A package goes after the packages of this workspace it depends on. Published before them, it names a
+          # version npm does not have yet, and every install of it fails until they are out: @downtrace/agent@0.13.0
+          # went out before the @downtrace/protocol@0.10.0 it pins, and was not installable for four minutes.
           for dir in $(node -e '
             const fs = require("node:fs");
-            for (const name of fs.readdirSync("packages")) {
+            const packages = [];
+            for (const name of fs.readdirSync("packages").sort()) {
               const path = `packages/${name}/package.json`;
               if (!fs.existsSync(path)) continue;
-              if (JSON.parse(fs.readFileSync(path, "utf8")).private) continue;
-              console.log(`packages/${name}`);
+              const pkg = JSON.parse(fs.readFileSync(path, "utf8"));
+              if (pkg.private) continue;
+              const needs = Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies });
+              packages.push({ dir: `packages/${name}`, name: pkg.name, needs });
             }
+            const out = new Set();
+            const visit = (pkg, through) => {
+              if (out.has(pkg)) return;
+              if (through.includes(pkg)) throw new Error(`a cycle: ${[...through, pkg].map((p) => p.name).join(" -> ")}`);
+              for (const need of pkg.needs) {
+                const dependency = packages.find((other) => other.name === need);
+                if (dependency) visit(dependency, [...through, pkg]);
+              }
+              out.add(pkg);
+              console.log(pkg.dir);
+            };
+            for (const pkg of packages) visit(pkg, []);
           '); do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
@@ -65,6 +83,15 @@ jobs:
             tgz=$(cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP" | tail -1)
             npm publish "$tgz" --provenance --access public
             published=$((published + 1))
+            # npm takes minutes to serve a version it accepted, and what depends on this one is published next.
+            for _ in $(seq 1 60); do
+              npm view --prefer-online "$name@$version" version >/dev/null 2>&1 && break
+              sleep 10
+            done
+            if ! npm view --prefer-online "$name@$version" version >/dev/null 2>&1; then
+              echo "::error::$name@$version was published and npm does not serve it after ten minutes"
+              exit 1
+            fi
           done
           echo "published $published package(s)"
       # The MCP Registry lists `@downtrace/mcp` by `packages/mcp/server.json`, once npm has the version it names: the
