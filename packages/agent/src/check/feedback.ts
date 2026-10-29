@@ -1,5 +1,6 @@
 import { OBSERVED_PACKAGES, UNOBSERVED_PACKAGES, unobservedOf } from "../init/detect.ts";
 import type { NotEvaluatedReason } from "./compare.ts";
+import { scriptOf } from "./hints.ts";
 import type { CheckReport } from "./report.ts";
 
 /**
@@ -81,8 +82,7 @@ const OBSERVER_PACKAGES: Record<string, readonly string[]> = {
 
 /** The runner's name, read from the command, or from the package script the command runs. */
 function runnerOf(context: FeedbackContext): string | undefined {
-  // After the variables a command may set for itself, `DATABASE_URL=… npm test`.
-  const script = /^(?:\S+=\S*\s+)*(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:.-]+)/.exec(context.command.trim())?.[1];
+  const script = scriptOf(context.command);
   const texts = [context.command, script === undefined ? undefined : context.scripts[script]];
   for (const text of texts) {
     if (text === undefined) continue;

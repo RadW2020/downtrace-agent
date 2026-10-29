@@ -1,9 +1,10 @@
 import { execFile, spawn } from "node:child_process";
-import { lstat, mkdtemp, readdir, realpath, rm, stat, symlink } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
+import { parsePackageJson } from "../init/detect.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
-import { adviceForNoProfile } from "./hints.ts";
+import { adviceForNoProfile, noProfile } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
   type CheckReport,
@@ -264,8 +265,13 @@ export function runEnv(
   env.DOWNTRACE_ENV = "check";
   env.DOWNTRACE_VERSION = run.side;
   // A package manager that finds the dependencies it is asked to run with out of date may install them, and the
-  // base's are the project's own, linked: nothing a check runs may write into them.
-  if (run.side === "base") env.npm_config_verify_deps_before_run = "false";
+  // base's are the project's own, linked: nothing a check runs may write into them. pnpm reads the setting from an
+  // `npm_config_` variable up to 10 and only from a `pnpm_config_` one from 11, where the first alone let the base's
+  // `pnpm run` install, or refuse to (ERR_PNPM_UNSAFE_MODULES_DIR), before a test ran: both are set.
+  if (run.side === "base") {
+    env.npm_config_verify_deps_before_run = "false";
+    env.pnpm_config_verify_deps_before_run = "false";
+  }
   return env;
 }
 
@@ -316,6 +322,24 @@ async function linkDependencies(top: string, base: string): Promise<string[]> {
     level = next;
   }
   return links;
+}
+
+/**
+ * The scripts of the `package.json` where a run ran: the test command often runs one, and a `NODE_OPTIONS` that
+ * leaves the instrumentation out is written there as often as in the command (`hints.ts`). Read only for a run that
+ * left no profile, and from that side's own directory, since the base's script may not be the working tree's.
+ */
+async function scriptsIn(dir: string): Promise<Record<string, string>> {
+  let text: string;
+  try {
+    text = await readFile(join(dir, "package.json"), "utf8");
+  } catch {
+    // No file, or none the system gives: the failure being said is the run's, and what is said of it is then read
+    // from the command alone. Turning it into a failure of this file would hide the one that happened.
+    return {};
+  }
+  const read = parsePackageJson(text, "package.json");
+  return read.ok ? read.pkg.scripts : {};
 }
 
 function inside(parent: string, path: string): boolean {
@@ -580,10 +604,8 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
       });
     }
     if (tally.requests === 0) {
-      throw new CheckFailure("no-profile", side, "the run left no profile", {
-        advice: adviceForNoProfile(options.command),
-        outputTail: ran.outputTail,
-      });
+      const said = noProfile({ command: options.command, scripts: await scriptsIn(dir), processes: tally.processes });
+      throw new CheckFailure("no-profile", side, said.message, { advice: said.advice, outputTail: ran.outputTail });
     }
     options.progress(`${side}: ${tally.requests} requests on ${made.sides[side]?.routes ?? 0} routes`);
   }

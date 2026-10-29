@@ -88,20 +88,34 @@ export function observedOf(
 }
 
 /**
- * The first major of a package the instrumentation observes, where it does not observe the ones before: the MongoDB
- * driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8, the first on it.
- * Before them the driver answers through callbacks, from whichever request gave its pool a connection back.
+ * The first version of a package the instrumentation observes, as `[major, minor]`, where it does not observe the ones
+ * before: the MongoDB driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8,
+ * the first on it — before them the driver answers through callbacks, from whichever request gave its pool a
+ * connection back —; and node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
+ * observer reads (`instrument/redis.ts`).
  */
-const OBSERVED_FROM: Readonly<Record<string, number>> = { mongodb: 6, mongoose: 8 };
+const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: number]>> = {
+  mongodb: [6, 0],
+  mongoose: [8, 0],
+  redis: [5, 12],
+};
 
 /**
- * Whether the range a package is declared with starts before the first major observed: `^5.7.7`, `~6`, `>=7`. A range
- * that names no number — `latest`, `*`, a tag, a path — is taken as observed.
+ * Whether the range a package is declared with cannot reach the first version observed: it starts at an earlier major
+ * (`^5.7.7` of a package observed from 6: a caret does not cross a major), or at an earlier minor of the same major
+ * and keeps the minor where it is (`~5.11.9`, `5.1.0` of one observed from 5.12). A range that lets the minor float
+ * (`^5.1.0`, `^5`, `5.x`) installs a later minor as readily as an earlier one, and only the lockfile, which is not
+ * read, would say which: it is taken as observed. A range that names no number — `latest`, `*`, a tag, a path — too.
  */
 function tooOld(name: string, ranges: ReadonlyMap<string, string>): boolean {
   const from = OBSERVED_FROM[name];
-  const major = /\d+/.exec(ranges.get(name) ?? "")?.[0];
-  return from !== undefined && major !== undefined && Number(major) < from;
+  const range = (ranges.get(name) ?? "").trim();
+  const start = /(\d+)(?:\.(\d+))?/.exec(range);
+  if (from === undefined || start === null) return false;
+  const [major, minor] = [Number(start[1]), Number(start[2] ?? 0)];
+  if (major !== from[0]) return major < from[0];
+  const floats = range.startsWith("^") || range.startsWith(">") || start[2] === undefined || /\.[x*]/i.test(range);
+  return !floats && minor < from[1];
 }
 
 /**

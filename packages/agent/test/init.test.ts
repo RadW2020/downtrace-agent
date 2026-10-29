@@ -138,6 +138,12 @@ describe("a project it can configure", () => {
     // Mongoose before 8 runs on a driver before 6, which answers through callbacks (ADR 0237).
     [{ express: "^4", mongoose: "^5.7.7" }, ["mongoose"]],
     [{ express: "^4", mongodb: "~4.17.0" }, ["mongodb"]],
+    // node-redis publishes its commands on a diagnostics channel from 5.12 on, and nothing before it does.
+    [{ express: "^5", redis: "^4.6.0" }, ["redis"]],
+    [{ express: "^5", redis: "~5.1.0" }, ["redis"]],
+    [{ express: "^5", redis: "^5.12.0" }, []],
+    [{ express: "^5", redis: "^6" }, []],
+    [{ express: "^5", redis: "latest" }, []],
     [{ express: "^5", "@prisma/client": "^6" }, ["@prisma/client"]],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-pg": "^7" }, []],
     [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, ["@libsql/client"]],

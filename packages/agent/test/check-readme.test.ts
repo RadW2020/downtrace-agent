@@ -35,6 +35,11 @@ describe("the README on downtrace check", () => {
     expect(says(runner.use), runner.use).toBe(true);
   });
 
+  it("tells how a command that sets NODE_OPTIONS keeps the one the instrumentation is loaded with", () => {
+    expect(says('NODE_OPTIONS="$NODE_OPTIONS ')).toBe(true);
+    expect(says("no process of it wrote anything")).toBe(true);
+  });
+
   it.each(BUCKET_ROUTES)("names the bucket %s", (bucket) => {
     expect(says(bucket), bucket).toBe(true);
   });

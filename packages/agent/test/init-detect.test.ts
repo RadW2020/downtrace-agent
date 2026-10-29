@@ -9,11 +9,13 @@ import {
   LOCKFILES,
   moduleResolutionOf,
   NEXT_CONFIGS,
+  observedOf,
   type PackageJson,
   packageManagerOf,
   parsePackageJson,
   TEST_SCRIPTS,
   testScriptOf,
+  unobservedOf,
 } from "../src/init/detect.ts";
 
 /**
@@ -174,6 +176,37 @@ describe("what the project runs", () => {
     expect(found.frameworks).toEqual(["@strapi/strapi"]);
     expect(found.observed).toEqual(["@prisma/adapter-pg", "mysql2"]);
     expect(found.repository).toBe(false);
+  });
+
+  /**
+   * A package observed only from a version on is judged by its declared range: one that cannot reach that version is
+   * not observed. node-redis publishes on its diagnostics channel from 5.12 (`instrument/redis.ts`), and a range that
+   * lets the minor of 5 float — `^5.1.0`, `^5`, `5.x` — installs a later 5 as readily as an earlier one: saying it is
+   * not observed would be as wrong as saying it is, and the one that turns out wrong is said by `check` itself.
+   */
+  it.each([
+    ["redis", "^4.6.0", false],
+    ["redis", "^5", true],
+    ["redis", "5.x", true],
+    ["redis", "^5.1.0", true],
+    ["redis", "~5.11.9", false],
+    ["redis", "5.1.0", false],
+    ["redis", "^5.12.0", true],
+    ["redis", ">=5.12", true],
+    ["redis", "5.13.1", true],
+    ["redis", "^6", true],
+    ["redis", "latest", true],
+    ["redis", "workspace:*", true],
+    ["mongodb", "^5.9.2", false],
+    ["mongodb", "^6.0.0", true],
+    ["mongodb", "6", true],
+    ["mongoose", "^7.8.0", false],
+    ["mongoose", "^8", true],
+  ])("reads %s declared as %s as observed: %s", (name, range, observed) => {
+    const dependencies = new Set([name]);
+    const ranges = new Map([[name, range]]);
+    expect(observedOf(dependencies, ranges)).toEqual(observed ? [name] : []);
+    expect(unobservedOf(dependencies, ranges)).toEqual(observed ? [] : [name]);
   });
 
   it("says whether this package is installed, which decides how its commands are spelled", async () => {

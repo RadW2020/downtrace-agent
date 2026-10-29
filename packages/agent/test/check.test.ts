@@ -1130,7 +1130,9 @@ describe("what goes wrong, said (COB-01)", () => {
 
   it("a run that left no profile is said, with what happens and what to use, and is never unchanged", async () => {
     const made = await project(appFiles({}));
-    // The instrumentation is not loaded in this run, which is what a runner that does not pass NODE_OPTIONS on is.
+    // The instrumentation is not loaded in this run, which is what a runner that does not pass NODE_OPTIONS on is:
+    // no process writes anything, and that is said. The runner the command names is still named, since nothing in
+    // the command says which of the two it was.
     const checked = await check(made, [
       "--base",
       "HEAD",
@@ -1146,8 +1148,10 @@ describe("what goes wrong, said (COB-01)", () => {
     expect(checked.report.failure).toMatchObject({
       code: "no-profile",
       side: "base",
-      message: "the run left no profile",
+      message: "the run left no profile: no process of it wrote anything",
     });
+    expect(checked.report.base?.processes).toBe(0);
+    expect(checked.report.failure?.advice).toContain("Most likely the instrumentation loaded in no process");
     expect(checked.report.failure?.advice).toContain("This happens with Vitest with the threads or vmThreads pool");
     expect(checked.report.failure?.advice).toContain("use --pool=forks");
     expect(checked.report.summary).toBeNull();
@@ -1158,6 +1162,35 @@ describe("what goes wrong, said (COB-01)", () => {
     ).stdout;
     expect(text).toContain("the run left no profile");
     expect(text).not.toMatch(/unchanged/i);
+  });
+
+  // The stranger campaign: `NODE_OPTIONS=--max-old-space-size=4096 npm test`, and a Jest ESM suite whose script is
+  // `NODE_OPTIONS=--experimental-vm-modules jest`, replace the NODE_OPTIONS check loads the instrumentation with, and
+  // the report blamed Vitest's pool.
+  it("a command that replaces NODE_OPTIONS: no process loaded the instrumentation, which is said with how to keep it", async () => {
+    const made = await project(appFiles({}));
+    const command = ["NODE_OPTIONS=--max-old-space-size=512", "node", "app.mjs"];
+    const checked = await check(made, ["--base", "HEAD", "--", ...command]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({
+      code: "no-profile",
+      side: "base",
+      message: "the run left no profile: no process of it wrote anything",
+    });
+    expect(checked.report.base?.processes).toBe(0);
+    const advice = checked.report.failure?.advice ?? "";
+    expect(advice).toContain("The instrumentation loaded in no process");
+    expect(advice).toContain("the test command sets NODE_OPTIONS=--max-old-space-size=512");
+    expect(advice).toContain('NODE_OPTIONS="$NODE_OPTIONS --max-old-space-size=512"');
+    expect(advice).not.toContain("--pool");
+    // What the link to tell Downtrace carries is the message, never the command.
+    const body = new URL(checked.report.feedback?.url ?? "").searchParams.get("body") ?? "";
+    expect(body).toContain("no process of it wrote anything");
+    expect(body).not.toContain("max-old-space-size");
+
+    const text = (await downtrace(["check", "--base", "HEAD", "--", ...command], { cwd: made.dir }).done).stdout;
+    expect(text).toContain("base: the run left no profile: no process of it wrote anything");
+    expect(text).toContain('NODE_OPTIONS="$NODE_OPTIONS --max-old-space-size=512"');
   });
 
   // What this test used to allow: a run that ends with `process.exit()` was said to have no profile, or compared on

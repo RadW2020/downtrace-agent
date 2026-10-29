@@ -67,10 +67,16 @@ describe("the environment of a run", () => {
     expect(env).toMatchObject({ PATH: "/usr/bin", HOME: "/home/a", CI: "1" });
   });
 
-  it("keeps a package manager from installing on its own in the base, whose dependencies are the project's own", () => {
-    expect(runEnv({}, run).npm_config_verify_deps_before_run).toBe("false");
-    expect(runEnv({}, { ...run, side: "change" }).npm_config_verify_deps_before_run).toBeUndefined();
-  });
+  // pnpm reads its settings from `npm_config_` variables up to 10 and from `pnpm_config_` ones from 11, which ignores
+  // the first: on pnpm 11 the base's `pnpm run` installed into the working tree's node_modules, or refused to
+  // (ERR_PNPM_UNSAFE_MODULES_DIR), and the base failed before a test ran.
+  it.each(["npm_config_verify_deps_before_run", "pnpm_config_verify_deps_before_run"])(
+    "keeps a package manager from installing on its own in the base, whose dependencies are the project's own: %s",
+    (name) => {
+      expect(runEnv({}, run)[name]).toBe("false");
+      expect(runEnv({}, { ...run, side: "change" })[name]).toBeUndefined();
+    },
+  );
 });
 
 describe("running a command", () => {
