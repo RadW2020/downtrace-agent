@@ -31,9 +31,10 @@ import { applicationEntry } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
-import { attachFastify } from "./fastify.ts";
+import { attachFastify, type Unannounced } from "./fastify.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
+import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
@@ -269,6 +270,7 @@ export class Agent {
   private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
   private stopFastify: (() => void) | undefined;
+  private stopHono: (() => void) | undefined;
   private stopJest: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
@@ -524,13 +526,19 @@ export class Agent {
     // the application loads (`fastify.ts`). An application without Fastify pays the subscription and nothing else.
     // A request made with `inject()` is not Node's, and Node announces nothing of it: Fastify's hooks open and
     // close it through the same two doors.
-    this.stopFastify = attachFastify({
+    const unannounced: Unannounced = {
+      announced: (request) => this.starts.has(request),
+      started: (request) => this.onStart({ request }),
+      finished: (request, response) => this.onFinish({ request, response }),
+    };
+    this.stopFastify = attachFastify({ internalError: (err) => this.internalError(err), unannounced });
+    // Hono's routers are given their routes at the first match and keep them, so their files are loaded and wrapped
+    // now, before it (`hono.ts`, ADR 0236). A request made with `app.request()` goes through the same two doors.
+    this.stopHono = attachHono({
+      from: entry,
+      log: this.log,
       internalError: (err) => this.internalError(err),
-      unannounced: {
-        announced: (request) => this.starts.has(request),
-        started: (request) => this.onStart({ request }),
-        finished: (request, response) => this.onFinish({ request, response }),
-      },
+      unannounced,
     });
     // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
     // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
@@ -615,6 +623,7 @@ export class Agent {
     // attaches above read: the same patches, on the copies Jest hands the tests (`jest.ts`).
     const sandbox: SandboxPatch[] = [
       { matches: (name) => name === "express", patch: (express) => armExpress(express) },
+      { matches: honoRouterModule, patch: patchHonoRouters },
       {
         matches: (name) => name === "koa",
         patch: (koa) => armContextRecording((koa as { prototype?: unknown } | null)?.prototype, internalError),
@@ -728,6 +737,8 @@ export class Agent {
     this.stopHttp = undefined;
     this.stopFastify?.();
     this.stopFastify = undefined;
+    this.stopHono?.();
+    this.stopHono = undefined;
     this.stopJest?.();
     this.stopJest = undefined;
     this.stopRedis?.();

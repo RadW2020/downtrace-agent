@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  apart,
+  currentContext,
   type DependencyKind,
   enterRequest,
   operationKey,
@@ -146,5 +148,35 @@ describe("an operation recorded against a request", () => {
     recordOperationIn(ctx, { kind: "query", fingerprint: { hash: "q", text: "SELECT ?" }, startedAt: 9, endedAt: 10 });
     fine.request("POST", "/checkout", 200, 0, 10, ctx.fineFrom, ctx.fineOps);
     expect(fine.snapshot().requests[0]?.operations.map((o) => o.kind)).toEqual(["call", "query"]);
+  });
+});
+
+/**
+ * A request no server announced is opened from inside the framework, and Hono dispatches inside the caller's own
+ * call: Node's `exit` alone runs a caller in no request in its own context, and the request was then the caller's.
+ */
+describe("a request opened apart from its caller", () => {
+  it("leaves a caller that was in no request in none", () => {
+    expect(currentContext()).toBeUndefined();
+    const opened = apart(() => enterRequest());
+    expect(opened).toBeDefined();
+    expect(currentContext()).toBeUndefined();
+  });
+
+  it("leaves a caller that was in a request in its own", () => {
+    apart(() => {
+      const outer = enterRequest();
+      apart(() => enterRequest());
+      expect(currentContext()).toBe(outer);
+    });
+  });
+
+  it("is the context of what the callee starts", async () => {
+    const same = await apart(() => {
+      const ctx = enterRequest();
+      return new Promise<boolean>((resolve) => setImmediate(() => resolve(currentContext() === ctx)));
+    });
+    expect(same).toBe(true);
+    expect(currentContext()).toBeUndefined();
   });
 });

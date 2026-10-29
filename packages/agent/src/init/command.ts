@@ -103,8 +103,9 @@ function missingOf(found: Detection, command: string | undefined, dir: string): 
       message: `package.json depends on none of the frameworks whose routes Downtrace names by their templates (${FRAMEWORK_PACKAGES.join(", ")})`,
       advice:
         "In a monorepo, run init in the directory of the service. Elsewhere check still compares the runs: the " +
-        "instrumentation observes every request through node:http and names its route by the shape of its path, " +
-        "and downtrace.json needs only the test command.",
+        "instrumentation observes every request Node's server receives and names its route by the shape of its " +
+        "path, and downtrace.json needs only the test command. A request a test hands the application with no " +
+        "server listening, through a helper of the framework's own, is not observed.",
     });
   }
   if (command === undefined) {

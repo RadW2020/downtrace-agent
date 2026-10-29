@@ -824,11 +824,11 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 | It looks for | Where | What it does with it |
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
-| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
+| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
 | What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
-An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express or Fastify application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
+An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
 
 **Run it again whenever you like.** It writes `check.command` only where there is none: a `downtrace.json` that has one is left as it is, byte for byte, and one without it gets the command and keeps every other key, inside `check` and outside it. The hook is written only where the project has no `instrumentation` file at the root or in `src/`.
 
@@ -837,7 +837,7 @@ When something cannot be detected or done, it says what and what to do instead, 
 | Code | What it means, and what to do |
 |---|---|
 | no-package-json | There is no `package.json` where it runs: run it at the root of the Node.js project, and in a monorepo in the directory of the service. |
-| no-framework | None of the frameworks above. In a monorepo, run it in the directory of the service. Elsewhere `check` still compares the runs: the instrumentation observes every request through `node:http` and names its route by the shape of its path (see Requirements). |
+| no-framework | None of the frameworks above. In a monorepo, run it in the directory of the service. Elsewhere `check` still compares the runs: the instrumentation observes every request Node's server receives and names its route by the shape of its path (see Requirements). A request a test hands the application with no server listening, through a helper of the framework's own, is not observed. |
 | no-test-command | None of the scripts above. Give `check` a command that sends requests to the routes with their real dependencies: a test script, or a walk of the routes — a script that starts the application, sends a request to each route and stops it — in `downtrace.json` or after `--`. |
 | not-a-repository | No git repository holds the project, and `check` compares the working tree against a commit. |
 | not-installed | The build prunes and `@downtrace/agent` is not a dependency, so a hook that imports it would break the build: install it and run `npx downtrace init` again. |
@@ -874,7 +874,7 @@ Each route that is not evaluated carries a code an agent can branch on, in the J
 
 | Code | Why |
 |---|---|
-| `not-called` | No request reached it in either run. Only a route `check` knows the project has can be named when nobody called it, because nothing observes a route nobody asked: the routes of every Express or Fastify application that answered a request in a run — read off its router, mounts and plugin prefixes included, under the template a request to each would get, and without the `HEAD` Fastify adds beside each `GET` — and the ones listed in `routes`, below. A route for every method (`app.all`), one written as a regular expression or a list of paths, and the routes under a mount whose pattern is not one string have no single name and are not read; list them in `routes` if you want them named. |
+| `not-called` | No request reached it in either run. Only a route `check` knows the project has can be named when nobody called it, because nothing observes a route nobody asked: the routes of every Express, Fastify or Hono application that answered a request in a run — read off its router, mounts, plugin prefixes and sub-applications included, under the template a request to each would get, and without the `HEAD` Fastify adds beside each `GET` — and the ones listed in `routes`, below. A route for every method (`app.all`, Hono's `use` on a path), one written as a regular expression or a list of paths, and the routes under a mount whose pattern is not one string have no single name and are not read; list them in `routes` if you want them named. |
 | `not-called-in-base` | The base run made no request to it: it is new, or the tests only reach it now. |
 | `not-called-in-change` | The change run made no request to it: it is gone, or the tests no longer reach it. |
 | `no-profile-in-base`, `no-profile-in-change` | That run saw requests to it and no profile covered them, so what they ran is unknown. |
@@ -913,7 +913,7 @@ Every key is optional. A key `check` does not know is an error, and keys outside
 | Key | What it is |
 |---|---|
 | `command` | The test command, run by a shell; or a list of words, which is quoted for it. A command after `--` takes its place. |
-| `routes` | The routes the project has, as `METHOD /template`, so that one no test calls can be named as `not-called`. An Express or Fastify application's are read from it, so this is for the rest: Koa and Next.js, and the routes that have no single name. The template is the one the instrumentation names the route by: `/products/:id` for Express, Koa and Fastify, `/products/[id]` for Next.js. |
+| `routes` | The routes the project has, as `METHOD /template`, so that one no test calls can be named as `not-called`. An Express, Fastify or Hono application's are read from it, so this is for the rest: Koa and Next.js, and the routes that have no single name. The template is the one the instrumentation names the route by: `/products/:id` for Express, Koa, Fastify and Hono, `/products/[id]` for Next.js. |
 | `prepare` | A command run in the base checkout before the tests, for what a fresh checkout lacks. When it is given, the base's dependencies are its business, and `check` links none (below). It gets `DOWNTRACE_CHECK_ORIGIN`, the directory of your project. |
 | `timeout` | How long each run of the test command may take, in seconds; 900 by default, `--timeout` on the command line. A run that does not end in time is stopped, with what it started, and said. |
 
@@ -961,6 +961,12 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
   untouched, is put in place from the **first request** and not at start-up — it looks for the Koa your application has
   already loaded, in the module cache, and loads nothing — and an application without Koa pays for that look once.
   Next.js route templates wrap nothing: the template is read off the request, where Next leaves it.
+- For Hono route templates the instrumentation wraps `add` on the four routers Hono ships (`RegExpRouter`,
+  `TrieRouter`, `LinearRouter`, `PatternRouter`), and so each handler a router is given. Hono's router hands them their
+  routes at its first match, the first request, so those four files — and only those: not Hono's entry, which a tracker
+  may hook — are loaded when the instrumentation **starts**, both the ESM and the CommonJS copy, by any process that
+  resolves `hono`. The wrappers pass arguments, results and errors through untouched; a failure inside one runs your
+  handler anyway and names the request by the heuristic.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
@@ -1078,14 +1084,34 @@ An application that injects requests in production — a batch endpoint that ans
 each part counted as a request of its own route, with its own work, and the outer request keeps only what it ran
 itself.
 
+**Hono** routes (4) are named by the path of the first route the request matched that is not a middleware, as it was
+registered, the prefixes of `app.route()` and `basePath()` included: `/v1/users/:userId` for every user. A middleware is
+what `use()` registers: every method, on a path ending in `*`. A request only middleware matched is `(unmatched)`, and no
+part of its path travels. This holds for a request served by `@hono/node-server` and for one made with
+**`app.request()`** — how Hono's testing guide calls an application, with no server listening — which is observed as one
+the server received: by its template, with the queries, calls and commands it ran, opened when its first handler runs
+and apart from the code that called it. Three things the second way cannot see: a request no handler matched at all, no
+route and no middleware, runs nothing of the application's and is not observed (a logger or CORS registered with
+`app.use()` is enough); the time is until the response is returned, not until a streamed body ends; and when the first
+handler to run throws, Hono's error handler answers after it, out of reach, so the status is the error's own for an
+`HTTPException` and 500 for anything else — what Hono's default handler answers, and not what an `onError` of your own
+does. Behind a middleware, your `onError` answers inside Hono's chain and its status is seen. An application that hands
+Hono a router of its own (`hono/tiny`, `new Hono({ router })`) gives it its routes as it registers them, which, for the
+ESM copy, is after the wrappers are in in practice and not by construction.
+
 A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
 catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then
-Fastify, then Express.
+Hono, then Fastify, then Express.
 
 **The first version that names a request no route named `(unmatched)` changes their route identities, once**: a
 request that was a path — `/webhook/:id`, `/assets/:id`, a 404's path, a path with a plain word in it — is seen as
 `GET (unmatched)` or the method's own, a finding on the old route receives no data and is not declared recovered,
 and an exclusion written against such a path has to be rewritten against `(unmatched)`.
+
+**The first version that names Hono routes by their templates changes their route identities, once**, as the one for
+Fastify did: a route that was a path — `/users/ana`, a 404's words — is seen as the template it became or as
+`(unmatched)`, a finding on the old route receives no data, and an exclusion written against the old name has to be
+rewritten against the template.
 
 **The first version that names Fastify routes by their templates changes their route identities, once**, as the one
 for Koa and Next.js did: a route that was a path — `/users/ana`, a 404's words — is seen as the template it became or as

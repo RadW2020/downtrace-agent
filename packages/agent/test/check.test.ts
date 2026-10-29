@@ -31,6 +31,8 @@ const PG_DIR = dirname(createRequire(import.meta.url).resolve("pg/package.json")
 const FASTIFY_DIR = dirname(createRequire(import.meta.url).resolve("fastify/package.json"));
 /** postgres.js's, whose exports name no `package.json`: three directories above the file `require` resolves. */
 const POSTGRESJS_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("postgres"))));
+/** Hono's, the same way: `require` resolves `dist/cjs/index.js`. */
+const HONO_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("hono"))));
 
 const projects: Project[] = [];
 const scratch: string[] = [];
@@ -398,6 +400,137 @@ provider.close();
       verdict: "not-evaluated",
       reasons: [{ code: "not-called" }],
     });
+  });
+});
+
+/**
+ * Hono's testing guide calls an application with `app.request()`, which hands Hono a `Request`: no server listens, and
+ * Node announces nothing. The application is built as most are — a sub-application under a prefix, and a middleware of
+ * the application's own — and declares a route no test calls.
+ */
+const HONO_APP = `
+import { Hono } from "hono";
+
+export function makeApp({ calls, stock }) {
+  const products = new Hono();
+  products.get("/:id", async (c) => {
+    for (let i = 0; i < calls; i += 1) await (await fetch(stock)).text();
+    return c.text("product");
+  });
+  const app = new Hono();
+  app.use(async (_c, next) => {
+    await next();
+  });
+  app.route("/products", products);
+  app.post("/admin/refunds", (c) => c.text("refund"));
+  return app;
+}
+`;
+
+const HONO_SUITE = `
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import { makeApp } from "./app.mjs";
+
+const provider = http.createServer((req, res) => {
+  req.resume();
+  res.end("ok");
+});
+await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+const calls = Number(readFileSync(new URL("./calls.txt", import.meta.url), "utf8"));
+const app = makeApp({ calls, stock: \`http://127.0.0.1:\${provider.address().port}/stock\` });
+for (let i = 0; i < 3; i += 1) {
+  const res = await app.request(\`/products/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+provider.close();
+`;
+
+/** Judges the same Hono application, run by `command` over `files`; the change calls its provider five times a request. */
+async function honoProject(files: Record<string, string>, command: string, link: Record<string, string>) {
+  const made = await createProject({
+    ...files,
+    "calls.txt": "1",
+    ".gitignore": "node_modules\n",
+    "downtrace.json": JSON.stringify({ check: { command } }),
+  });
+  projects.push(made);
+  await mkdir(join(made.dir, "node_modules"), { recursive: true });
+  for (const [name, dir] of Object.entries({ hono: HONO_DIR, ...link }))
+    await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  await made.write("calls.txt", "5");
+  return check(made, ["--base", "HEAD"]);
+}
+
+function expectHonoJudged(checked: Checked): void {
+  const products = route(checked.report, "GET /products/:id");
+  expect(products.verdict, JSON.stringify(checked.report.routes.map((r) => r.id))).toBe("worse");
+  expect(products.requests).toEqual({ base: 3, change: 3 });
+  expect(products.operations.find((operation) => operation.kind === "call")).toMatchObject({
+    change: "multiplied",
+    perRequest: { base: 1, change: 5 },
+  });
+  expect(route(checked.report, "POST /admin/refunds")).toMatchObject({
+    verdict: "not-evaluated",
+    reasons: [{ code: "not-called" }],
+  });
+  expect(checked.code).toBe(1);
+}
+
+describe("a Hono suite that calls the application with app.request(), as Hono's testing guide does", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await honoProject({ "app.mjs": HONO_APP, "suite.mjs": HONO_SUITE }, "node suite.mjs", {});
+  });
+
+  it("sees the regression in requests no server received, names the route nobody called, and exits 1", () => {
+    expectHonoJudged(checked);
+  });
+});
+
+describe("a Hono suite Jest runs, on the CommonJS copy Jest hands the tests", () => {
+  // The same application and suite, as CommonJS: Jest requires Hono's \`dist/cjs\` into a registry of its own.
+  const app = HONO_APP.replace('import { Hono } from "hono";', 'const { Hono } = require("hono");').replace(
+    "export function makeApp",
+    "module.exports = function makeApp",
+  );
+  const suite = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const makeApp = require("./app.js");
+
+let provider;
+beforeAll(async () => {
+  provider = http.createServer((req, res) => {
+    req.resume();
+    res.end("ok");
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+});
+afterAll(() => new Promise((resolve) => provider.close(resolve)));
+
+test("products", async () => {
+  const calls = Number(readFileSync(join(__dirname, "calls.txt"), "utf8"));
+  const app = makeApp({ calls, stock: "http://127.0.0.1:" + provider.address().port + "/stock" });
+  for (const id of [1, 2, 3]) expect((await app.request("/products/" + id)).status).toBe(200);
+});
+`;
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await honoProject(
+      {
+        "app.js": app,
+        "products.test.js": suite,
+        "package.json": JSON.stringify({ name: "hono-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1] },
+    );
+  });
+
+  it("sees the regression, and names the route nobody called", () => {
+    expectHonoJudged(checked);
   });
 });
 

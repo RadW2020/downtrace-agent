@@ -13,15 +13,16 @@ export const AGENT_PACKAGE = "@downtrace/agent";
 
 /**
  * The packages that say a project runs a framework whose routes the instrumentation names by their templates:
- * Express, Koa (and Strapi, which runs on it), Fastify, Next.js, and NestJS on either of its platforms — Nest
- * serves through Express or Fastify, which name its routes. Elsewhere a request is still observed, through
- * `node:http`, and its route is named by the shape of its path.
+ * Express, Koa (and Strapi, which runs on it), Fastify, Hono, Next.js, and NestJS on either of its platforms — Nest
+ * serves through Express or Fastify, which name its routes. Elsewhere a request Node's server receives is still
+ * observed, and its route is named by the shape of its path.
  */
 export const FRAMEWORK_PACKAGES = [
   "express",
   "koa",
   "@strapi/strapi",
   "fastify",
+  "hono",
   "next",
   "@nestjs/platform-express",
   "@nestjs/platform-fastify",

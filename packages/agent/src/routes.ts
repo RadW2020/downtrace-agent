@@ -1,6 +1,7 @@
 import { isRegExp } from "node:util/types";
 import type { Endpoint } from "@downtrace/protocol";
 import { fastifyInstanceOf, fastifyMatchedRoute, fastifyRegistered } from "./fastify.ts";
+import { honoMatchedRoute, honoMiddleware, honoRegistered, honoRouterOf } from "./hono.ts";
 import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
 import { nextMatchedPathname } from "./next.ts";
@@ -75,7 +76,8 @@ export interface RouteSource {
  * plus `url` could not be.
  */
 export function routeOf(req: RouteSource): string {
-  const template = nextTemplate(req) ?? koaTemplate(req) ?? fastifyTemplate(req) ?? expressTemplate(req);
+  const template =
+    nextTemplate(req) ?? koaTemplate(req) ?? honoTemplate(req) ?? fastifyTemplate(req) ?? expressTemplate(req);
   const route = template ?? unnamedRoute(req);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
 }
@@ -96,6 +98,8 @@ export function routeOf(req: RouteSource): string {
 export function declaredRoutesOf(app: unknown): string[] {
   const fastify = fastifyRegistered(app);
   if (fastify !== undefined) return fastifyDeclared(fastify);
+  const hono = honoRegistered(app);
+  if (hono !== undefined) return honoDeclared(hono);
   return (
     safeRead(() => {
       const anchor = anchorRouter(app);
@@ -128,6 +132,21 @@ function fastifyDeclared(routes: ReadonlyArray<{ methods: string[]; url: string 
       const upper = method.toUpperCase();
       if (upper !== "HEAD" && METHODS.has(upper)) out.add(`${upper} ${template}`);
     }
+  }
+  return [...out];
+}
+
+/**
+ * What a Hono router was given, named the way `honoTemplate` names a request. A middleware is not a route, and a route
+ * for every method (`app.all`, `app.use` on a path) has no single name, as in Express.
+ */
+function honoDeclared(routes: ReadonlyArray<{ method: string; path: string }>): string[] {
+  const out = new Set<string>();
+  for (const route of routes) {
+    if (honoMiddleware(route)) continue;
+    const upper = route.method.toUpperCase();
+    if (upper !== "HEAD" && METHODS.has(upper))
+      out.add(`${upper} ${joinTemplate([], route.path).slice(0, MAX_ROUTE_LENGTH)}`);
   }
   return [...out];
 }
@@ -165,7 +184,13 @@ function walkDeclared(router: RouterLike, links: MountLink[], depth: number, out
  * because with no routes registered there is nothing else to name it by.
  */
 function unnamedRoute(req: RouteSource): string {
-  if (expressAnswered(req) || koaRouterSawRequest(req) || fastifyInstanceOf(req) !== undefined) return UNMATCHED_ROUTE;
+  if (
+    expressAnswered(req) ||
+    koaRouterSawRequest(req) ||
+    fastifyInstanceOf(req) !== undefined ||
+    honoRouterOf(req) !== undefined
+  )
+    return UNMATCHED_ROUTE;
   return heuristicTemplate(typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/"));
 }
 
@@ -200,6 +225,12 @@ function nextTemplate(req: object): string | undefined {
 /** Fastify's template: the url of the route that answered, as it was registered, prefixes included (`fastify.ts`). */
 function fastifyTemplate(req: object): string | undefined {
   const matched = fastifyMatchedRoute(req);
+  return matched === undefined ? undefined : joinTemplate([], matched);
+}
+
+/** Hono's template: the first route the request matched that is not a middleware, prefixes included (`hono.ts`). */
+function honoTemplate(req: object): string | undefined {
+  const matched = honoMatchedRoute(req);
   return matched === undefined ? undefined : joinTemplate([], matched);
 }
 

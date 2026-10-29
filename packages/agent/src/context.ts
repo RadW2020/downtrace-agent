@@ -140,13 +140,21 @@ export function currentContext(): RequestContext | undefined {
  * Runs `fn` in an async context of its own, outside any request: a request `enterRequest` opens inside it is the
  * context of what `fn` calls and starts, and not of whoever called this, which goes on in the context it had.
  *
- * For a request no server announced (`fastify.inject()`), opened from a hook of the framework's: `enterWith`
- * there would leave the caller — a test, usually — inside the request it made, and its next query would be
- * that request's.
+ * For a request no server announced (`fastify.inject()`, Hono's `app.request()`), opened from inside the framework:
+ * `enterWith` there would leave the caller — a test, usually — inside the request it made, and its next query would
+ * be that request's.
+ *
+ * `exit` alone is not that. Node's `exit` and `run` call `fn` in the caller's own context when the store would not
+ * change, which is the case of a caller in no request, and an `enterWith` inside `fn` is then the caller's. Hono
+ * dispatches inside the test's own call, and its test was left inside its request. So the store is changed first, to
+ * one that is never read, and `exit` has a context to leave and to give back.
  */
 export function apart<T>(fn: () => T): T {
-  return storage.exit(fn);
+  return storage.run(LEFT, () => storage.exit(fn));
 }
+
+/** The store `apart` changes to before it leaves it: nothing runs while it is the store. */
+const LEFT = Object.freeze({}) as RequestContext;
 
 /**
  * Runs `fn` in the context of a request captured earlier, and in no other change of the async context: whatever

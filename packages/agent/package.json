@@ -29,6 +29,7 @@
     "@downtrace/protocol": "workspace:*"
   },
   "devDependencies": {
+    "@hono/node-server": "^1.19.17",
     "@koa/router": "^15.7.0",
     "@koa/router12": "npm:@koa/router@^12.0.2",
     "@types/express": "^5.0.6",
@@ -40,6 +41,7 @@
     "express4": "npm:express@^4",
     "fastify": "^5.12.7",
     "fastify4": "npm:fastify@^4.29.1",
+    "hono": "^4.13.14",
     "jest": "^30.5.2",
     "jest29": "npm:jest@^29.7.0",
     "koa": "^3.2.1",
