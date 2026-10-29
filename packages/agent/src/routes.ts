@@ -79,6 +79,65 @@ export function routeOf(req: RouteSource): string {
 }
 
 /**
+ * The routes an Express application declares, as `METHOD /template`: what lets `downtrace check` name a route no
+ * test called (ESC-18) without a list written by hand.
+ *
+ * Every name is the one `routeOf` gives a request to that route, because it is built the same way: the route's
+ * own path, behind the patterns its mounts were registered with (`mounts.ts`), joined by `joinTemplate`. A route
+ * that was called and came out under another name here would be said twice, once as not called. So what has no
+ * single name is left out rather than guessed: a route for every method (`all`), a path that is not a string (a
+ * regular expression, a list), a mount whose pattern was not recorded or is not one string, and a mounted app
+ * whose chain Express did not record.
+ *
+ * It reads what the routers keep from registration and nothing a request writes. It cannot throw (invariant 2).
+ */
+export function declaredRoutesOf(app: unknown): string[] {
+  return (
+    safeRead(() => {
+      const anchor = anchorRouter(app);
+      if (anchor === undefined) return [];
+      const apps = appChain(app);
+      if (apps.some((pattern) => pattern === undefined)) return [];
+      const out = new Set<string>();
+      walkDeclared(
+        anchor,
+        apps.map((pattern) => ({ value: "", pattern })),
+        0,
+        out,
+      );
+      return [...out];
+    }) ?? []
+  );
+}
+
+function walkDeclared(router: RouterLike, links: MountLink[], depth: number, out: Set<string>): void {
+  if (depth > MAX_MOUNT_DEPTH) return;
+  for (const layer of router.stack) {
+    if (!isLayerLike(layer)) continue;
+    const route = layer.route as { path?: unknown; methods?: unknown } | undefined;
+    if (route !== undefined && route !== null) {
+      const { path, methods } = route;
+      if (typeof path !== "string" || methods === null || typeof methods !== "object") continue;
+      const on = Object.entries(methods).filter(([, value]) => value === true);
+      // `all` registers the route for every method Node knows, one by one, and a route registered by hand
+      // has a few: more than the protocol names is an `all`, whose requests are named by whatever they ask.
+      if (on.length > METHODS.size || on.some(([method]) => method === "_all")) continue;
+      const template = joinTemplate(links, path).slice(0, MAX_ROUTE_LENGTH);
+      for (const [method] of on) {
+        const upper = method.toUpperCase();
+        if (METHODS.has(upper)) out.add(`${upper} ${template}`);
+      }
+      continue;
+    }
+    const handle = layer.handle;
+    if (!isRouterLike(handle)) continue;
+    const pattern = mountPathOf(layer);
+    if (typeof pattern !== "string") continue;
+    walkDeclared(handle, [...links, { value: "", pattern }], depth + 1, out);
+  }
+}
+
+/**
  * What a request is called when no framework template, and no mount, named it: `(unmatched)` when a framework
  * with routes was answering and none of them was the request's, and the heuristic over the path otherwise,
  * because with no routes registered there is nothing else to name it by.

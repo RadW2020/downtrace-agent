@@ -35,6 +35,12 @@ export interface AgentConfig {
    */
   inspect: string | undefined;
   /**
+   * Where to write the routes the application declares, or nothing: `DOWNTRACE_CHECK_ROUTES`, which only
+   * `downtrace check` sets, beside the inspection file of its run. A route no test calls leaves nothing in the
+   * batches, and this is how the comparison can still name it (ESC-18). Absent, the walk is never made.
+   */
+  checkRoutes: string | undefined;
+  /**
    * Whether the normalised query text travels with the profile. `DOWNTRACE_QUERY_TEXT=off` suppresses it and
    * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
    */
@@ -140,6 +146,7 @@ export function configFromEnv(
   const token = env.DOWNTRACE_TOKEN?.trim() ?? "";
   const rawUrl = env.DOWNTRACE_URL?.trim() ?? "";
   const inspect = env.DOWNTRACE_INSPECT?.trim();
+  const checkRoutes = env.DOWNTRACE_CHECK_ROUTES?.trim();
   // Inspecting without a cloud is the path that matters: install, set one variable, run the application, read the
   // file — before handing anything to anyone. Half a cloud is still a mistake worth naming, inspection or not.
   const inspectOnly = inspect !== undefined && inspect !== "" && token === "" && rawUrl === "";
@@ -190,6 +197,7 @@ export function configFromEnv(
       excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
+      checkRoutes: checkRoutes === "" ? undefined : checkRoutes,
     },
     warnings,
   };

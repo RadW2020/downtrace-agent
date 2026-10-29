@@ -181,10 +181,10 @@ describe("an Express app with a mysql2 pool", () => {
 
   it("sends nothing the application configured the connection with, nor any value", async () => {
     const shop = await startShop({ instrument: new Set(["mysql"]) });
-    await hit(shop.url, "/orders/4821");
+    await hit(shop.url, "/orders/482193576");
     await shop.agent.stop();
     const wire = JSON.stringify(shop.sink.batches);
-    for (const secret of [SECRET_USER, SECRET_PASSWORD, SECRET_DATABASE, "ana-zq", "ana@cliente.com", "4821"]) {
+    for (const secret of [SECRET_USER, SECRET_PASSWORD, SECRET_DATABASE, "ana-zq", "ana@cliente.com", "482193576"]) {
       expect(wire, `leaked: ${secret}`).not.toContain(secret);
     }
     // And the values did go to the database: it is the batch that has none, not the application that sent none.

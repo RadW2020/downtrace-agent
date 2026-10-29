@@ -74,12 +74,17 @@ const WAIT = /\bAtomics\.wait\b/;
  *   and never a request: `Inspector.writeOnExit` has no other caller, the sender refuses to call it with a cloud
  *   configured, and an exception that is killing the process writes nothing. Invariant 1 is about the path of a
  *   request, and no request is served after `exit`.
+ * - `appendFileSync`, in `declared.ts` (ESC-18), for the reason `inspect.ts` has it and on the same way out: the
+ *   routes the applications declare are written beside the inspection file, only under `downtrace check`, which
+ *   names the file. `DeclaredRoutes.writeOnExit` has one caller, the `exit` handler the agent registers only when
+ *   it writes and sends nothing, and an exception that is killing the process writes nothing there either.
  */
 const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [
   { file: "entry.ts", name: "realpathSync" },
   { file: "entry.ts", name: "statSync" },
   { file: "inspect.ts", name: "appendFileSync" },
   { file: "inspect.ts", name: "writeSync" },
+  { file: "declared.ts", name: "appendFileSync" },
 ];
 
 /** Every name of the convention on a line, where `SYNC` stops at the first. */

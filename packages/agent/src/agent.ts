@@ -26,6 +26,7 @@ import {
   type RequestContext,
   recordOperationIn,
 } from "./context.ts";
+import { createDeclaredRoutes, type DeclaredRoutes } from "./declared.ts";
 import { applicationEntry } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
@@ -249,6 +250,8 @@ export class Agent {
   private dying = false;
   /** What the operator asked not to be looked at (`product.md:104`, ADR 0101). */
   private readonly excludedEndpoints: Excluded;
+  /** The routes the applications declare, written only under `downtrace check` (ESC-18). */
+  private readonly declared: DeclaredRoutes | undefined;
   private readonly excludedDependencies: Excluded;
   private instrumented = false;
   /**
@@ -305,6 +308,7 @@ export class Agent {
     try {
       this.enqueueHeld({ leaving: true });
       this.sender.dumpOnExit("exit");
+      this.declared?.writeOnExit();
     } catch (err) {
       this.internalError(err);
     }
@@ -319,6 +323,11 @@ export class Agent {
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
     this.log = deps.log ?? createLogger(config.debug);
+    this.declared = createDeclaredRoutes({
+      file: config.checkRoutes,
+      log: this.log,
+      observed: (route) => !this.excludedEndpoints.has(route),
+    });
     // The hostname is the user's; the id is ours, generated here. In minimal mode the first travels as a
     // digest of itself, which keeps two machines apart without naming either (ADR 0105).
     const host = hostname() || "unknown";
@@ -740,6 +749,8 @@ export class Agent {
       if (!sent && deadline?.aborted) {
         this.log.debug(`leaving: the last batch did not land within ${SHUTDOWN_FLUSH_MS} ms and is dropped`);
       }
+      // Only under `check`, and after the batch: a flush with nothing to write waits for nothing more than it did.
+      if (this.declared !== undefined) await this.declared.write();
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
       // Leaving hands over everything under way, because partial evidence is an answer and silence is not —
       // for as long as the deadline lasts, and not a request longer.
@@ -1111,6 +1122,8 @@ export class Agent {
     this.contexts.delete(request);
     const method = normalizeMethod(request.method);
     const route = routeOf(request);
+    // Before the exclusion: an excluded route still says which application answered, and its other routes count.
+    this.declared?.answered(request);
     // Excluded is **not observed**: not an aggregate, not the black box, not the profile, not even the
     // count of requests. Matched against the normalised template and not the path, because excluding
     // `/users/123` and not `/users/:id` would be an exclusion that excludes nothing (ADR 0101, gh-361).

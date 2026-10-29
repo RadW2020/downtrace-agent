@@ -59,7 +59,7 @@ function requestsLine(route: RouteResult): string {
     profiledRequests.base < requests.base || profiledRequests.change < requests.change
       ? ` (profiled: ${profiledRequests.base} and ${profiledRequests.change})`
       : "";
-  return `${requests.base} requests in the base, ${requests.change} in the change${partial}`;
+  return `${requests.base} ${requests.base === 1 ? "request" : "requests"} in the base, ${requests.change} in the change${partial}`;
 }
 
 function evaluatedBlock(route: RouteResult): string[] {

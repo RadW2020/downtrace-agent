@@ -1,5 +1,8 @@
 import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
+import { METHODS } from "../routes.ts";
+import { declaredRoute } from "./config.ts";
 
 /**
  * What a run left behind, read back: the file `DOWNTRACE_INSPECT` wrote, merged by route (LOC-01).
@@ -373,4 +376,54 @@ export async function readRunFile(path: string): Promise<RunTally> {
     stream.destroy();
   }
   return reader.finish();
+}
+
+/** The routes the applications of a run declared, read back, and the lines and entries that could not be read. */
+export interface DeclaredRead {
+  routes: string[];
+  malformed: number;
+}
+
+/**
+ * Folds the file the instrumentation wrote the declared routes to (`DOWNTRACE_CHECK_ROUTES`) into one list, each
+ * route once, sorted. Every process of the run appends to it, so a line can be cut by one that ended; what cannot
+ * be read is counted, as in the batches, and a route is only taken in the shape the instrumentation writes it.
+ */
+export function readDeclared(text: string): DeclaredRead {
+  const routes = new Set<string>();
+  let malformed = 0;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      malformed += 1;
+      continue;
+    }
+    const listed = isRecord(value) ? value.routes : undefined;
+    if (!Array.isArray(listed)) {
+      malformed += 1;
+      continue;
+    }
+    for (const entry of listed) {
+      const route = typeof entry === "string" ? declaredRoute(entry) : undefined;
+      if (route === undefined || !METHODS.has(route.slice(0, route.indexOf(" ")))) {
+        malformed += 1;
+        continue;
+      }
+      routes.add(route);
+    }
+  }
+  return { routes: [...routes].sort(), malformed };
+}
+
+/** The same, from the file. A run in which no Express application answered a request leaves none: nothing declared. */
+export async function readDeclaredFile(path: string): Promise<DeclaredRead> {
+  try {
+    return readDeclared(await readFile(path, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { routes: [], malformed: 0 };
+    throw err;
+  }
 }

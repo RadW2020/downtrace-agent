@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CheckReport } from "../src/check/report.ts";
@@ -20,6 +21,9 @@ import { appFiles, cleanEnv, createProject, downtrace, type Project, snapshot } 
 // covers: LOC-01, ESC-17, ESC-18
 
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
+
+/** The directory of the Express this package is tested against, for a project of a test to depend on. */
+const EXPRESS_DIR = dirname(createRequire(import.meta.url).resolve("express/package.json"));
 
 const projects: Project[] = [];
 const scratch: string[] = [];
@@ -192,6 +196,82 @@ describe("routes the tests do not exercise (ESC-18)", () => {
     expect(unchanged).toContain("GET /products");
     for (const id of ["GET /orders", "GET /reports", "GET /health"]) expect(unchanged).not.toContain(id);
     expect(checked.report.summary?.notEvaluated).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("routes an Express application declares and no test calls, with no list written by hand (ESC-18)", () => {
+  // What `init` leaves: a test command and nothing else. The application says which routes it has.
+  const EXPRESS_APP = `
+import http from "node:http";
+import express from "express";
+
+const provider = http.createServer((req, res) => {
+  req.resume();
+  res.end("ok");
+});
+await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+const providerPort = provider.address().port;
+const agent = new http.Agent({ keepAlive: false });
+const call = () =>
+  new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: providerPort, path: "/", agent }, (res) => {
+      res.resume();
+      res.on("end", resolve);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+
+const app = express();
+app.get("/products", async (_req, res) => {
+  await call();
+  res.send("products");
+});
+app.get("/orders/:id", (_req, res) => res.send("order"));
+const admin = express.Router();
+admin.post("/refunds", (_req, res) => res.send("refund"));
+app.use("/admin", admin);
+
+const server = app.listen(0, "127.0.0.1");
+await new Promise((resolve) => server.once("listening", resolve));
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`http://127.0.0.1:\${server.address().port}/products\`);
+  await res.text();
+}
+server.close();
+provider.close();
+`;
+  let checked: Checked;
+  beforeAll(async () => {
+    const made = await createProject({
+      "app.mjs": EXPRESS_APP,
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs" } }),
+    });
+    projects.push(made);
+    // The project's own express, as an install leaves it: the one this package is tested against.
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(EXPRESS_DIR, join(made.dir, "node_modules", "express"), "dir");
+    checked = await check(made, ["--base", "HEAD"]);
+  });
+
+  it("names each route nobody called as not called, mounts included, by the template a request would get", () => {
+    for (const id of ["GET /orders/:id", "POST /admin/refunds"]) {
+      expect(route(checked.report, id)).toMatchObject({ verdict: "not-evaluated", reasons: [{ code: "not-called" }] });
+    }
+  });
+
+  it("still evaluates the route the tests called, and counts the others in the summary", () => {
+    expect(route(checked.report, "GET /products").verdict).toBe("unchanged");
+    // `GET /` is the provider the run starts: a server with no framework is named by its path, and it ran nothing.
+    expect(checked.report.routes.map((one) => `${one.verdict} ${one.id}`).sort()).toEqual([
+      "not-evaluated GET /",
+      "not-evaluated GET /orders/:id",
+      "not-evaluated POST /admin/refunds",
+      "unchanged GET /products",
+    ]);
+    expect(checked.report.summary).toMatchObject({ worse: 0, unchanged: 1, notEvaluated: 3 });
+    expect(checked.code).toBe(0);
   });
 });
 

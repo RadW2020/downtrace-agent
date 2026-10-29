@@ -299,3 +299,22 @@ describe("the ceiling's arithmetic, against the window that reads it", () => {
     expect(minimumReadable(profileCeilingMs(DEFAULT_INTERVAL_MS) + 1, DEFAULT_INTERVAL_MS)).toBe(0);
   });
 });
+
+describe("the file check reads the declared routes from", () => {
+  const inspecting = { DOWNTRACE_INSPECT: "/tmp/run.jsonl" };
+
+  it("is what DOWNTRACE_CHECK_ROUTES says, and only check sets it", () => {
+    const result = configFromEnv({ ...inspecting, DOWNTRACE_CHECK_ROUTES: "/tmp/run.routes.jsonl" });
+    expect(result.ok && result.config.checkRoutes).toBe("/tmp/run.routes.jsonl");
+  });
+
+  it("is nothing when the variable is absent or blank: the walk of the routes is not made", () => {
+    for (const value of [undefined, "", "  "]) {
+      const result = configFromEnv({
+        ...inspecting,
+        ...(value === undefined ? {} : { DOWNTRACE_CHECK_ROUTES: value }),
+      });
+      expect(result.ok && result.config.checkRoutes).toBeUndefined();
+    }
+  });
+});

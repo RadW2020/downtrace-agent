@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
 import { adviceForNoProfile } from "./hints.ts";
-import { type RunTally, readRunFile } from "./read.ts";
+import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
   type CheckReport,
   compared,
@@ -246,12 +246,14 @@ function withoutDowntrace(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 export function runEnv(
   parent: NodeJS.ProcessEnv,
-  run: { registerUrl: string; inspectFile: string; side: Side },
+  run: { registerUrl: string; inspectFile: string; routesFile: string; side: Side },
 ): NodeJS.ProcessEnv {
   const env = withoutDowntrace(parent);
   const preload = `--import=${run.registerUrl}`;
   env.NODE_OPTIONS = parent.NODE_OPTIONS ? `${parent.NODE_OPTIONS} ${preload}` : preload;
   env.DOWNTRACE_INSPECT = run.inspectFile;
+  // The routes the applications declare, beside the batches: what names a route no test called (ESC-18).
+  env.DOWNTRACE_CHECK_ROUTES = run.routesFile;
   env.DOWNTRACE_INTERVAL_MS = WINDOW_MS;
   env.DOWNTRACE_PROFILE_MS = WINDOW_MS;
   env.DOWNTRACE_ENV = "check";
@@ -515,22 +517,28 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
   }
 
   const tallies = new Map<Side, RunTally>();
+  // The routes the configuration lists, and the ones the applications of either run said they have.
+  const declared = new Set(options.routes);
   for (const [side, dir, label, sha] of [
     ["base", baseProject, ref, commit],
     ["change", cwd, "working tree", head],
   ] as const) {
     const file = join(tmp, `${side}.jsonl`);
+    const routesFile = join(tmp, `${side}.routes.jsonl`);
     options.progress(`${side}: running ${options.command}`);
     const ran = await runCommand({
       command: options.command,
       cwd: dir,
-      env: runEnv(options.env, { registerUrl: options.registerUrl, inspectFile: file, side }),
+      env: runEnv(options.env, { registerUrl: options.registerUrl, inspectFile: file, routesFile, side }),
       timeoutMs: options.timeoutMs,
       signal: options.signal,
     }).catch((err: unknown) => {
       throw new CheckFailure("setup-failed", side, `could not start the test command: ${(err as Error).message}`);
     });
     const tally = await readRunFile(file);
+    const said = await readDeclaredFile(routesFile);
+    for (const route of said.routes) declared.add(route);
+    tally.malformed += said.malformed;
     tallies.set(side, tally);
     made.sides[side] = sideReport(label, sha, options.command, ran, tally);
     if (ran.timedOut) {
@@ -567,7 +575,7 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
   if (base === undefined || change === undefined || made.sides.base === null || made.sides.change === null) {
     throw new CheckFailure("setup-failed", null, "a run is missing: this is a bug in check");
   }
-  const routes = compareRuns(base, change, options.routes);
+  const routes = compareRuns(base, change, [...declared]);
   if (summarize(routes).worse + summarize(routes).unchanged === 0) {
     const lost = routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")));
     throw new CheckFailure(

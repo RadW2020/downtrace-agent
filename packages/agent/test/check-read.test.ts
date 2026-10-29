@@ -1,7 +1,7 @@
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
-import { identify, readRun } from "../src/check/read.ts";
+import { identify, readDeclared, readRun } from "../src/check/read.ts";
 import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint } from "./support/check-batches.ts";
 
 /**
@@ -220,5 +220,26 @@ describe("what makes two operations the same one", () => {
     const operations = run.routes.get("POST /c")?.operations;
     expect(operations?.size).toBe(1);
     expect(operations?.get("call:POST 127.0.0.1")?.executions).toBe(2);
+  });
+});
+
+describe("reading the routes the applications of a run declared (ESC-18)", () => {
+  it("merges every line of every process into one list, each route once", () => {
+    const text = [
+      JSON.stringify({ routes: ["GET /health", "POST /orders"] }),
+      JSON.stringify({ routes: ["GET /health", "GET /late"] }),
+    ].join("\n");
+    expect(readDeclared(text)).toEqual({ routes: ["GET /health", "GET /late", "POST /orders"], malformed: 0 });
+  });
+
+  it("counts what it cannot read, a line cut by a process that ended among them, and invents nothing", () => {
+    const text = [
+      JSON.stringify({ routes: ["GET /health"] }),
+      '{"routes":["GET /he',
+      JSON.stringify({ routes: "GET /x" }),
+      JSON.stringify({ routes: ["GET /ok", 42, "not a route", "BREW /coffee"] }),
+      "",
+    ].join("\n");
+    expect(readDeclared(text)).toEqual({ routes: ["GET /health", "GET /ok"], malformed: 5 });
   });
 });

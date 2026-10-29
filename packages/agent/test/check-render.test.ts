@@ -70,6 +70,22 @@ function reportOf(): CheckReport {
 describe("the report as text", () => {
   const text = renderText(reportOf());
 
+  it("says one request as one, and any other count in the plural", () => {
+    const one = (n: number) =>
+      readRun(
+        fileOf(
+          batch("p", {
+            intervals: [interval(1000, 1000, [endpoint("GET", "/p", n, { requestsWithCalls: n })])],
+            profile: profile(1000, 1000, [profileEndpoint("GET", "/p", [operation("query", "q", "SELECT 1", n)])]),
+          }),
+        ),
+      );
+    const rendered = renderText(
+      compared({ base: side("main"), change: side("working tree"), routes: compareRuns(one(1), one(2)), notes: [] }),
+    );
+    expect(rendered).toContain("1 request in the base, 2 in the change");
+  });
+
   it("has the three columns, in the order the product says, each with how many it holds", () => {
     const at = (title: string) => text.indexOf(title);
     expect(at("Worse (1)")).toBeGreaterThan(-1);

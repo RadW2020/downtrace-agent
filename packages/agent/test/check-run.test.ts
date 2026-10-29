@@ -9,7 +9,12 @@ import { runCommand, runEnv } from "../src/check/run.ts";
 // covers: LOC-01
 
 const REGISTER = "file:///opt/downtrace/dist/register.js";
-const run = { registerUrl: REGISTER, inspectFile: "/tmp/dt/base.jsonl", side: "base" } as const;
+const run = {
+  registerUrl: REGISTER,
+  inspectFile: "/tmp/dt/base.jsonl",
+  routesFile: "/tmp/dt/base.routes.jsonl",
+  side: "base",
+} as const;
 
 /** Every `DOWNTRACE_` name the instrumentation reads, from its own source, not from a list kept beside it. */
 async function readVariables(): Promise<string[]> {
@@ -27,6 +32,7 @@ describe("the environment of a run", () => {
     const given = Object.keys(env).filter((name) => name.startsWith("DOWNTRACE_"));
     expect(given.sort()).toEqual(
       [
+        "DOWNTRACE_CHECK_ROUTES",
         "DOWNTRACE_ENV",
         "DOWNTRACE_INSPECT",
         "DOWNTRACE_INTERVAL_MS",
@@ -38,9 +44,10 @@ describe("the environment of a run", () => {
     expect(env.DOWNTRACE_URL).toBeUndefined();
   });
 
-  it("writes to the file of its side, and closes a window every second", () => {
+  it("writes to the files of its side, the batches and the routes the applications declare, and closes a window every second", () => {
     const env = runEnv({}, run);
     expect(env.DOWNTRACE_INSPECT).toBe("/tmp/dt/base.jsonl");
+    expect(env.DOWNTRACE_CHECK_ROUTES).toBe("/tmp/dt/base.routes.jsonl");
     expect(env.DOWNTRACE_INTERVAL_MS).toBe("1000");
     expect(env.DOWNTRACE_PROFILE_MS).toBe("1000");
   });
