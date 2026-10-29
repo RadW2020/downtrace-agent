@@ -38,12 +38,13 @@ import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
-import { armPostgresJs } from "./instrument/postgresjs.ts";
+import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
-import { attachKoa } from "./koa.ts";
+import { attachJest, requiredFrom, type SandboxPatch } from "./jest.ts";
+import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
-import { armMounts } from "./mounts.ts";
+import { armExpress, armMounts } from "./mounts.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel, shedReasonOf } from "./overhead.ts";
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
@@ -268,6 +269,7 @@ export class Agent {
   private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
   private stopFastify: (() => void) | undefined;
+  private stopJest: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
@@ -596,19 +598,53 @@ export class Agent {
     }
     // MySQL through `mysql2`, the same way (DT-91). It has no key in `observers`: the protocol names four
     // switches and the schema refuses a fifth, so whether it attached is said in the log and not in the batch.
+    const mysqlDeps = {
+      log: this.log,
+      internalError,
+      fingerprints: this.mysqlFingerprints,
+      errors: this.errors,
+    };
     if (on.has("mysql")) {
-      const mysqlDeps = {
-        log: this.log,
-        internalError,
-        fingerprints: this.mysqlFingerprints,
-        errors: this.errors,
-      };
       if (this.mysqlModule !== undefined) {
         patchMysql(this.mysqlModule, "unknown", mysqlDeps);
       } else {
         this.mysqlAttach = armMysql({ ...mysqlDeps, from: entry }).attach;
       }
     }
+    // Under Jest every module a test file requires comes from Jest's own registry, never from the cache the
+    // attaches above read: the same patches, on the copies Jest hands the tests (`jest.ts`).
+    const sandbox: SandboxPatch[] = [
+      { matches: (name) => name === "express", patch: (express) => armExpress(express) },
+      {
+        matches: (name) => name === "koa",
+        patch: (koa) => armContextRecording((koa as { prototype?: unknown } | null)?.prototype, internalError),
+      },
+    ];
+    if (on.has("pg") && this.pgModule === undefined) {
+      const pgDeps = {
+        log: this.log,
+        internalError,
+        fingerprints: this.fingerprints,
+        errors: this.errors,
+        depth: this.config.pgDepth,
+      };
+      sandbox.push(
+        { matches: (name) => name === "pg", patch: (pg) => instrumentPg({ ...pgDeps, moduleImpl: pg }) },
+        {
+          matches: (name, from) => name === "./query.js" && requiredFrom(from, "postgres", "cjs", "src", "index.js"),
+          patch: (query) => patchPostgresJs(query, "unknown", pgDeps),
+        },
+      );
+    }
+    if (on.has("mysql") && this.mysqlModule === undefined) {
+      sandbox.push({
+        // `mysql2/promise` is the callback core with promises on top, and requires it as `./index.js`.
+        matches: (name, from) =>
+          name === "mysql2" || (name === "./index.js" && requiredFrom(from, "mysql2", "promise.js")),
+        patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
+      });
+    }
+    this.stopJest = attachJest({ patches: sandbox, internalError });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
       this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors, calls: this.calls });
@@ -692,6 +728,8 @@ export class Agent {
     this.stopHttp = undefined;
     this.stopFastify?.();
     this.stopFastify = undefined;
+    this.stopJest?.();
+    this.stopJest = undefined;
     this.stopRedis?.();
     this.stopRedis = undefined;
     this.runtime.stop();

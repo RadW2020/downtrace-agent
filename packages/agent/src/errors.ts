@@ -1,3 +1,4 @@
+import { isNativeError } from "node:util/types";
 import { type Fingerprint, hash64 } from "./fingerprint.ts";
 import { meaningful, sanitizeMessage } from "./sanitize.ts";
 
@@ -70,9 +71,17 @@ export function stackSignature(stack: string | undefined): string {
   return frames.join(" ← ");
 }
 
+/**
+ * Whether a thrown thing is an `Error`, from this realm or another: what Jest runs a test file's modules in is a
+ * context of its own, with an `Error` of its own, and what the application throws there is no `instanceof` ours.
+ */
+function isError(err: unknown): err is Error {
+  return err instanceof Error || isNativeError(err);
+}
+
 /** The type of a thrown thing, for the many that are not `Error`. */
 function typeOf(err: unknown): string {
-  if (err instanceof Error) return err.name || err.constructor?.name || "Error";
+  if (isError(err)) return err.name || err.constructor?.name || "Error";
   if (err === null) return "null";
   if (Array.isArray(err)) return "Array";
   if (typeof err === "object") return err.constructor?.name || "Object";
@@ -80,7 +89,7 @@ function typeOf(err: unknown): string {
 }
 
 function messageOf(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (isError(err)) return err.message;
   if (typeof err === "string") return err;
   if (typeof err === "number" || typeof err === "boolean" || err === null || err === undefined) {
     return String(err);
@@ -112,7 +121,7 @@ export function errorFingerprint(err: unknown, options: SignOptions = {}): Finge
   const type = typeOf(err);
   const sanitised = sanitizeMessage(messageOf(err));
   const message = meaningful(sanitised) ? sanitised : "";
-  const where = options.stack === false ? "" : stackSignature(err instanceof Error ? err.stack : undefined);
+  const where = options.stack === false ? "" : stackSignature(isError(err) ? err.stack : undefined);
   let text = type;
   if (message !== "") {
     text = `${type}: ${message}`;
@@ -163,12 +172,11 @@ export class ErrorFingerprintCache {
     // Signed without its stack, an Error is keyed without it too: the stack is not read, and two throws of it
     // from different places are one entry.
     const signsStack = options.stack !== false;
-    const key =
-      err instanceof Error
-        ? signsStack
-          ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
-          : `Bare\n${err.name}\n${err.message}`
-        : `${typeOf(err)}\n${messageOf(err)}`;
+    const key = isError(err)
+      ? signsStack
+        ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
+        : `Bare\n${err.name}\n${err.message}`
+      : `${typeOf(err)}\n${messageOf(err)}`;
     const cached = this.entries.get(key);
     if (cached) return cached;
     this.misses += 1;

@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { ErrorFingerprintCache, errorFingerprint, stackSignature } from "../src/errors.ts";
 // `sanitizeMessage` and `meaningful` moved to `sanitize.ts`, which the query scanner needs too (gh-350).
@@ -310,5 +311,20 @@ describe("an error signed without its stack", () => {
     expect(cache.get(err).hash, "the first one keeps its own").toBe(placed.hash);
     cache.get(err, { stack: false });
     expect(cache.misses).toBe(2);
+  });
+});
+
+describe("an Error from another realm, as Jest runs a test file's modules in a context of its own", () => {
+  it("is signed as an Error of this realm is: by its type, its message and where it was thrown", () => {
+    const foreign = runInNewContext(
+      "(function thrower() { return new TypeError('order 42 not found'); })()",
+    ) as unknown;
+    expect(foreign instanceof Error).toBe(false);
+    const signed = errorFingerprint(foreign);
+    // The stack is read, as it is for an Error of this realm: two throws from different places are two signatures.
+    expect(signed.text.startsWith("TypeError: order ? not found · thrower@")).toBe(true);
+    const elsewhere = runInNewContext("(function other() { return new TypeError('order 42 not found'); })()");
+    expect(errorFingerprint(elsewhere).hash).not.toBe(signed.hash);
+    expect(new ErrorFingerprintCache().get(foreign).hash).toBe(signed.hash);
   });
 });

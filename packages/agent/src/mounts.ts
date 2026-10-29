@@ -149,13 +149,18 @@ export function armDispatchRecording(proto: unknown): boolean {
  */
 export function armMounts(from?: string): void {
   try {
-    const express = createRequire(from ?? applicationEntry())("express") as {
-      Router?: { prototype?: unknown };
-      Route?: { prototype?: unknown };
-    };
-    armMountRecording(express.Router?.prototype) || armMountRecording(express.Router);
-    armDispatchRecording(express.Route?.prototype);
+    armExpress(createRequire(from ?? applicationEntry())("express"));
   } catch {
     // The application does not use express, or it is not resolvable from here.
   }
+}
+
+/**
+ * Arms the records on an `express` module already loaded: the one `armMounts` resolves, or the copy a test file got
+ * from Jest's own registry (`jest.ts`). Idempotent, as each record is.
+ */
+export function armExpress(module: unknown): void {
+  const express = module as { Router?: { prototype?: unknown }; Route?: { prototype?: unknown } } | null | undefined;
+  armMountRecording(express?.Router?.prototype) || armMountRecording(express?.Router);
+  armDispatchRecording(express?.Route?.prototype);
 }

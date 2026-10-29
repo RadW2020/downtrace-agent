@@ -24,6 +24,9 @@ vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 
 /** The directory of the Express this package is tested against, for a project of a test to depend on. */
 const EXPRESS_DIR = dirname(createRequire(import.meta.url).resolve("express/package.json"));
+/** Express 4, which most Express backends still run, and `pg`, for a suite Jest runs. */
+const EXPRESS4_DIR = dirname(createRequire(import.meta.url).resolve("express4/package.json"));
+const PG_DIR = dirname(createRequire(import.meta.url).resolve("pg/package.json"));
 /** The same for Fastify. */
 const FASTIFY_DIR = dirname(createRequire(import.meta.url).resolve("fastify/package.json"));
 /** postgres.js's, whose exports name no `package.json`: three directories above the file `require` resolves. */
@@ -451,6 +454,141 @@ await sql.end();
       perRequest: { base: 1, change: 5 },
     });
     expect(checked.code).toBe(1);
+  });
+});
+
+/**
+ * Jest runs a test file's modules in a registry of its own, where neither the Express the instrumentation arms nor
+ * the drivers it patches from Node's module cache are the ones the tests use (`jest.ts`). A suite as most Express
+ * backends write theirs: routers mounted under routers, supertest's way of calling the application — Node's own
+ * `http`, as supertest does — and Jest, in band.
+ */
+const JEST_APP = `
+const express = require("express");
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+
+const calls = Number(readFileSync(join(__dirname, "calls.txt"), "utf8"));
+const queries = Number(readFileSync(join(__dirname, "queries.txt"), "utf8"));
+const pg = process.env.DATABASE_URL ? new (require("pg").Pool)({ connectionString: process.env.DATABASE_URL, max: 1 }) : undefined;
+
+function fetchStock(port) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port, path: "/stock" }, (res) => { res.resume(); res.on("end", resolve); }).on("error", reject);
+  });
+}
+
+module.exports = (stockPort) => {
+  const users = express.Router();
+  users.get("/:userId", async (req, res, next) => {
+    try {
+      for (let i = 0; i < calls; i += 1) await fetchStock(stockPort);
+      if (pg) for (let i = 0; i < queries; i += 1) await pg.query("select $1::int + $2::int as line", [req.params.userId, i]);
+      res.send("user");
+    } catch (err) { next(err); }
+  });
+  const v1 = express.Router();
+  v1.use("/users", users);
+  const app = express();
+  app.use("/v1", v1);
+  return { app, end: () => pg?.end() };
+};
+`;
+
+const JEST_TEST = `
+const http = require("node:http");
+const makeApp = require("./app.js");
+
+let stock;
+let app;
+beforeAll(async () => {
+  stock = http.createServer((req, res) => res.end("ok"));
+  await new Promise((resolve) => stock.listen(0, "127.0.0.1", resolve));
+  app = makeApp(stock.address().port);
+});
+afterAll(async () => {
+  await app.end();
+  await new Promise((resolve) => stock.close(resolve));
+});
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const server = app.app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/v1/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+const JESTS = [
+  ["Jest 30", dirname(createRequire(import.meta.url).resolve("jest/package.json"))],
+  ["Jest 29", dirname(createRequire(import.meta.url).resolve("jest29/package.json"))],
+] as const;
+
+/** A project whose tests Jest runs, at `calls.txt` and `queries.txt` per request, with what the change sets. */
+async function jestProject(jest: string, change: { calls: string; queries: string }): Promise<Checked> {
+  const made = await createProject({
+    "app.js": JEST_APP,
+    "users.test.js": JEST_TEST,
+    "calls.txt": "1",
+    "queries.txt": "1",
+    ".gitignore": "node_modules\n",
+    "package.json": JSON.stringify({ name: "jest-suite", private: true, jest: { transform: {} } }),
+    "downtrace.json": JSON.stringify({ check: { command: "node node_modules/jest/bin/jest.js --runInBand" } }),
+  });
+  projects.push(made);
+  await mkdir(join(made.dir, "node_modules"), { recursive: true });
+  await symlink(jest, join(made.dir, "node_modules", "jest"), "dir");
+  await symlink(EXPRESS4_DIR, join(made.dir, "node_modules", "express"), "dir");
+  await symlink(PG_DIR, join(made.dir, "node_modules", "pg"), "dir");
+  await made.write("calls.txt", change.calls);
+  await made.write("queries.txt", change.queries);
+  return check(made, ["--base", "HEAD"]);
+}
+
+describe.each(JESTS)("a suite Jest runs, %s, as most Express backends are tested", (_name, jest) => {
+  let checked: Checked;
+  beforeAll(async () => {
+    // The change: the route now calls its provider once per item, three times a request.
+    checked = await jestProject(jest, { calls: "3", queries: "1" });
+  });
+
+  it("names the route by its mounts, and sees the calls multiplied", () => {
+    const users = route(checked.report, "GET /v1/users/:userId");
+    expect(users.verdict, JSON.stringify(checked.report.routes.map((r) => r.id))).toBe("worse");
+    expect(users.requests).toEqual({ base: 3, change: 3 });
+    expect(users.operations.find((operation) => operation.kind === "call")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 3 },
+    });
+    expect(checked.code).toBe(1);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("a suite Jest runs whose queries go through pg", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await jestProject(JESTS[0][1], { calls: "1", queries: "4" });
+  });
+
+  it("sees the queries the tests' own copy of pg ran, multiplied", () => {
+    const users = route(checked.report, "GET /v1/users/:userId");
+    expect(users.verdict).toBe("worse");
+    expect(users.operations.find((operation) => operation.kind === "query")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 4 },
+    });
+    expect(checked.report.change?.observers.pg).toBe("on");
   });
 });
 

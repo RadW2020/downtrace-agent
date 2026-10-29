@@ -782,10 +782,21 @@ file holds when the run is over:
 | Mocha — default, `--exit` or `--parallel` | ends on its own; `--exit` and the workers of `--parallel` end with `process.exit()` | kept, written on `exit` when it exits — **by hand** |
 
 The rows with a test were run by the real runner, Vitest 4.1.11 on Node 24. The two marked **by hand** were run once,
-against Jest 30.5.2 and Mocha 12.0.3 on Node 24, and no test asserts them: adding either to this package so that a
-sentence has a test would be a dependency whose only use is to be run here. Also by hand, on Vitest 4.1.11, its `vmForks`
+against Jest 30.5.2 and Mocha 12.0.3 on Node 24, and no test asserts them; Jest is in this package's tests for its
+module registry ([below](#a-test-run-what-each-runner-keeps-of-its-profile)), not for this row. Also by hand, on Vitest 4.1.11, its `vmForks`
 pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool as the `threads` row does; and Vitest
 5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
+
+**Under Jest, the instrumentation reaches into Jest's own module registry, on Node 22 and later.** Jest runs a test
+file's modules in a registry and a context of its own: the `pg`, `mysql2`, postgres.js and Express the tests use are
+not the ones in Node's module cache, which is where the instrumentation finds them everywhere else. So when Jest
+loads `jest-runtime`, which Node announces on its `module.require` channel, the instrumentation wraps the
+`requireModule` every `require` of a test file goes through, and patches the copies Jest hands the tests: their
+queries are counted and their Express routes are named by their mounts, as anywhere else. Checked by
+`check.test.ts` on Jest 30 and 29, with Express 4 routers mounted under routers and `pg`. What reaches Node's own
+modules — HTTP, Fastify, the Redis clients — never needed it. **On Node 20**, which has no `module.require` channel,
+a suite Jest runs has no queries from those drivers, and its Express routes under a mount come out as
+`/:param/:param/:userId`: run it on Node 22 or later. Jest's ESM mode (`--experimental-vm-modules`) is not reached.
 
 **Vitest's thread pools are the one case that loses it, and nothing in a thread can change that.** A terminated thread
 fires no `beforeExit`, no `exit` and no signal: what it held goes with it, and the file does not have its routes. Use

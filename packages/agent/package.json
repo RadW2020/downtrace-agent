@@ -40,6 +40,8 @@
     "express4": "npm:express@^4",
     "fastify": "^5.12.7",
     "fastify4": "npm:fastify@^4.29.1",
+    "jest": "^30.5.2",
+    "jest29": "npm:jest@^29.7.0",
     "koa": "^3.2.1",
     "mysql2": "^3.24.5",
     "mysql2-legacy": "npm:mysql2@3.11.5",

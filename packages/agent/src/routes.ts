@@ -1,3 +1,4 @@
+import { isRegExp } from "node:util/types";
 import type { Endpoint } from "@downtrace/protocol";
 import { fastifyInstanceOf, fastifyMatchedRoute, fastifyRegistered } from "./fastify.ts";
 import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
@@ -600,7 +601,7 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
   // different on each call and would make the walk change the application's state (gh-898). The value on
   // the layer, `path`, is never read: it is what the last request matched, not what the mount was
   // registered with.
-  if (layer.regexp instanceof RegExp && !/[gy]/.test(layer.regexp.flags)) {
+  if (isRegExp(layer.regexp) && !/[gy]/.test(layer.regexp.flags)) {
     let match: RegExpExecArray | null;
     try {
       match = layer.regexp.exec(path);
@@ -615,7 +616,7 @@ function matchedValue(layer: LayerLike, path: string): { value: string; index: n
 /** Whether the mount was registered with a regular expression that keeps state between calls (`g`, `y`). */
 function registeredWithState(layer: LayerLike): boolean {
   const raw = mountPathOf(layer);
-  return (Array.isArray(raw) ? raw : [raw]).some((p) => p instanceof RegExp && /[gy]/.test(p.flags));
+  return (Array.isArray(raw) ? raw : [raw]).some((p) => isRegExp(p) && /[gy]/.test(p.flags));
 }
 
 /**
@@ -633,7 +634,7 @@ function linkPattern(layer: LayerLike, index: number): string | undefined {
   if (raw === undefined) return undefined;
   if (Array.isArray(raw)) raw = raw[index];
   if (typeof raw === "string") return raw;
-  if (raw instanceof RegExp) return undefined;
+  if (isRegExp(raw)) return undefined;
   if (raw !== null && typeof raw === "object" && Array.isArray((raw as { tokens?: unknown }).tokens)) {
     // A parsed path (path-to-regexp's data) knows how to write itself back; take what it writes.
     try {

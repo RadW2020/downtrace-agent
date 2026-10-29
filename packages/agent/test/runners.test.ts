@@ -19,9 +19,9 @@ import { afterEach, describe, expect, it } from "vitest";
  * real runners, started the way a user starts them, over suites that call routes of their own in each of the
  * processes or threads, with the batches written to a file and read back.
  *
- * Vitest and `node:test` are the runners this repository has or ships; Jest and Mocha are checked by hand, and the
- * README says so in those words. Adding either to this package to have a test for the sentence would be a
- * dependency whose only use is to be run here.
+ * Vitest and `node:test` are asked here; Jest's and Mocha's rows are checked by hand, and the README says so in those
+ * words. Jest is a dependency of this package's tests for what its own module registry hides (`check.test.ts`), and
+ * its row is a claim about how it ends its processes, which that suite does not ask.
  *
  * `packages/reference-app/test/runners.integration.test.ts` asks the same of the reference app, with a database.
  */

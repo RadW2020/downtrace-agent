@@ -20,6 +20,7 @@ const askedForMeasurements = process.env.DOWNTRACE_MEASURE === "1";
 
 export default defineConfig({
   test: {
+    setupFiles: ["test/support/application-entry.ts"],
     exclude: askedForMeasurements ? configDefaults.exclude : [...configDefaults.exclude, "**/*measure*.test.ts"],
   },
 });

@@ -1,2 +1,7 @@
 packages:
   - packages/*
+# Jest 30's, which the agent's tests run Jest with: both fall back to a build only when no prebuilt binary fits, and
+# a dependency of a test runs no install script here.
+allowBuilds:
+  '@parcel/watcher': false
+  unrs-resolver: false
