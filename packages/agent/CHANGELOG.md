@@ -1,5 +1,37 @@
 # @downtrace/agent
 
+## 0.11.0
+
+### Minor Changes
+
+- 594f052: `downtrace check` names the routes of an Express application that no test called, with no list written by hand.
+  
+  A route no test reaches leaves nothing in the batches, so `check` could only name it from `check.routes`, which
+  `init` does not write: an application with four routes whose tests called two read «2 of 2 routes evaluated». Now
+  the instrumentation, only under `check`, reads the routes of every Express application that answered a request off
+  its router — mounts included, under the template a request to each would get — and `check` lists the ones nobody
+  called as `not-called`. `app.all`, a regular expression, a list of paths and a mount whose pattern is not one string
+  have no single name and are left to `check.routes`. A count of one request is said as one.
+- 9441fa5: A Fastify request made with `app.inject()` — how Fastify's testing guide calls an application — is observed as one the server received: by its template, with the queries, calls and commands it ran. A test suite written that way was, for `downtrace check`, a run in which no route was called; now its regressions are seen. The request is opened and closed by Fastify's own `onRequest` and `onResponse` hooks, apart from the code that called `inject()`.
+- c7902be: Fastify 4 and 5 routes are named by their templates, and `check` names the Fastify routes no test called.
+  
+  A Fastify application used to be named by the shape of its path: `/users/42` came out as `/users/:id` by luck of
+  the digits and `/users/ana` as itself, so every user was a route of its own and its name travelled, and a 404 sent
+  its words. The instrumentation now listens for the instances Fastify announces (`fastify.initialization`) and adds an
+  `onRequest` and an `onRoute` hook through Fastify's own API: a request is named by the url of the route that
+  answered, plugin prefixes included, and what Fastify's 404 handler answered is `(unmatched)`. Under `check`, the
+  routes each instance registered are declared, without the `HEAD` Fastify adds beside each `GET`.
+  
+  The first version that names Fastify routes by their templates changes their route identities, once: a finding on
+  the old route receives no data, and an exclusion written against the old name has to be rewritten.
+- c7daf9f: Redis commands sent through node-redis (`redis`, `@redis/client`, 5.12 and later) are observed, as ioredis's were: per request, by server, as operations named by the command and never by its key or arguments. A transaction is one `MULTI` operation; a pipeline is the commands it ran. `downtrace init` names `redis` among what it observes. Nothing is patched: node-redis publishes on tracing channels of its own.
+
+### Patch Changes
+
+- 6d8894c: The README, and the package's description on npm, open with what works with no account: `downtrace init` and
+  `downtrace check`, and what `check` printed for an N+1 the tests did not catch. Production, with the cloud,
+  follows.
+
 ## 0.10.0
 
 ### Minor Changes
