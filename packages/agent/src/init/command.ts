@@ -220,6 +220,7 @@ async function configure(dir: string): Promise<InitReport> {
       packageManager: found.manager,
       frameworks: found.frameworks,
       observed: found.observed,
+      unobserved: found.unobserved,
       testScript: found.testScript ?? null,
       testCommand: found.testCommand ?? null,
       bundler: next === undefined ? null : "next-standalone",

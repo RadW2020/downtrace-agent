@@ -41,6 +41,12 @@ export interface Detected {
   packageManager: PackageManager;
   frameworks: string[];
   observed: string[];
+  /**
+   * What the project's work goes through that the instrumentation does not observe: `check` sees those requests and
+   * their calls, not that work, and a route whose work all goes there is not evaluated. Nothing to do; said before a
+   * run, not after it.
+   */
+  unobserved: string[];
   testScript: string | null;
   testCommand: string | null;
   bundler: "next-standalone" | null;
@@ -95,6 +101,7 @@ export function renderInitText(report: InitReport): string {
       row("framework", found.frameworks.length > 0 ? found.frameworks.join(", ") : "none it names routes for"),
     );
     lines.push(row("observed", [...found.observed, "outgoing HTTP"].join(", ")));
+    if (found.unobserved.length > 0) lines.push(row("not observed", found.unobserved.join(", ")));
     lines.push(row("test script", found.testScript ?? "none found"));
     if (found.bundler === "next-standalone") lines.push(row("build", 'Next.js with output: "standalone"'));
     lines.push(row("check runs", report.command ?? "nothing yet"));

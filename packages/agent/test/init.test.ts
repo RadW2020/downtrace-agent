@@ -128,6 +128,32 @@ describe("a project it can configure", () => {
     expect(report.detected).toMatchObject({ frameworks: ["koa"], observed: ["ioredis"], packageManager: "pnpm" });
   });
 
+  /**
+   * The stranger campaign: a Mongoose boilerplate and a Prisma 4 one ran `init` as configured, and minutes of `check`
+   * later every route came back `nothing-observed`. What the project's work goes through is known before a run.
+   */
+  it.each([
+    [{ express: "^5", mongoose: "^8" }, ["mongoose"]],
+    [{ express: "^5", "@prisma/client": "^6" }, ["@prisma/client"]],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-pg": "^7" }, []],
+    [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, ["@libsql/client"]],
+  ])(
+    "says which of its data packages it does not observe, %j, and is configured all the same",
+    async (deps, unobserved) => {
+      const dir = await project({
+        ".git/": "",
+        "package.json": json({ dependencies: deps, scripts: { test: "vitest run" } }),
+      });
+      const { code, report } = await init(dir);
+      expect(code).toBe(0);
+      expect(report.status).toBe("configured");
+      expect(report.detected?.unobserved).toEqual(unobserved);
+      const { text } = await initText(dir);
+      if (unobserved.length > 0) expect(text).toMatch(new RegExp(`not observed\\s+${unobserved.join(", ")}`));
+      else expect(text).not.toContain("not observed");
+    },
+  );
+
   it("says what it found and what it wrote, in words", async () => {
     const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
     const { code, text } = await initText(dir);

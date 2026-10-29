@@ -1,4 +1,4 @@
-import { OBSERVED_PACKAGES } from "../init/detect.ts";
+import { OBSERVED_PACKAGES, UNOBSERVED_PACKAGES, unobservedOf } from "../init/detect.ts";
 import type { NotEvaluatedReason } from "./compare.ts";
 import type { CheckReport } from "./report.ts";
 
@@ -26,24 +26,6 @@ export interface Feedback {
 
 /** The public repository's issues, which are where outside reports come in. */
 export const ISSUES_URL = "https://github.com/RadW2020/downtrace-agent/issues/new";
-
-/**
- * Drivers whose work the instrumentation does not see at all: no diagnostics channel, no patch, and not HTTP, which
- * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
- * route whose work went through it.
- */
-export const UNOBSERVED_PACKAGES = [
-  "mongodb",
-  "mongoose",
-  "mysql",
-  "better-sqlite3",
-  "sqlite3",
-  "@libsql/client",
-  "mssql",
-  "oracledb",
-  "kafkajs",
-  "amqplib",
-] as const;
 
 /**
  * The packages of a project's data that a report names when the project depends on them: those the instrumentation
@@ -115,7 +97,7 @@ function whyOf(report: CheckReport, context: FeedbackContext): { why: string; ti
     return { why: `check could not compare (${failure.code}): ${failure.message}`, title: `check: ${failure.code}` };
   }
   const blind = report.routes.filter((route) => route.reasons.some((reason) => reason.code === "nothing-observed"));
-  const unobserved = UNOBSERVED_PACKAGES.filter((name) => context.dependencies.has(name));
+  const unobserved = unobservedOf(context.dependencies);
   if (blind.length > 0 && unobserved.length > 0) {
     const routes = `${blind.length} ${blind.length === 1 ? "route was" : "routes were"}`;
     return {

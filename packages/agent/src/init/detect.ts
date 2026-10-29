@@ -46,6 +46,35 @@ export const OBSERVED_PACKAGES = [
 ] as const;
 
 /**
+ * Drivers whose work the instrumentation does not see at all: no diagnostics channel, no patch, and not HTTP, which
+ * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
+ * route whose work went through it.
+ */
+export const UNOBSERVED_PACKAGES = [
+  "mongodb",
+  "mongoose",
+  "mysql",
+  "better-sqlite3",
+  "sqlite3",
+  "@libsql/client",
+  "mssql",
+  "oracledb",
+  "kafkajs",
+  "amqplib",
+] as const;
+
+/**
+ * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's client when it has no driver adapter the
+ * instrumentation observes: before Prisma 7 its queries go through an engine of its own, which talks to the database
+ * without a Node.js driver (the stranger campaign: a Prisma 4 application, every route `nothing-observed`).
+ */
+export function unobservedOf(dependencies: ReadonlySet<string>): string[] {
+  const unobserved: string[] = UNOBSERVED_PACKAGES.filter((name) => dependencies.has(name));
+  if (dependencies.has("@prisma/client") && !dependencies.has("@prisma/adapter-pg")) unobserved.push("@prisma/client");
+  return unobserved;
+}
+
+/**
  * The scripts that can be the test command, in the order they are preferred. An integration suite comes first, and
  * an end-to-end one next, because `check` judges what each request ran: a suite whose database is simulated
  * observes nothing, and its routes are not evaluated. NestJS's CLI writes `test:e2e` into every project it makes,
@@ -204,6 +233,8 @@ export interface Detection {
   frameworks: string[];
   /** The packages of `OBSERVED_PACKAGES` the project depends on. */
   observed: string[];
+  /** What its work goes through that the instrumentation does not observe (`unobservedOf`). */
+  unobserved: string[];
   testScript: string | undefined;
   testCommand: string | undefined;
   /** Whether the project depends on this package, which decides how a command of it is spelled. */
@@ -301,6 +332,7 @@ export async function detect(dir: string, pkg: PackageJson): Promise<Detection> 
     manager,
     frameworks,
     observed: OBSERVED_PACKAGES.filter((name) => pkg.dependencies.has(name)),
+    unobserved: unobservedOf(pkg.dependencies),
     testScript,
     testCommand: testScript === undefined ? undefined : commandFor(manager, testScript),
     installed: pkg.dependencies.has(AGENT_PACKAGE),
