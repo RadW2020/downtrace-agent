@@ -782,11 +782,11 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 | It looks for | Where | What it does with it |
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
-| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa) or `next` among the dependencies | says which |
+| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify` or `next` among the dependencies | says which |
 | What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `mysql2` and `ioredis` among the dependencies; outgoing HTTP always | says which |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
-An integration suite comes before the unit one because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
+An integration suite comes before the unit one because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express or Fastify application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
 
 **Run it again whenever you like.** It writes `check.command` only where there is none: a `downtrace.json` that has one is left as it is, byte for byte, and one without it gets the command and keeps every other key, inside `check` and outside it. The hook is written only where the project has no `instrumentation` file at the root or in `src/`.
 
@@ -832,7 +832,7 @@ Each route that is not evaluated carries a code an agent can branch on, in the J
 
 | Code | Why |
 |---|---|
-| `not-called` | No request reached it in either run. Only a route `check` knows the project has can be named when nobody called it, because nothing observes a route nobody asked: the routes of every Express application that answered a request in a run — read off its router, mounts included, under the template a request to each would get — and the ones listed in `routes`, below. A route for every method (`app.all`), one written as a regular expression or a list of paths, and the routes under a mount whose pattern is not one string have no single name and are not read; list them in `routes` if you want them named. |
+| `not-called` | No request reached it in either run. Only a route `check` knows the project has can be named when nobody called it, because nothing observes a route nobody asked: the routes of every Express or Fastify application that answered a request in a run — read off its router, mounts and plugin prefixes included, under the template a request to each would get, and without the `HEAD` Fastify adds beside each `GET` — and the ones listed in `routes`, below. A route for every method (`app.all`), one written as a regular expression or a list of paths, and the routes under a mount whose pattern is not one string have no single name and are not read; list them in `routes` if you want them named. |
 | `not-called-in-base` | The base run made no request to it: it is new, or the tests only reach it now. |
 | `not-called-in-change` | The change run made no request to it: it is gone, or the tests no longer reach it. |
 | `no-profile-in-base`, `no-profile-in-change` | That run saw requests to it and no profile covered them, so what they ran is unknown. |
@@ -871,7 +871,7 @@ Every key is optional. A key `check` does not know is an error, and keys outside
 | Key | What it is |
 |---|---|
 | `command` | The test command, run by a shell; or a list of words, which is quoted for it. A command after `--` takes its place. |
-| `routes` | The routes the project has, as `METHOD /template`, so that one no test calls can be named as `not-called`. An Express application's are read from it, so this is for the rest: Koa and Next.js, and the Express routes that have no single name. The template is the one the instrumentation names the route by: `/products/:id` for Express and Koa, `/products/[id]` for Next.js. |
+| `routes` | The routes the project has, as `METHOD /template`, so that one no test calls can be named as `not-called`. An Express or Fastify application's are read from it, so this is for the rest: Koa and Next.js, and the routes that have no single name. The template is the one the instrumentation names the route by: `/products/:id` for Express, Koa and Fastify, `/products/[id]` for Next.js. |
 | `prepare` | A command run in the base checkout before the tests, for what a fresh checkout lacks. When it is given, the base's dependencies are its business, and `check` links none (below). It gets `DOWNTRACE_CHECK_ORIGIN`, the directory of your project. |
 | `timeout` | How long each run of the test command may take, in seconds; 900 by default, `--timeout` on the command line. A run that does not end in time is stopped, with what it started, and said. |
 
@@ -1009,14 +1009,26 @@ part of the path travels. Next keeps this on the request, under a symbol it does
 writing it is named by the heuristic as before. What Next did not route — an asset under `/_next/static`, on some
 versions — is the heuristic's too.
 
+**Fastify** routes (4 and 5) are named by the url of the route that answered, as it was registered, plugin prefixes
+included: `/api/tenants/:tenant/invoices/:invoice` for every tenant and invoice. Fastify announces each instance it
+creates to whoever listens, and the instrumentation adds an `onRequest` and an `onRoute` hook to it through Fastify's
+own API; nothing of Fastify is patched. What Fastify's 404 handler answered is `(unmatched)`, as in Express, and no
+part of the path travels. An instance created before the instrumentation started is not announced to it and is named
+by the heuristic: with `--import`, the instrumentation starts before the application loads.
+
 A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
 catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then
-Express.
+Fastify, then Express.
 
 **The first version that names a request no route named `(unmatched)` changes their route identities, once**: a
 request that was a path — `/webhook/:id`, `/assets/:id`, a 404's path, a path with a plain word in it — is seen as
 `GET (unmatched)` or the method's own, a finding on the old route receives no data and is not declared recovered,
 and an exclusion written against such a path has to be rewritten against `(unmatched)`.
+
+**The first version that names Fastify routes by their templates changes their route identities, once**, as the one
+for Koa and Next.js did: a route that was a path — `/users/ana`, a 404's words — is seen as the template it became or as
+`(unmatched)`, a finding on the old route receives no data, and an exclusion written against the old name has to be
+rewritten against the template.
 
 **The first version that names Koa and Next.js routes by their templates changes their route identities, once**, as the
 one below did for the values: a route that was a path — a Koa one with a plain word in it, a Next.js one with its

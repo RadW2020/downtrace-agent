@@ -13,10 +13,10 @@ export const AGENT_PACKAGE = "@downtrace/agent";
 
 /**
  * The packages that say a project runs a framework whose routes the instrumentation names by their templates:
- * Express, Koa (and Strapi, which runs on it) and Next.js. Elsewhere a request is still observed, through
+ * Express, Koa (and Strapi, which runs on it), Fastify and Next.js. Elsewhere a request is still observed, through
  * `node:http`, and its route is named by the shape of its path.
  */
-export const FRAMEWORK_PACKAGES = ["express", "koa", "@strapi/strapi", "next"] as const;
+export const FRAMEWORK_PACKAGES = ["express", "koa", "@strapi/strapi", "fastify", "next"] as const;
 
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always

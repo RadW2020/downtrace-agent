@@ -24,6 +24,8 @@ vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 
 /** The directory of the Express this package is tested against, for a project of a test to depend on. */
 const EXPRESS_DIR = dirname(createRequire(import.meta.url).resolve("express/package.json"));
+/** The same for Fastify. */
+const FASTIFY_DIR = dirname(createRequire(import.meta.url).resolve("fastify/package.json"));
 
 const projects: Project[] = [];
 const scratch: string[] = [];
@@ -271,6 +273,57 @@ provider.close();
       "unchanged GET /products",
     ]);
     expect(checked.report.summary).toMatchObject({ worse: 0, unchanged: 1, notEvaluated: 3 });
+    expect(checked.code).toBe(0);
+  });
+});
+
+describe("routes a Fastify application declares and no test calls (ESC-18)", () => {
+  const FASTIFY_APP = `
+import Fastify from "fastify";
+
+const app = Fastify();
+app.get("/products/:id", async () => {
+  const res = await fetch(\`http://127.0.0.1:\${app.server.address().port}/stock\`);
+  return res.text();
+});
+app.get("/stock", async () => "12");
+await app.register(
+  async (admin) => {
+    admin.post("/refunds", async () => "refund");
+  },
+  { prefix: "/admin" },
+);
+await app.listen({ port: 0, host: "127.0.0.1" });
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`http://127.0.0.1:\${app.server.address().port}/products/\${i + 1}\`);
+  await res.text();
+}
+await app.close();
+`;
+  let checked: Checked;
+  beforeAll(async () => {
+    const made = await createProject({
+      "app.mjs": FASTIFY_APP,
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs" } }),
+    });
+    projects.push(made);
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(FASTIFY_DIR, join(made.dir, "node_modules", "fastify"), "dir");
+    checked = await check(made, ["--base", "HEAD"]);
+  });
+
+  it("names the route nobody called by its template, prefix included, and evaluates the one the run called", () => {
+    expect(route(checked.report, "POST /admin/refunds")).toMatchObject({
+      verdict: "not-evaluated",
+      reasons: [{ code: "not-called" }],
+    });
+    expect(route(checked.report, "GET /products/:id").verdict).toBe("unchanged");
+    expect(checked.report.routes.map((one) => one.id).sort()).toEqual([
+      "GET /products/:id",
+      "GET /stock",
+      "POST /admin/refunds",
+    ]);
     expect(checked.code).toBe(0);
   });
 });

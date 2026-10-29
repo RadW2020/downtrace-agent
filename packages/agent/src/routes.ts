@@ -1,4 +1,5 @@
 import type { Endpoint } from "@downtrace/protocol";
+import { fastifyInstanceOf, fastifyMatchedRoute, fastifyRegistered } from "./fastify.ts";
 import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
 import { nextMatchedPathname } from "./next.ts";
@@ -73,7 +74,7 @@ export interface RouteSource {
  * plus `url` could not be.
  */
 export function routeOf(req: RouteSource): string {
-  const template = nextTemplate(req) ?? koaTemplate(req) ?? expressTemplate(req);
+  const template = nextTemplate(req) ?? koaTemplate(req) ?? fastifyTemplate(req) ?? expressTemplate(req);
   const route = template ?? unnamedRoute(req);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
 }
@@ -92,6 +93,8 @@ export function routeOf(req: RouteSource): string {
  * It reads what the routers keep from registration and nothing a request writes. It cannot throw (invariant 2).
  */
 export function declaredRoutesOf(app: unknown): string[] {
+  const fastify = fastifyRegistered(app);
+  if (fastify !== undefined) return fastifyDeclared(fastify);
   return (
     safeRead(() => {
       const anchor = anchorRouter(app);
@@ -108,6 +111,24 @@ export function declaredRoutesOf(app: unknown): string[] {
       return [...out];
     }) ?? []
   );
+}
+
+/**
+ * A Fastify instance's routes, as `onRoute` handed them over and named the way `fastifyTemplate` names a request.
+ * `HEAD` is left out: Fastify adds one beside every `GET`, and the tests ask for the `GET`. A route for more
+ * methods than the protocol names is an `all`, as in Express.
+ */
+function fastifyDeclared(routes: ReadonlyArray<{ methods: string[]; url: string }>): string[] {
+  const out = new Set<string>();
+  for (const { methods, url } of routes) {
+    if (methods.length > METHODS.size) continue;
+    const template = joinTemplate([], url).slice(0, MAX_ROUTE_LENGTH);
+    for (const method of methods) {
+      const upper = method.toUpperCase();
+      if (upper !== "HEAD" && METHODS.has(upper)) out.add(`${upper} ${template}`);
+    }
+  }
+  return [...out];
 }
 
 function walkDeclared(router: RouterLike, links: MountLink[], depth: number, out: Set<string>): void {
@@ -143,7 +164,7 @@ function walkDeclared(router: RouterLike, links: MountLink[], depth: number, out
  * because with no routes registered there is nothing else to name it by.
  */
 function unnamedRoute(req: RouteSource): string {
-  if (expressAnswered(req) || koaRouterSawRequest(req)) return UNMATCHED_ROUTE;
+  if (expressAnswered(req) || koaRouterSawRequest(req) || fastifyInstanceOf(req) !== undefined) return UNMATCHED_ROUTE;
   return heuristicTemplate(typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/"));
 }
 
@@ -173,6 +194,12 @@ export const PARAM_SEGMENT = ":param";
 function nextTemplate(req: object): string | undefined {
   const pathname = nextMatchedPathname(req);
   return pathname === undefined ? undefined : joinTemplate([], pathname);
+}
+
+/** Fastify's template: the url of the route that answered, as it was registered, prefixes included (`fastify.ts`). */
+function fastifyTemplate(req: object): string | undefined {
+  const matched = fastifyMatchedRoute(req);
+  return matched === undefined ? undefined : joinTemplate([], matched);
 }
 
 /** Koa's template: the path the router registered the matched route with, prefix and mounts included (`koa.ts`). */

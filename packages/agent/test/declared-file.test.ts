@@ -2,8 +2,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
+import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeclaredRoutes } from "../src/declared.ts";
+import { attachFastify } from "../src/fastify.ts";
 import type { Logger } from "../src/log.ts";
 import { armMountRecording } from "../src/mounts.ts";
 
@@ -68,6 +70,25 @@ describe("createDeclaredRoutes", () => {
     app.get("/late", (_req, res) => res.send("late"));
     declared?.writeOnExit();
     expect(await lines(file)).toEqual([["GET /health", "POST /orders"], ["GET /late"]]);
+  });
+
+  it("writes the routes of a Fastify instance whose server answered a request", async () => {
+    const stop = attachFastify({
+      internalError: (err) => {
+        throw err;
+      },
+    });
+    const app = Fastify();
+    stop();
+    app.get("/users/:id", async () => "user");
+    await app.ready();
+    const file = join(await room(), "run.routes.jsonl");
+    const declared = createDeclaredRoutes({ file, log: quiet, observed: everything });
+    // What a request Node handed to that server carries: its socket, and the server on it.
+    declared?.answered({ socket: { server: app.server } });
+    await declared?.write();
+    await app.close();
+    expect(await lines(file)).toEqual([["GET /users/:id"]]);
   });
 
   it("leaves out a route the operator excluded: excluded is not observed (ADR 0101)", async () => {

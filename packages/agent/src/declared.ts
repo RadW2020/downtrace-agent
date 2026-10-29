@@ -1,11 +1,12 @@
 import { appendFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
+import { fastifyInstanceOf } from "./fastify.ts";
 import type { Logger } from "./log.ts";
 import { matchedMountOf } from "./mounts.ts";
 import { declaredRoutesOf } from "./routes.ts";
 
 /**
- * The routes the Express applications of this process declare, written for `downtrace check` (ESC-18).
+ * The routes the Express and Fastify applications of this process declare, written for `downtrace check` (ESC-18).
  *
  * A route no test calls leaves nothing in the batches, so the comparison could only name it from a list the
  * user wrote by hand, and a coding agent that ran `init` and `check` had none: the routes it never reached were
@@ -45,10 +46,11 @@ export function createDeclaredRoutes(spec: {
         "; check will not name the routes no test called, and this is not said again",
     );
   };
-  // An Express app is a function (the dispatch). A mounted app answers inside its parent, and the request carries
-  // the parent again by the time it finishes; the dispatch record keeps the one the route was matched in.
+  // An Express app is a function (the dispatch), a Fastify instance an object. A mounted Express app answers inside
+  // its parent, and the request carries the parent again by the time it finishes; the dispatch record keeps the one
+  // the route was matched in.
   const remember = (app: unknown): void => {
-    if (typeof app === "function" && !apps.has(app)) apps.add(app);
+    if ((typeof app === "function" || (typeof app === "object" && app !== null)) && !apps.has(app)) apps.add(app);
   };
   const pending = (): string[] => {
     const fresh: string[] = [];
@@ -67,6 +69,7 @@ export function createDeclaredRoutes(spec: {
       try {
         remember((request as { app?: unknown }).app);
         remember(matchedMountOf(request)?.app);
+        remember(fastifyInstanceOf(request));
       } catch {
         // A request whose `app` cannot be read is one whose routes are not walked (invariant 2).
       }

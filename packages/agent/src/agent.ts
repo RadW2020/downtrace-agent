@@ -31,6 +31,7 @@ import { applicationEntry } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
+import { attachFastify } from "./fastify.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { createInspector } from "./inspect.ts";
@@ -263,6 +264,7 @@ export class Agent {
   /** The `mysql2` observer's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
+  private stopFastify: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
@@ -513,6 +515,9 @@ export class Agent {
     // pattern is lost. `armMounts` cannot throw; a failure to arm leaves the `:param` fallback, and the
     // application goes on (invariant 2).
     armMounts(entry);
+    // Fastify announces each instance it creates, and only to whoever is listening by then: from the start, before
+    // the application loads (`fastify.ts`). An application without Fastify pays the subscription and nothing else.
+    this.stopFastify = attachFastify({ internalError: (err) => this.internalError(err) });
     // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
     // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
     // one read of the cache, once.
@@ -663,6 +668,8 @@ export class Agent {
     this.loopTimer = undefined;
     this.stopHttp?.();
     this.stopHttp = undefined;
+    this.stopFastify?.();
+    this.stopFastify = undefined;
     this.stopRedis?.();
     this.stopRedis = undefined;
     this.runtime.stop();

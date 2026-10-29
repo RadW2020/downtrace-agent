@@ -281,7 +281,7 @@ describe("what it cannot detect", () => {
   it("writes the command of a project with no framework it names routes for, and says what check does with it", async () => {
     const dir = await project({
       ".git/": "",
-      "package.json": json({ dependencies: { fastify: "5" }, scripts: { test: "tap" } }),
+      "package.json": json({ dependencies: { "@hapi/hapi": "21" }, scripts: { test: "lab" } }),
     });
     const { code, report } = await init(dir);
     expect(code).toBe(1);
