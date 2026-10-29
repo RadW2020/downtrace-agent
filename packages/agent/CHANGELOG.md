@@ -1,5 +1,11 @@
 # @downtrace/agent
 
+## 0.12.0
+
+### Minor Changes
+
+- d408064: Postgres queries sent through postgres.js (`postgres`, the driver of Drizzle's `postgres-js` and of most Supabase backends) are observed, under the `pg` switch: per request, how many, how long and how many failed, and each one an operation of its route by its text, with no value in it. Both copies of the driver are: required as CommonJS it is patched as `pg` is, and imported as ESM the instrumentation imports the driver's query module by its own file from the first request, whose queries are the ones it does not count; under `downtrace check` from start-up, so a test file's first request counts. A postgres.js query does not know its connection, so its dependency names no server, and its wait for a connection is part of its time. `downtrace init` names `postgres` among what it observes.
+
 ## 0.11.0
 
 ### Minor Changes

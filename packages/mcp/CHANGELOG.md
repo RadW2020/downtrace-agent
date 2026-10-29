@@ -1,5 +1,11 @@
 # @downtrace/mcp
 
+## 0.3.1
+
+### Patch Changes
+
+- 4a57e80: The package names itself to the MCP Registry (`mcpName`: `io.github.RadW2020/downtrace`), so the release can list the server there by its `server.json`, version by version.
+
 ## 0.3.0
 
 ### Minor Changes
