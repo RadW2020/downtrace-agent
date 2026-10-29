@@ -44,6 +44,7 @@
     "mysql2": "^3.24.5",
     "mysql2-legacy": "npm:mysql2@3.11.5",
     "pg": "^8.23.0",
+    "postgres": "^3.4.9",
     "redis": "^6.3.0",
     "redis5": "npm:redis@^5.12.1"
   },

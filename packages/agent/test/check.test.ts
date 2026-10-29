@@ -26,6 +26,8 @@ vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 const EXPRESS_DIR = dirname(createRequire(import.meta.url).resolve("express/package.json"));
 /** The same for Fastify. */
 const FASTIFY_DIR = dirname(createRequire(import.meta.url).resolve("fastify/package.json"));
+/** postgres.js's, whose exports name no `package.json`: three directories above the file `require` resolves. */
+const POSTGRESJS_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("postgres"))));
 
 const projects: Project[] = [];
 const scratch: string[] = [];
@@ -389,6 +391,62 @@ provider.close();
       verdict: "not-evaluated",
       reasons: [{ code: "not-called" }],
     });
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("a suite whose queries go through postgres.js, imported as ESM", () => {
+  // The driver of Drizzle's `postgres-js` and of most Supabase backends. Its ESM copy never enters the module
+  // cache, and its first request is a test's: both runs would lose it alike (ADR 0235).
+  const POSTGRESJS_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import postgres from "postgres";
+
+const queries = Number(readFileSync(new URL("./queries.txt", import.meta.url), "utf8"));
+const sql = postgres(process.env.DATABASE_URL, { max: 1, onnotice: () => {} });
+const app = express();
+app.get("/orders/:id", async (req, res) => {
+  for (let i = 0; i < queries; i += 1) await sql\`select \${req.params.id}::int + \${i}::int as line\`;
+  res.send("order");
+});
+app.post("/orders", (req, res) => res.send("placed"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/orders/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await sql.end();
+`;
+  let checked: Checked;
+  beforeAll(async () => {
+    const made = await createProject({
+      "app.mjs": POSTGRESJS_APP,
+      "queries.txt": "1",
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs" } }),
+    });
+    projects.push(made);
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(EXPRESS_DIR, join(made.dir, "node_modules", "express"), "dir");
+    await symlink(POSTGRESJS_DIR, join(made.dir, "node_modules", "postgres"), "dir");
+    // The change: one query per line of the order, five a request.
+    await made.write("queries.txt", "5");
+    checked = await check(made, ["--base", "HEAD"]);
+  });
+
+  it("sees the queries multiplied from the first request on, and exits 1", () => {
+    const orders = route(checked.report, "GET /orders/:id");
+    expect(orders.verdict).toBe("worse");
+    expect(orders.requests).toEqual({ base: 3, change: 3 });
+    expect(orders.operations.find((operation) => operation.kind === "query")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 5 },
+    });
+    expect(checked.code).toBe(1);
   });
 });
 

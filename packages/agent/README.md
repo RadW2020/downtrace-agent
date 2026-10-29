@@ -9,7 +9,7 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
-| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma) |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
 | `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
@@ -474,6 +474,31 @@ the request, which does not mean the database was idle. Checked against n8n with
 Postgres: each request carried the queries the log shows for it, and the ones n8n answered without its database
 carried none.
 
+### postgres.js
+
+When your application uses postgres.js (`postgres`, the driver of Drizzle's `drizzle-orm/postgres-js` and of most
+Supabase backends), its queries are observed under the same `pg` switch, as dependency `postgres`: per request, how
+many, how long and how many failed, and each one an operation of the route by its text with `?` for every value —
+postgres.js sends the values as parameters, and the text it reads is the one the driver built. A query outside a
+request is in no route's numbers, as with `pg`. Run against a real Postgres, with the driver imported as ESM and
+required as CommonJS, on postgres.js 3.4.9. What it does not say, and why:
+
+- **Which server.** A postgres.js query does not know its connection, so every query is the dependency `postgres`
+  with no host: a read replica and a primary reached through postgres.js are one dependency, not two, and a
+  finding names no server.
+- **The wait for a connection.** postgres.js queues a query that finds its connections busy inside the driver, and
+  the wait is part of the query's time. A pool run dry shows as slower queries, not as a wait.
+- **The first request, imported as ESM.** The ESM copy of the driver never enters the module cache the
+  instrumentation reads, so it imports the driver's query module itself, the same file your `import "postgres"`
+  loads, from the first request your server answers, on the next turn of the event loop. Queries that start before
+  that import finishes, which in practice means the first request's, are not counted. Required as CommonJS it is
+  patched before the first request's handler runs, as `pg` is. Under `downtrace check` the import starts at
+  start-up, so a test file's first request counts.
+- **A cursor read with `for await`** is not counted; one with a callback, and `forEach`, are.
+- **Beside an error tracker** it was not verified. The instrumentation wraps `Query.prototype.handle`, where
+  Sentry's own postgres.js integration also hooks, and it loads the query module only from the first request, after
+  a tracker loaded with `--import` has registered its hooks.
+
 ### MySQL
 
 When your application uses `mysql2`, the instrumentation does the same for MySQL, as a dependency of its own
@@ -610,7 +635,8 @@ carry, so its commands travel with their hash alone; a command the channel does 
 operation.
 
 Every dependency carries a **target** saying which instance of its kind it is, taken from the driver: the host for
-outgoing HTTP, host and port for Postgres, MySQL and Redis. A read replica and a primary are two dependencies, not one.
+outgoing HTTP, host and port for Postgres through `pg`, MySQL and Redis. A read replica and a primary are two dependencies, not one
+(through postgres.js they are one, [with no host](#postgresjs)).
 
 The first 60 distinct destinations a route talks to in an interval keep their target; past that, the rest fold into
 one row of their own kind with target `(other)`. The folded destinations' calls, time and errors are in that row —
@@ -788,7 +814,7 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify` or `next` among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `mysql2`, `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `postgres`, `mysql2`, `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express or Fastify application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -926,7 +952,7 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `mysql2` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+`pg`, `postgres`, `mysql2` and Express are resolved from your application's entry where Node runs it, so they are the ones your
 application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,

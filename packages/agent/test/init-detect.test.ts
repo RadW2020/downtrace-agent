@@ -131,10 +131,20 @@ describe("what the project runs", () => {
     const dir = await project({ ".git/": "" });
     const found = await detect(
       dir,
-      pkg({ dependencies: { express: "^5", pg: "^8", ioredis: "^5", redis: "^6", mongoose: "^8", lodash: "^4" } }),
+      pkg({
+        dependencies: {
+          express: "^5",
+          pg: "^8",
+          postgres: "^3",
+          ioredis: "^5",
+          redis: "^6",
+          mongoose: "^8",
+          lodash: "^4",
+        },
+      }),
     );
     expect(found.frameworks).toEqual(["express"]);
-    expect(found.observed).toEqual(["pg", "ioredis", "redis"]);
+    expect(found.observed).toEqual(["pg", "postgres", "ioredis", "redis"]);
     expect(found.repository).toBe(true);
     expect(found.next).toBeUndefined();
   });

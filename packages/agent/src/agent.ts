@@ -38,6 +38,7 @@ import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
+import { armPostgresJs } from "./instrument/postgresjs.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -263,6 +264,8 @@ export class Agent {
   private pgAttach: (() => boolean) | undefined;
   /** The `mysql2` observer's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
+  /** postgres.js's, under the `pg` switch: the same moment, and an import for its ESM copy (ADR 0235). */
+  private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
   private stopFastify: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
@@ -576,9 +579,19 @@ export class Agent {
           depth: this.config.pgDepth,
           from: entry,
         });
+        // postgres.js is Postgres too, and the same switch: the observer is «on» when either driver is there.
+        const postgresJs = armPostgresJs({
+          log: this.log,
+          internalError,
+          fingerprints: this.fingerprints,
+          errors: this.errors,
+          from: entry,
+          early: this.config.checkRoutes !== undefined,
+        });
         // The only observer that resolves a module, so the only one that can be asked for and not attach.
-        observers.pg = armed.state;
+        observers.pg = armed.state === "on" || postgresJs.state === "on" ? "on" : "unavailable";
         this.pgAttach = armed.attach;
+        this.postgresJsAttach = postgresJs.attach;
       }
     }
     // MySQL through `mysql2`, the same way (DT-91). It has no key in `observers`: the protocol names four
@@ -1106,6 +1119,7 @@ export class Agent {
     // nothing after, because the reference goes with the settle.
     if (this.pgAttach?.()) this.pgAttach = undefined;
     if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
+    if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
     // from there would be state this repository does not keep.
