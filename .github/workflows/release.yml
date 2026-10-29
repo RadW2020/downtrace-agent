@@ -82,8 +82,17 @@ jobs:
             echo "$name $version is already on the MCP Registry, nothing to do"
             exit 0
           fi
-          if [ "$(npm view "@downtrace/mcp@$version" mcpName 2>/dev/null)" != "$name" ]; then
-            echo "@downtrace/mcp@$version on npm does not carry the mcpName $name; the registry would refuse it"
+          # Waited for: the step above has just published it, and npm serves a new version a while after it takes
+          # it. Asked once, on 2026-10-29, it answered nothing for 0.3.1 seconds after the publish, and the listing
+          # was skipped with the run green. The registry asks npm too, so it is not asked before npm answers.
+          carried=""
+          for attempt in $(seq 1 18); do
+            carried=$(npm view "@downtrace/mcp@$version" mcpName 2>/dev/null || true)
+            [ -n "$carried" ] && break
+            sleep 10
+          done
+          if [ "$carried" != "$name" ]; then
+            echo "@downtrace/mcp@$version on npm carries the mcpName '$carried', not $name; the registry would refuse it"
             exit 0
           fi
           # Pinned and checked: a binary fetched by a workflow that holds an OIDC token runs as this repository.
