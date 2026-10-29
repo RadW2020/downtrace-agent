@@ -328,6 +328,70 @@ await app.close();
   });
 });
 
+describe("a Fastify suite that calls the application with inject(), as Fastify's testing guide does", () => {
+  // No server listens: light-my-request hands Fastify a request of its own, and Node announces nothing.
+  const INJECTED_APP = `
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import Fastify from "fastify";
+
+const calls = Number(readFileSync(new URL("./calls.txt", import.meta.url), "utf8"));
+const provider = http.createServer((req, res) => {
+  req.resume();
+  res.end("ok");
+});
+await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+const stock = \`http://127.0.0.1:\${provider.address().port}/stock\`;
+
+const app = Fastify();
+app.get("/products/:id", async () => {
+  for (let i = 0; i < calls; i += 1) await (await fetch(stock)).text();
+  return "product";
+});
+app.post("/admin/refunds", async () => "refund");
+await app.ready();
+for (let i = 0; i < 3; i += 1) {
+  const res = await app.inject({ method: "GET", url: \`/products/\${i + 1}\` });
+  if (res.statusCode !== 200) throw new Error(\`status \${res.statusCode}\`);
+}
+await app.close();
+provider.close();
+`;
+  let checked: Checked;
+  beforeAll(async () => {
+    const made = await createProject({
+      "app.mjs": INJECTED_APP,
+      "calls.txt": "1",
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs" } }),
+    });
+    projects.push(made);
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(FASTIFY_DIR, join(made.dir, "node_modules", "fastify"), "dir");
+    // The change: the route now calls its provider once per item, five times a request.
+    await made.write("calls.txt", "5");
+    checked = await check(made, ["--base", "HEAD"]);
+  });
+
+  it("sees the regression in the injected requests, and exits 1", () => {
+    const products = route(checked.report, "GET /products/:id");
+    expect(products.verdict).toBe("worse");
+    expect(products.requests).toEqual({ base: 3, change: 3 });
+    expect(products.operations.find((operation) => operation.kind === "call")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 5 },
+    });
+    expect(checked.code).toBe(1);
+  });
+
+  it("names the route no injected request reached as not called", () => {
+    expect(route(checked.report, "POST /admin/refunds")).toMatchObject({
+      verdict: "not-evaluated",
+      reasons: [{ code: "not-called" }],
+    });
+  });
+});
+
 describe("the same code on both sides", () => {
   // «Given the same code on both sides, when check runs ten times, then no route is ever worse».
   it("is never worse, ten times in a row, and says it evaluated what it says is unchanged", async () => {

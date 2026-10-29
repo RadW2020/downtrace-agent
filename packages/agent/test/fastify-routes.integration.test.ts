@@ -7,6 +7,8 @@ import Fastify4 from "fastify4";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import type { AgentConfig } from "../src/config.ts";
+import { currentContext } from "../src/context.ts";
+import { attachFastify } from "../src/fastify.ts";
 import type { Logger } from "../src/log.ts";
 import { declaredRoutesOf } from "../src/routes.ts";
 import { testConfig } from "./support/agent-config.ts";
@@ -135,6 +137,122 @@ describe.each([
     const batch = sink.batches[0];
     expect(routesOf(batch)).toEqual({ "GET (unmatched)": 1, "DELETE (unmatched)": 1 });
     expect(JSON.stringify(batch)).not.toContain("plainsecret");
+  });
+
+  /**
+   * Fastify's testing guide calls an application with `inject()`, which hands Fastify a request of
+   * light-my-request's and never goes through Node's server: Node announces nothing, and a suite written that way
+   * was a run in which no route was called, so `check` judged nothing.
+   */
+  async function injectable() {
+    const sink = await startSink();
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+    const up = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const agent = createAgent(
+      testConfig(sink.url, { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set(["http"]) }),
+      { log: quiet },
+    );
+    agent.start();
+    const app = factory();
+    app.get("/users/:id", async () => {
+      await (await fetch(`${up}/profile`)).text();
+      await (await fetch(`${up}/orders`)).text();
+      return { ok: true };
+    });
+    await app.ready();
+    cleanups.push(
+      sink.close,
+      () => new Promise<void>((r) => upstream.close(() => r())),
+      () => agent.stop(),
+      () => app.close(),
+    );
+    return { agent, sink, app, upstream: up.slice("http://".length) };
+  }
+
+  it("observes a request made with inject() by its template and with what it did, apart from the test", async () => {
+    const { agent, sink, app, upstream } = await injectable();
+    expect((await app.inject({ method: "GET", url: "/users/ana" })).statusCode).toBe(200);
+    expect(currentContext(), "the test that injected is not inside the request it made").toBeUndefined();
+    expect((await app.inject({ method: "GET", url: "/users/42" })).statusCode).toBe(200);
+    // The test's own call after the request is the test's, and belongs to no route.
+    await (await fetch(`http://${upstream}/after`)).text();
+    expect(await agent.flushNow()).toBe(true);
+    const batch = sink.batches[0];
+    expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
+    const users = (batch?.intervals ?? []).flatMap((i) => i.endpoints).find((e) => e.route === "/users/:id");
+    expect(users?.count).toBe(2);
+    const [dependency] = users?.dependencies ?? [];
+    expect(dependency).toMatchObject({ kind: "http", target: upstream });
+    // Two requests, two calls each: the histogram counts requests by how many calls they made.
+    expect(dependency?.callsPerRequest.reduce((a, b) => a + b, 0)).toBe(2);
+    expect(dependency?.totalMs).toBeGreaterThan(0);
+    expect(JSON.stringify(batch)).not.toContain("ana");
+  });
+
+  it("names an injected request no route matched (unmatched), and nothing of its path travels", async () => {
+    const { agent, sink, app } = await injectable();
+    expect((await app.inject({ method: "GET", url: "/webhook/plainsecret" })).statusCode).toBe(404);
+    expect(await agent.flushNow()).toBe(true);
+    const endpoints = (sink.batches[0]?.intervals ?? []).flatMap((i) => i.endpoints);
+    expect(endpoints.map((e) => `${e.method} ${e.route}`)).toEqual(["GET (unmatched)"]);
+    expect(JSON.stringify(sink.batches)).not.toContain("plainsecret");
+  });
+
+  it("counts a request that came through the server once, and not again as injected", async () => {
+    const { agent, sink, app } = await injectable();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const url = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    expect(await hit(url, "/users/7")).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/users/8" })).statusCode).toBe(200);
+    expect(await agent.flushNow()).toBe(true);
+    const users = (sink.batches[0]?.intervals ?? []).flatMap((i) => i.endpoints).find((e) => e.route === "/users/:id");
+    expect(users?.count).toBe(2);
+    expect(users?.dependencies?.[0]?.callsPerRequest.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it("answers an injected request as it would if opening or closing it throws, and counts the failure (invariant 2)", async () => {
+    const failures: unknown[] = [];
+    const broken = new Error("the doors broke");
+    const stop = attachFastify({
+      internalError: (err) => failures.push(err),
+      unannounced: {
+        announced: () => false,
+        started: () => {
+          throw broken;
+        },
+        finished: () => {
+          throw broken;
+        },
+      },
+    });
+    const app = factory();
+    app.get("/users/:id", async () => ({ ok: true }));
+    await app.ready();
+    cleanups.push(async () => {
+      stop();
+      await app.close();
+    });
+    const res = await app.inject({ method: "GET", url: "/users/1" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // Opening failed, so nothing was opened, and there is nothing to close.
+    expect(failures).toEqual([broken]);
+  });
+
+  it("opens nothing once the instrumentation stopped, though the hooks stay with the instance", async () => {
+    const opened: object[] = [];
+    const stop = attachFastify({
+      internalError: () => {},
+      unannounced: { announced: () => false, started: (request) => opened.push(request), finished: () => {} },
+    });
+    const app = factory();
+    app.get("/users/:id", async () => ({ ok: true }));
+    await app.ready();
+    stop();
+    cleanups.push(() => app.close());
+    expect((await app.inject({ method: "GET", url: "/users/1" })).statusCode).toBe(200);
+    expect(opened).toEqual([]);
   });
 
   it("declares its routes for check: one name per method, as a request gets it, and none for HEAD or all", async () => {

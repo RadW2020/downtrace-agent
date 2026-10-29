@@ -1016,10 +1016,18 @@ versions — is the heuristic's too.
 
 **Fastify** routes (4 and 5) are named by the url of the route that answered, as it was registered, plugin prefixes
 included: `/api/tenants/:tenant/invoices/:invoice` for every tenant and invoice. Fastify announces each instance it
-creates to whoever listens, and the instrumentation adds an `onRequest` and an `onRoute` hook to it through Fastify's
-own API; nothing of Fastify is patched. What Fastify's 404 handler answered is `(unmatched)`, as in Express, and no
-part of the path travels. An instance created before the instrumentation started is not announced to it and is named
-by the heuristic: with `--import`, the instrumentation starts before the application loads.
+creates to whoever listens, and the instrumentation adds an `onRequest`, an `onResponse` and an `onRoute` hook to it
+through Fastify's own API; nothing of Fastify is patched. What Fastify's 404 handler answered is `(unmatched)`, as in
+Express, and no part of the path travels. An instance created before the instrumentation started is not announced to
+it and is named by the heuristic: with `--import`, the instrumentation starts before the application loads.
+
+A request made with **`app.inject()`** — how Fastify's testing guide calls an application, with no server listening —
+is observed as one the server received: by its template, with the queries, calls and commands it ran, so a suite
+written that way is one `downtrace check` can judge. Node's server never sees such a request, so the hooks open and
+close it, apart from the code that called `inject()`: what the test does after it is the test's, not the request's.
+An application that injects requests in production — a batch endpoint that answers each part with `inject()` — has
+each part counted as a request of its own route, with its own work, and the outer request keeps only what it ran
+itself.
 
 A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
 catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then

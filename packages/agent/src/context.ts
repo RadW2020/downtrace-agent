@@ -137,6 +137,18 @@ export function currentContext(): RequestContext | undefined {
 }
 
 /**
+ * Runs `fn` in an async context of its own, outside any request: a request `enterRequest` opens inside it is the
+ * context of what `fn` calls and starts, and not of whoever called this, which goes on in the context it had.
+ *
+ * For a request no server announced (`fastify.inject()`), opened from a hook of the framework's: `enterWith`
+ * there would leave the caller — a test, usually — inside the request it made, and its next query would be
+ * that request's.
+ */
+export function apart<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
+/**
  * Runs `fn` in the context of a request captured earlier, and in no other change of the async context: whatever
  * else the application keeps in its own storage is what it was where `fn` is called.
  *

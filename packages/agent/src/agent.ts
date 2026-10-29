@@ -517,7 +517,16 @@ export class Agent {
     armMounts(entry);
     // Fastify announces each instance it creates, and only to whoever is listening by then: from the start, before
     // the application loads (`fastify.ts`). An application without Fastify pays the subscription and nothing else.
-    this.stopFastify = attachFastify({ internalError: (err) => this.internalError(err) });
+    // A request made with `inject()` is not Node's, and Node announces nothing of it: Fastify's hooks open and
+    // close it through the same two doors.
+    this.stopFastify = attachFastify({
+      internalError: (err) => this.internalError(err),
+      unannounced: {
+        announced: (request) => this.starts.has(request),
+        started: (request) => this.onStart({ request }),
+        finished: (request, response) => this.onFinish({ request, response }),
+      },
+    });
     // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
     // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
     // one read of the cache, once.
