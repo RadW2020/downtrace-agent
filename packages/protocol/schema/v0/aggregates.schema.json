@@ -10,7 +10,7 @@
   "properties": {
     "protocol": {
       "type": "string",
-      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0", "0.9.0"],
+      "enum": ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0", "0.6.0", "0.7.0", "0.8.0", "0.9.0", "0.10.0"],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
     "agent": {
@@ -410,8 +410,8 @@
       "x-calls-per-request-boundaries": [0, 1, 2, 5, 10, 20, 50],
       "properties": {
         "kind": {
-          "enum": ["postgres", "mysql", "redis", "http"],
-          "description": "What kind of dependency this is."
+          "enum": ["postgres", "mysql", "mongodb", "redis", "http"],
+          "description": "What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`)."
         },
         "target": {
           "type": "string",
@@ -532,7 +532,7 @@
         "text": {
           "type": "string",
           "maxLength": 1024,
-          "description": "Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none."
+          "description": "Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `find users` for a MongoDB command — its name and its collection, never the filter or the documents —, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none."
         },
         "count": {
           "type": "integer",

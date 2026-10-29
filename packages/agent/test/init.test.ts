@@ -133,7 +133,11 @@ describe("a project it can configure", () => {
    * later every route came back `nothing-observed`. What the project's work goes through is known before a run.
    */
   it.each([
-    [{ express: "^5", mongoose: "^8" }, ["mongoose"]],
+    [{ express: "^5", "better-sqlite3": "^11" }, ["better-sqlite3"]],
+    [{ express: "^5", mongoose: "^9" }, []],
+    // Mongoose before 8 runs on a driver before 6, which answers through callbacks (ADR 0237).
+    [{ express: "^4", mongoose: "^5.7.7" }, ["mongoose"]],
+    [{ express: "^4", mongodb: "~4.17.0" }, ["mongodb"]],
     [{ express: "^5", "@prisma/client": "^6" }, ["@prisma/client"]],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-pg": "^7" }, []],
     [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, ["@libsql/client"]],

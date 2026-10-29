@@ -235,9 +235,9 @@ describe("dependencies", () => {
   });
 
   it("destinations past the cap fold by kind, and the list never outgrows the schema's maxItems", () => {
-    // 100 destinations: 40 http, 30 redis, 30 postgres. The first 60 seen keep their row — all 40 http and
-    // 20 redis — and the rest fold by kind: 10 redis into one (other) redis, 30 postgres into one (other)
-    // postgres. Sixty-two rows, under the schema's 64 whatever the kinds do.
+    // 100 destinations: 40 http, 30 redis, 30 postgres. The first MAX_KEPT_DEPENDENCIES seen keep their row —
+    // all 40 http and the first redis — and the rest fold by kind: the other redis into one (other) redis, the 30
+    // postgres into one (other) postgres. Under the schema's 64 whatever the kinds do: the cap leaves a row for each.
     const agg = new IntervalAggregator({ now: still });
     for (let i = 0; i < 40; i++) agg.record("POST", "/fanout", 200, 1, oneDep("http", `h${i}.example`, 1, 1));
     for (let i = 0; i < 30; i++) agg.record("POST", "/fanout", 200, 1, oneDep("redis", `r${i}.example`, 1, 1));
@@ -247,7 +247,7 @@ describe("dependencies", () => {
     expect(deps.length).toBeLessThanOrEqual(DEPENDENCIES_MAX_ITEMS_V0);
     const others = deps.filter((d) => d.target === OTHER_DEPENDENCY_TARGET);
     expect(others.map((o) => o.kind).sort()).toEqual(["postgres", "redis"]);
-    expect(others.find((o) => o.kind === "redis")?.totalMs).toBe(10);
+    expect(others.find((o) => o.kind === "redis")?.totalMs).toBe(30 - (MAX_KEPT_DEPENDENCIES - 40));
     expect(others.find((o) => o.kind === "postgres")?.totalMs).toBe(30);
   });
 

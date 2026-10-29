@@ -79,12 +79,12 @@ describe("when check offers a link", () => {
 
   it("offers it when routes saw nothing in a project that depends on a driver Downtrace does not observe", () => {
     const report = reportWith([route("GET /products"), route("GET /tenants/:tenant/invoices", ["nothing-observed"])]);
-    const feedback = feedbackFor(report, context({ dependencies: new Set(["express", "mongoose"]) }));
+    const feedback = feedbackFor(report, context({ dependencies: new Set(["express", "better-sqlite3"]) }));
     expect(feedback?.why).toBe(
-      "1 route was called and nothing was observed inside its requests, and the project depends on mongoose, which " +
-        "Downtrace does not observe",
+      "1 route was called and nothing was observed inside its requests, and the project depends on better-sqlite3, " +
+        "which Downtrace does not observe",
     );
-    expect(issueOf(feedback?.url ?? "").title).toBe("check: mongoose not observed");
+    expect(issueOf(feedback?.url ?? "").title).toBe("check: better-sqlite3 not observed");
   });
 
   it("offers it when an observer was unavailable in a project that depends on its driver, and not otherwise", () => {

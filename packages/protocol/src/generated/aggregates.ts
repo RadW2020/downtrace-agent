@@ -20,7 +20,7 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0" | "0.9.0";
+  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0" | "0.9.0" | "0.10.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -444,9 +444,9 @@ export interface PostgresStats {
  */
 export interface Dependency {
   /**
-   * What kind of dependency this is.
+   * What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`).
    */
-  kind: "postgres" | "mysql" | "redis" | "http";
+  kind: "postgres" | "mysql" | "mongodb" | "redis" | "http";
   /**
    * Host for outgoing HTTP (`api.stripe.com`); empty when the dependency is a single one, like the application's own database.
    */
@@ -555,7 +555,7 @@ export interface Operation {
    */
   hash: string;
   /**
-   * Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none.
+   * Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `find users` for a MongoDB command — its name and its collection, never the filter or the documents —, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none.
    */
   text?: string;
   /**

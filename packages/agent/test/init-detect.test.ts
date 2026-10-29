@@ -155,7 +155,7 @@ describe("what the project runs", () => {
           postgres: "^3",
           ioredis: "^5",
           redis: "^6",
-          mongoose: "^8",
+          "better-sqlite3": "^11",
           lodash: "^4",
         },
       }),

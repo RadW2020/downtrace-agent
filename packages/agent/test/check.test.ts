@@ -31,6 +31,10 @@ const PG_DIR = dirname(createRequire(import.meta.url).resolve("pg/package.json")
 const FASTIFY_DIR = dirname(createRequire(import.meta.url).resolve("fastify/package.json"));
 /** postgres.js's, whose exports name no `package.json`: three directories above the file `require` resolves. */
 const POSTGRESJS_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("postgres"))));
+/** MongoDB's driver and Mongoose, and the tests' own MongoDB server, for a project to run against. */
+const MONGODB_DIR = dirname(createRequire(import.meta.url).resolve("mongodb/package.json"));
+const MONGOOSE_DIR = dirname(createRequire(import.meta.url).resolve("mongoose/package.json"));
+const MONGO_WIRE = new URL("./support/mongo-wire.mjs", import.meta.url);
 /** Hono's, the same way: `require` resolves `dist/cjs/index.js`. */
 const HONO_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("hono"))));
 
@@ -531,6 +535,139 @@ test("products", async () => {
 
   it("sees the regression, and names the route nobody called", () => {
     expectHonoJudged(checked);
+  });
+});
+
+/**
+ * MongoDB, the database of most Express boilerplates, through its driver and through Mongoose (ADR 0237), against the
+ * tests' own server: a route that looks its user up once per request in the base, and once per item in the change.
+ */
+const MONGO_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import { MongoClient } from "mongodb";
+import { startMongoWire } from "./mongo-wire.mjs";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const wire = await startMongoWire();
+const client = new MongoClient(wire.url, { serverSelectionTimeoutMS: 2000 });
+await client.connect();
+const users = client.db().collection("users");
+const app = express();
+app.get("/users/:id", async (req, res) => {
+  for (let i = 0; i < lookups; i += 1) await users.findOne({ id: req.params.id });
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/users/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await client.close();
+await wire.close();
+`;
+
+/** The same, as a Mongoose boilerplate is tested: Jest, in band, supertest's way of calling the application. */
+const MONGOOSE_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const mongoose = require("mongoose");
+
+const User = mongoose.model("User", new mongoose.Schema({ email: String }));
+let wire;
+beforeAll(async () => {
+  wire = await (await import("./mongo-wire.mjs")).startMongoWire();
+  await mongoose.connect(wire.url, { serverSelectionTimeoutMS: 2000 });
+});
+afterAll(async () => {
+  await mongoose.disconnect();
+  await wire.close();
+});
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await User.findOne({ email: req.params.id }).lean();
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+async function mongoProject(files: Record<string, string>, command: string, link: Record<string, string>) {
+  const made = await createProject({
+    ...files,
+    "mongo-wire.mjs": await readFile(MONGO_WIRE, "utf8"),
+    "lookups.txt": "1",
+    ".gitignore": "node_modules\n",
+    "downtrace.json": JSON.stringify({ check: { command } }),
+  });
+  projects.push(made);
+  await mkdir(join(made.dir, "node_modules"), { recursive: true });
+  for (const [name, dir] of Object.entries({ mongodb: MONGODB_DIR, ...link }))
+    await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  // The change: the route now looks its user up once per item, four times a request.
+  await made.write("lookups.txt", "4");
+  return check(made, ["--base", "HEAD"]);
+}
+
+function expectLookupsMultiplied(checked: Checked): void {
+  const users = route(checked.report, "GET /users/:id");
+  expect(users.verdict, JSON.stringify(checked.report.routes.map((r) => [r.id, r.verdict]))).toBe("worse");
+  expect(users.requests).toEqual({ base: 3, change: 3 });
+  expect(users.operations.find((operation) => operation.kind === "query")).toMatchObject({
+    change: "multiplied",
+    perRequest: { base: 1, change: 4 },
+  });
+  expect(checked.code).toBe(1);
+}
+
+describe("a suite whose application keeps its data in MongoDB, through the official driver", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await mongoProject({ "app.mjs": MONGO_APP }, "node app.mjs", { express: EXPRESS_DIR });
+  });
+
+  it("sees the lookups multiplied, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+describe("a Mongoose suite Jest runs, as a Mongoose boilerplate is tested", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await mongoProject(
+      {
+        "users.test.js": MONGOOSE_SUITE,
+        "package.json": JSON.stringify({ name: "mongoose-jest", private: true, jest: { transform: {} } }),
+      },
+      "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, mongoose: MONGOOSE_DIR },
+    );
+  });
+
+  it("sees the lookups the tests' own copy of the driver sent, multiplied", () => {
+    expectLookupsMultiplied(checked);
   });
 });
 

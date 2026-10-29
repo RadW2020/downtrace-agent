@@ -4,13 +4,14 @@
 
 **A flight recorder for your Node.js backend.** Downtrace watches how your application normally behaves and, when something gets slower or breaks, tells you what changed. This is the **instrumentation**: it observes your application from the inside, aggregates locally per route and 10-second interval, and ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
 
-It observes five things, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
+It observes six things, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
 
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
+| `mongodb` | [MongoDB](#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
 | `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
 
@@ -63,7 +64,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — the floor and the ceiling are derived, see below). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
-| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,http,redis,runtime` |
+| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,mongodb,http,redis,runtime` |
 | `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch for weighing the fine detail and the profile on their own (ADR 0080, gh-570); leave it alone in production |
 | `DOWNTRACE_PG_DEPTH` | no | `full` (default), `context` or `wrapper`: how much of the Postgres observer's attribution runs — `context` attributes the calls and the waits without looking at the query text, `wrapper` only leaves the patch in place. The benchmark's switch for weighing the observer part by part (gh-592); leave it alone in production |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
@@ -543,6 +544,35 @@ What the instrumentation does with the driver, and what it gives up:
   ([below](#beside-your-error-tracker)): the mechanism is the same — it resolves the driver and loads nothing — but
   nobody has run the pair.
 
+### MongoDB
+
+When your application uses MongoDB through its official driver, `mongodb` 6 or 7 — and so through Mongoose 8 and 9,
+which send every command through it — the instrumentation observes it as a dependency of its own (`mongodb`): the
+commands each request sends, how long they took and how many failed. Each command is an operation of kind `query`,
+named by two words, the command and the collection: `find users`, `insert orders`, `aggregate events`, `getMore
+orders`. **Never the filter, the documents, the pipeline or the update**, which hold your data; a collection whose name
+looks like a value (`tenant_8f3a9c2e…`, a number) is `?`, so a collection per customer is one operation and its name
+stays on your server. Two shapes of one command on one collection — a `find` by email and one by id — are one
+operation, and a request that sends one more of them counts one more. A command the server refused, and an insert a
+unique index refused, are failures.
+
+What the instrumentation does with the driver, and what it gives up:
+
+- **It wraps one method, `Connection.prototype.command`**, which every command the driver sends goes through, on the
+  driver your application loads and on the one Mongoose brings when that is another. It is put in place from the
+  first request, resolved and not loaded at start-up, as for `pg`. Arguments, results and errors pass through
+  untouched, and if the wrapper itself fails the command still runs. Run with the driver against the tests' own server
+  on 6.21 and 7.7, with Mongoose 9, and against MongoDB 7.
+- **One dependency, with no target.** A replica set's members — the primary, the secondaries a read goes to — are one
+  database to your application.
+- **The driver's own conversation is not a request's**: the handshake and the authentication of a new connection, and
+  ending the sessions, are not counted, and no command outside a request is.
+- **The wait for a connection** from the driver's pool is before the command, and is part of no command's time.
+- **Mongoose 5 to 7, on the drivers 3 to 5, are not observed.** Those drivers answer through callbacks, and their pool
+  hands a waiting request its connection from the request that gave it back: what a wrapper recorded would not be
+  known to be the request's. `init` says it, from the range your `package.json` declares.
+- `observers` in the batch has no key for it, as for MySQL: `DOWNTRACE_DEBUG=1` says at start-up whether it attached.
+
 ### Prisma
 
 Prisma is observed when it reaches Postgres through `pg`, and only then. What decides it is not the version of the ORM
@@ -788,7 +818,7 @@ pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool 
 5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
 
 **Under Jest, the instrumentation reaches into Jest's own module registry, on Node 22 and later.** Jest runs a test
-file's modules in a registry and a context of its own: the `pg`, `mysql2`, postgres.js and Express the tests use are
+file's modules in a registry and a context of its own: the `pg`, `mysql2`, postgres.js, MongoDB and Express the tests use are
 not the ones in Node's module cache, which is where the instrumentation finds them everywhere else. So when Jest
 loads `jest-runtime`, which Node announces on its `module.require` channel, the instrumentation wraps the
 `requireModule` every `require` of a test file goes through, and patches the copies Jest hands the tests: their
@@ -825,8 +855,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mongodb`, `mongoose`, `mysql`, `better-sqlite3`, `sqlite3`, `@libsql/client`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and `@prisma/client` without `@prisma/adapter-pg` — before Prisma 7 its queries go through an engine of its own | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mongodb` (6 and later), `mongoose` (8 and later), `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `better-sqlite3`, `sqlite3`, `@libsql/client`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and `@prisma/client` without `@prisma/adapter-pg` — before Prisma 7 its queries go through an engine of its own —, and `mongodb` before 6 and `mongoose` before 8, by the range declared | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -944,7 +974,7 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query` (and, for MySQL, `mysql2`'s `query` and
-  `execute`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
+  `execute`, and for MongoDB the driver's `Connection.prototype.command`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
   runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - For Express route templates the instrumentation wraps two more methods. The first — `Router.prototype.use`, or the
   `Router` function's own `use` in Express 4, where it is the routers' prototype — keeps the pattern of
@@ -982,8 +1012,8 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `postgres`, `mysql2` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+`pg`, `postgres`, `mysql2`, `mongodb` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, and the `mongodb` Mongoose brings, from where Mongoose is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`

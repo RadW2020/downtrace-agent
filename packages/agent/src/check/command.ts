@@ -56,6 +56,7 @@ async function feedbackContext(cwd: string, command: string, version: string): P
     node: process.version,
     platform: process.platform,
     dependencies: pkg?.dependencies ?? new Set(),
+    ranges: pkg?.ranges ?? new Map(),
     command,
     scripts: pkg?.scripts ?? {},
   };

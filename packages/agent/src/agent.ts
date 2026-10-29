@@ -37,6 +37,7 @@ import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./finger
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { instrumentHttp } from "./instrument/http.ts";
+import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
@@ -266,6 +267,8 @@ export class Agent {
   private pgAttach: (() => boolean) | undefined;
   /** The `mysql2` observer's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
+  /** MongoDB's, the same way, for the driver and the copy Mongoose brings (ADR 0237). */
+  private mongoAttach: (() => boolean) | undefined;
   /** postgres.js's, under the `pg` switch: the same moment, and an import for its ESM copy (ADR 0235). */
   private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
@@ -653,6 +656,15 @@ export class Agent {
         patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
       });
     }
+    // MongoDB through its driver, and so through Mongoose (ADR 0237). No key in `observers` either, as for MySQL.
+    if (on.has("mongodb")) {
+      const mongoDeps = { log: this.log, internalError, errors: this.errors };
+      this.mongoAttach = armMongo({ ...mongoDeps, from: entry }).attach;
+      sandbox.push({
+        matches: (name, from) => name === "./connection" && requiredFrom(from, "mongodb", "lib", "cmap", "connect.js"),
+        patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
+      });
+    }
     this.stopJest = attachJest({ patches: sandbox, internalError });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
@@ -669,7 +681,7 @@ export class Agent {
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.
-    this.instrumented = on.has("pg") || on.has("mysql") || on.has("http") || on.has("redis");
+    this.instrumented = on.has("pg") || on.has("mysql") || on.has("mongodb") || on.has("http") || on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
     if (on.has("runtime")) {
       this.runtime.start();
@@ -1168,6 +1180,7 @@ export class Agent {
     // nothing after, because the reference goes with the settle.
     if (this.pgAttach?.()) this.pgAttach = undefined;
     if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
+    if (this.mongoAttach?.()) this.mongoAttach = undefined;
     if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global

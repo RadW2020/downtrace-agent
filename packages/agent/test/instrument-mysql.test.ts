@@ -611,7 +611,8 @@ describe.each(DRIVERS)("%s", (_name, driver) => {
       const ctx = enterRequest(undefined, performance.now(), undefined, () => "withheld-zq");
       await ask(connections, "SELECT 1");
       expect([...(ctx.work?.keys() ?? [])]).toEqual([dependencyKey("mysql", "withheld-zq")]);
-      expect(JSON.stringify([...(ctx.work ?? [])])).not.toContain(String(r.server.port));
+      // The port as a number of its own, and not as digits inside a duration: `3.3613749999999527` holds `49999`.
+      expect(JSON.stringify([...(ctx.work ?? [])])).not.toMatch(new RegExp(`(^|[^0-9.])${r.server.port}([^0-9]|$)`));
     });
   });
 });

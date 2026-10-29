@@ -40,9 +40,10 @@ export interface ArmDeps<Driver> {
   internalError: (err: unknown) => void;
   /**
    * Patches the module the application loaded, whose version the package says. The shape of the module is
-   * checked here, by the observer that knows how to say it is wrong.
+   * checked here, by the observer that knows how to say it is wrong. The `require` that found the copy, and the file
+   * it resolved, are for a patch whose class is in a module of the driver's other than its entry.
    */
-  patch: (module: Driver, version: string) => void;
+  patch: (module: Driver, version: string, require: NodeRequire, resolved: string) => void;
 }
 
 /**
@@ -105,7 +106,7 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
       }
       copies.splice(i, 1);
       try {
-        deps.patch(copy.require(driver) as Driver, copy.version);
+        deps.patch(copy.require(driver) as Driver, copy.version, copy.require, copy.resolved);
       } catch (err) {
         // A failure of the attach is a failure of the instrumentation's own: counted like any other
         // (invariant 2, ADR 0161), and never handed to the request that asked for it. The copy leaves the list

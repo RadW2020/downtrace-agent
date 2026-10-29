@@ -31,7 +31,8 @@ export const FRAMEWORK_PACKAGES = [
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2`, Redis through `ioredis` and `redis` (node-redis, from 5.12). A
+ * postgres.js (`postgres`), MySQL through `mysql2`, MongoDB through `mongodb` (and Mongoose, which sends every
+ * command through it), Redis through `ioredis` and `redis` (node-redis, from 5.12). A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -41,6 +42,8 @@ export const OBSERVED_PACKAGES = [
   "slonik",
   "postgres",
   "mysql2",
+  "mongodb",
+  "mongoose",
   "ioredis",
   "redis",
 ] as const;
@@ -51,8 +54,6 @@ export const OBSERVED_PACKAGES = [
  * route whose work went through it.
  */
 export const UNOBSERVED_PACKAGES = [
-  "mongodb",
-  "mongoose",
   "mysql",
   "better-sqlite3",
   "sqlite3",
@@ -68,10 +69,39 @@ export const UNOBSERVED_PACKAGES = [
  * instrumentation observes: before Prisma 7 its queries go through an engine of its own, which talks to the database
  * without a Node.js driver (the stranger campaign: a Prisma 4 application, every route `nothing-observed`).
  */
-export function unobservedOf(dependencies: ReadonlySet<string>): string[] {
+export function unobservedOf(
+  dependencies: ReadonlySet<string>,
+  ranges: ReadonlyMap<string, string> = new Map(),
+): string[] {
   const unobserved: string[] = UNOBSERVED_PACKAGES.filter((name) => dependencies.has(name));
   if (dependencies.has("@prisma/client") && !dependencies.has("@prisma/adapter-pg")) unobserved.push("@prisma/client");
+  for (const name of OBSERVED_PACKAGES) if (dependencies.has(name) && tooOld(name, ranges)) unobserved.push(name);
   return unobserved;
+}
+
+/** The packages of `OBSERVED_PACKAGES` a project depends on, in a version the instrumentation observes. */
+export function observedOf(
+  dependencies: ReadonlySet<string>,
+  ranges: ReadonlyMap<string, string> = new Map(),
+): string[] {
+  return OBSERVED_PACKAGES.filter((name) => dependencies.has(name) && !tooOld(name, ranges));
+}
+
+/**
+ * The first major of a package the instrumentation observes, where it does not observe the ones before: the MongoDB
+ * driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8, the first on it.
+ * Before them the driver answers through callbacks, from whichever request gave its pool a connection back.
+ */
+const OBSERVED_FROM: Readonly<Record<string, number>> = { mongodb: 6, mongoose: 8 };
+
+/**
+ * Whether the range a package is declared with starts before the first major observed: `^5.7.7`, `~6`, `>=7`. A range
+ * that names no number — `latest`, `*`, a tag, a path — is taken as observed.
+ */
+function tooOld(name: string, ranges: ReadonlyMap<string, string>): boolean {
+  const from = OBSERVED_FROM[name];
+  const major = /\d+/.exec(ranges.get(name) ?? "")?.[0];
+  return from !== undefined && major !== undefined && Number(major) < from;
 }
 
 /**
@@ -135,6 +165,8 @@ export const REGISTER_SPECIFIER = `${AGENT_PACKAGE}/register`;
 export interface PackageJson {
   /** Every package in `dependencies`, `devDependencies` and `optionalDependencies`. */
   dependencies: Set<string>;
+  /** The range each of them is declared with, as written. */
+  ranges: Map<string, string>;
   scripts: Record<string, string>;
   /** The `packageManager` field (Corepack's), as written. */
   packageManager: string | undefined;
@@ -158,11 +190,15 @@ export function parsePackageJson(text: string, source: string): PackageResult {
   if (!isRecord(value)) return fail("it must be a JSON object");
 
   const dependencies = new Set<string>();
+  const ranges = new Map<string, string>();
   for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
     const listed = value[field];
     if (listed === undefined) continue;
     if (!isRecord(listed)) return fail(`"${field}" must be an object`);
-    for (const name of Object.keys(listed)) dependencies.add(name);
+    for (const [name, range] of Object.entries(listed)) {
+      dependencies.add(name);
+      if (typeof range === "string") ranges.set(name, range);
+    }
   }
 
   const scripts: Record<string, string> = {};
@@ -177,7 +213,7 @@ export function parsePackageJson(text: string, source: string): PackageResult {
   if (packageManager !== undefined && typeof packageManager !== "string") {
     return fail('"packageManager" must be a string');
   }
-  return { ok: true, pkg: { dependencies, scripts, packageManager } };
+  return { ok: true, pkg: { dependencies, ranges, scripts, packageManager } };
 }
 
 /** The script to run as the test command, or undefined when there is none. */
@@ -331,8 +367,8 @@ export async function detect(dir: string, pkg: PackageJson): Promise<Detection> 
   return {
     manager,
     frameworks,
-    observed: OBSERVED_PACKAGES.filter((name) => pkg.dependencies.has(name)),
-    unobserved: unobservedOf(pkg.dependencies),
+    observed: observedOf(pkg.dependencies, pkg.ranges),
+    unobserved: unobservedOf(pkg.dependencies, pkg.ranges),
     testScript,
     testCommand: testScript === undefined ? undefined : commandFor(manager, testScript),
     installed: pkg.dependencies.has(AGENT_PACKAGE),

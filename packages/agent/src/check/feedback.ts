@@ -66,6 +66,8 @@ export interface FeedbackContext {
   platform: string;
   /** Every package the project's `package.json` depends on; only known names are written. */
   dependencies: ReadonlySet<string>;
+  /** The range each is declared with, for a package observed only from a version on. Never written. */
+  ranges?: ReadonlyMap<string, string>;
   /** The test command, and the script it runs when it runs one: read for a runner's name, never written. */
   command: string;
   scripts: Readonly<Record<string, string>>;
@@ -97,7 +99,7 @@ function whyOf(report: CheckReport, context: FeedbackContext): { why: string; ti
     return { why: `check could not compare (${failure.code}): ${failure.message}`, title: `check: ${failure.code}` };
   }
   const blind = report.routes.filter((route) => route.reasons.some((reason) => reason.code === "nothing-observed"));
-  const unobserved = unobservedOf(context.dependencies);
+  const unobserved = unobservedOf(context.dependencies, context.ranges);
   if (blind.length > 0 && unobserved.length > 0) {
     const routes = `${blind.length} ${blind.length === 1 ? "route was" : "routes were"}`;
     return {
