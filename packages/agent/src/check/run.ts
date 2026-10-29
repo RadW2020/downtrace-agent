@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readdir, realpath, rm, stat, symlink } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, realpath, rm, stat, symlink } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
@@ -41,8 +41,13 @@ const KILL_GRACE_MS = 5_000;
 const STREAM_GRACE_MS = 1_500;
 /** The last of a command's output kept, for the failure that needs it. */
 const OUTPUT_TAIL_CHARS = 4_000;
-/** How far below the project a directory of dependencies is looked for. */
+/** How far below the project a directory of dependencies, or an environment file, is looked for. */
 const LINK_DEPTH = 3;
+/**
+ * The files a project's environment is written in, which dotenv and its kin read: `.env`, `.env.test`,
+ * `.env.local`. Never tracked, as a rule — and so never in a checkout of the base.
+ */
+const ENV_FILE = /^\.env(\.[\w.-]+)?$/;
 
 /**
  * One second: the instrumentation closes an interval and a profile window at least this often, so that what a
@@ -271,6 +276,11 @@ export function runEnv(
  * none, and installing them would need the network. The base then runs on the project's own dependencies:
  * a package of the repository itself, linked into them, is the working tree's and not the base's — what
  * `prepare` is for.
+ *
+ * And each environment file the base lacks: a `.env` git ignores is the machine's configuration and not code
+ * under comparison, the same on both sides, and without it the base's tests of a project that reads one fail
+ * before a request is made (the stranger campaign: fastify/demo, `node: .env: not found`). One the base has
+ * — tracked, so the base's own — is left as the checkout wrote it.
  */
 async function linkDependencies(top: string, base: string): Promise<string[]> {
   const links: string[] = [];
@@ -288,6 +298,14 @@ async function linkDependencies(top: string, base: string): Promise<string[]> {
           const present = await stat(into).catch(() => undefined);
           if (parent?.isDirectory() === true && present === undefined) {
             await symlink(join(top, path), into, "dir");
+            links.push(into);
+          }
+        } else if (ENV_FILE.test(entry.name) && (entry.isFile() || entry.isSymbolicLink())) {
+          const into = join(base, path);
+          const parent = await stat(join(base, dir)).catch(() => undefined);
+          const present = await lstat(into).catch(() => undefined);
+          if (parent?.isDirectory() === true && present === undefined) {
+            await symlink(join(top, path), into, "file");
             links.push(into);
           }
         } else if (entry.isDirectory() && !entry.name.startsWith(".")) {

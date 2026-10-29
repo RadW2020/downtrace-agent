@@ -752,6 +752,43 @@ describe("the base of the project", () => {
     expect(await snapshot(made)).toEqual(before);
   });
 
+  it("runs with the .env files git ignores, linked, as a project that reads one needs, and leaves them as they were", async () => {
+    // fastify/demo's tests start with `tsx --env-file=.env`, and its .env is ignored: in a checkout of the base
+    // there was none, and the base's run failed before a request was made.
+    const files = appFiles({});
+    const made = await project({
+      ...files,
+      "app.mjs": `import { readFileSync } from "node:fs";\nif (!readFileSync(".env", "utf8").includes("SECRET=")) throw new Error("no .env");\nif (!readFileSync("config/.env.test", "utf8").includes("MODE=")) throw new Error("no .env.test");\n${files["app.mjs"] ?? ""}`,
+      ".gitignore": ".env\n.env.*\n",
+      "config/settings.json": "{}\n",
+    });
+    await made.write(".env", "SECRET=hunter2-zq\n");
+    await made.write("config/.env.test", "MODE=test\n");
+    await made.write("regressions.json", JSON.stringify(REGRESSION));
+    const before = await snapshot(made);
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.report.status, checked.stderr + JSON.stringify(checked.report.failure)).toBe("compared");
+    expect(route(checked.report, "POST /checkout").verdict).toBe("worse");
+    expect(await snapshot(made)).toEqual(before);
+  });
+
+  it("leaves the base's own .env to the base, when the repository tracks one", async () => {
+    // A tracked .env is the base's, and what it says is part of what is compared: the base's says one call.
+    const files = appFiles({});
+    const made = await project({
+      ...files,
+      "app.mjs": `import { readFileSync } from "node:fs";\n${(files["app.mjs"] ?? "").replace(
+        'const regress = JSON.parse(await readFile(new URL("./regressions.json", import.meta.url), "utf8"));',
+        '$&\nif (readFileSync(".env", "utf8").includes("PER_LINE=1")) regress.perLine = true;',
+      )}`,
+      ".env": "PER_LINE=0\n",
+    });
+    await made.write(".env", "PER_LINE=1\n");
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.report.status, checked.stderr + JSON.stringify(checked.report.failure)).toBe("compared");
+    expect(route(checked.report, "POST /checkout").verdict).toBe("worse");
+  });
+
   it("can be prepared, in the base and nowhere else, by what the configuration says", async () => {
     // Prepare turns the regression on in the base only: the base then does more than the working tree does, and
     // the working tree's own file is as it was.
