@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseArgs, USAGE } from "../../agent/src/check/args.ts";
 import { evaluateRoute } from "../../agent/src/check/compare.ts";
+import { feedbackFor } from "../../agent/src/check/feedback.ts";
 import { renderJson } from "../../agent/src/check/render.ts";
 import { failed } from "../../agent/src/check/report.ts";
 import { runInit } from "../../agent/src/init/command.ts";
@@ -127,6 +128,26 @@ describe("the AGENTS.md block", () => {
       expect(report).toHaveProperty(key);
       expect(block).toContain(`\`${key}\``);
     }
+  });
+
+  it("names the fields of the feedback check's JSON offers, which the report has, and says it is never sent", () => {
+    const report = failed({
+      failure: { code: "no-profile", side: "base", message: "the run left no profile", advice: null, outputTail: null },
+    });
+    expect(report).toHaveProperty("feedback");
+    const feedback = feedbackFor(report, {
+      version: "0",
+      node: "v22",
+      platform: "linux",
+      dependencies: new Set(),
+      command: "npm test",
+      scripts: {},
+    });
+    for (const key of ["why", "url"]) {
+      expect(feedback).toHaveProperty(key);
+      expect(block).toContain(`\`feedback.${key}\``);
+    }
+    expect(block).toContain("never submit it for them");
   });
 
   it("names the fields of init's JSON that it tells a coding agent to follow", async () => {

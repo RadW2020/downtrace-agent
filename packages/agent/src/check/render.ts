@@ -78,6 +78,18 @@ function evaluatedBlock(route: RouteResult): string[] {
   return lines;
 }
 
+/** The link a report offers when Downtrace could not see something, said as what it is: a form, and nothing sent. */
+function feedbackLines(report: CheckReport): string[] {
+  if (report.feedback === null) return [];
+  return [
+    "",
+    `Did Downtrace miss something? ${report.feedback.why}.`,
+    "An issue is ready to fill in, with what this report says and nothing of the code. Nothing was sent: open it,",
+    "read it, and submit it if you want us to see it:",
+    `  ${report.feedback.url}`,
+  ];
+}
+
 /** The report as a person reads it: three columns, and what was left out said by name. */
 export function renderText(report: CheckReport): string {
   const out: string[] = [];
@@ -93,6 +105,7 @@ export function renderText(report: CheckReport): string {
       for (const line of failure.outputTail.split("\n")) out.push(`  ${line}`);
     }
     for (const note of report.notes) out.push("", note);
+    out.push(...feedbackLines(report));
     return `${out.join("\n")}\n`;
   }
 
@@ -129,6 +142,7 @@ export function renderText(report: CheckReport): string {
     }
   }
   for (const note of report.notes) out.push("", note);
+  out.push(...feedbackLines(report));
   return `${out.join("\n")}\n`;
 }
 

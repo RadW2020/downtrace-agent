@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { runInit } from "../init/command.ts";
+import { parsePackageJson } from "../init/detect.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
 import { type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
+import { type FeedbackContext, feedbackFor } from "./feedback.ts";
 import { renderJson, renderText } from "./render.ts";
 import { type CheckReport, exitCodeOf, failed } from "./report.ts";
 import { DEFAULT_TIMEOUT_SECONDS, repositoryTop, runCheck } from "./run.ts";
@@ -37,6 +39,26 @@ async function loadConfig(cwd: string, asked: string | undefined, env: NodeJS.Pr
       reason: `the configuration could not be read: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+/**
+ * What the feedback a report may carry is written from: the project's `package.json` where `check` runs, or nothing
+ * of it when there is none to read — the link is still worth offering, with less in it.
+ */
+async function feedbackContext(cwd: string, command: string, version: string): Promise<FeedbackContext> {
+  const read = await readFile(join(cwd, "package.json"), "utf8").then(
+    (text) => parsePackageJson(text, "package.json"),
+    () => undefined,
+  );
+  const pkg = read?.ok === true ? read.pkg : undefined;
+  return {
+    version,
+    node: process.version,
+    platform: process.platform,
+    dependencies: pkg?.dependencies ?? new Set(),
+    command,
+    scripts: pkg?.scripts ?? {},
+  };
 }
 
 /**
@@ -96,5 +118,5 @@ export async function runCli(deps: CliDeps): Promise<number> {
     signal: deps.signal,
     progress: (line) => deps.stderr(`downtrace: ${line}\n`),
   });
-  return say(report);
+  return say({ ...report, feedback: feedbackFor(report, await feedbackContext(cwd, command, deps.version)) });
 }

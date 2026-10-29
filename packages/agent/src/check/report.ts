@@ -1,5 +1,6 @@
 import type { RouteResult, Summary } from "./compare.ts";
 import { summarize } from "./compare.ts";
+import type { Feedback } from "./feedback.ts";
 
 /**
  * What `check` hands back: the same object for a person (rendered as text), for a coding agent (`--json`) and
@@ -70,6 +71,11 @@ export interface CheckReport {
   failure: Failure | null;
   /** What the reader should keep in mind about this comparison. */
   notes: string[];
+  /**
+   * When Downtrace could not see something it is there to see, a link to an issue filled in with what this report
+   * says, for the person to read and submit if they want (`feedback.ts`). Null otherwise. Nothing is sent.
+   */
+  feedback: Feedback | null;
 }
 
 /** The note that is always there: durations are data. */
@@ -92,6 +98,7 @@ export function compared(parts: {
     change: parts.change,
     failure: null,
     notes: [DURATIONS_NOTE, ...parts.notes],
+    feedback: null,
   };
 }
 
@@ -112,6 +119,7 @@ export function failed(parts: {
     change: parts.change ?? null,
     failure: parts.failure,
     notes: parts.notes ?? [],
+    feedback: null,
   };
 }
 

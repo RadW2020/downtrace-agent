@@ -195,6 +195,10 @@ describe("routes the tests do not exercise (ESC-18)", () => {
     });
   });
 
+  it("offers no link to tell Downtrace: a route with no dependencies, in a project whose drivers it observes, is one", () => {
+    expect(checked.report.feedback).toBeNull();
+  });
+
   it("never lists as unchanged a route it did not evaluate", () => {
     const unchanged = checked.report.routes.filter((one) => one.verdict === "unchanged").map((one) => one.id);
     expect(unchanged).toContain("GET /products");
@@ -733,6 +737,13 @@ describe("what goes wrong, said (COB-01)", () => {
     expect(checked.report.failure).toMatchObject({ code: "nothing-evaluated" });
     expect(route(checked.report, "GET /health").reasons[0]?.code).toBe("nothing-observed");
     expect(route(checked.report, "GET /orders").reasons[0]?.code).toBe("not-called");
+    // A run that could evaluate nothing is one Downtrace wants to hear about, from the person, if they want: a link
+    // to an issue filled in with the codes and nothing of the project's routes.
+    const url = checked.report.feedback?.url ?? "";
+    expect(url.startsWith("https://github.com/RadW2020/downtrace-agent/issues/new?")).toBe(true);
+    const body = new URL(url).searchParams.get("body") ?? "";
+    expect(body).toContain("nothing-evaluated");
+    for (const path of ["/health", "/orders"]) expect(body, path).not.toContain(path);
   });
 
   it("a ref that does not exist", async () => {

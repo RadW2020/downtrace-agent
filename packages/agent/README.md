@@ -914,6 +914,18 @@ Options of the command: `--base <ref>` (what to compare against; `HEAD` by defau
 
 For a person, text with the three columns, each route with its evidence. For a coding agent, `--json`: one object, `schema: "downtrace-check/1"`, with `status` (`compared` or `failed`), `summary` (`worse`, `unchanged`, `notEvaluated`), `base` and `change` (the ref, the commit, the command, its exit status and what the run left: processes, requests, routes, profile windows, lines it could not read, what each observer said), `notes`, and `routes`. Each route has a stable `id` (`POST /checkout`), its `verdict`, its `reasons` when it was not evaluated, `requests` and `profiledRequests` for each side, `meanRequestMs`, its `dependencies` (all the queries, all the outgoing calls, all the commands, per request, on each side) and its `operations`: for each, a stable `id`, the `hash` of its fingerprint, its `kind`, its `label`, how it moved (`appeared`, `multiplied`, `unchanged`, `reduced`, `disappeared`), and `perRequest`, `executions` and `msPerExecution` for each side. A comparison that could not be made has `status: "failed"` and a `failure` with a `code`, the `side`, a `message`, `advice` and the `outputTail` of the command when it is what failed: `not-a-repository`, `bad-ref`, `bad-config`, `no-command`, `setup-failed`, `command-failed`, `timeout`, `no-profile`, `nothing-evaluated`, `interrupted`.
 
+**When Downtrace could not see something, the report says so and offers a link; it sends nothing.** A run that left
+no profile, a run in which no route could be evaluated, routes in which nothing was observed in a project that
+depends on a driver the instrumentation does not observe (`mongoose`, `better-sqlite3`, `mssql`…), and a Postgres or
+Redis observer that was unavailable in a project that depends on its driver: those are what tells us what Downtrace
+misses in projects we have not seen. The report then has a `feedback`, with `why` and a `url`: a new issue on
+[the public repository](https://github.com/RadW2020/downtrace-agent/issues), filled in with the version, Node, the
+frameworks and data packages the project depends on among names Downtrace knows, the test runner among names it
+knows, and the codes of what went wrong with how many routes each covers. Never a route, a path, the test command or
+its output, and never a package that is not one of those names. `check` makes no request; the link opens a form you
+read, change, and submit if you want us to see it. A run with nothing of the kind has `feedback: null`, and the text
+says nothing.
+
 For CI, the exit status: **0** no route got worse, **1** at least one did, **2** no comparison could be made — the test command failed on either side (a comparison needs two runs that end well), a run left no profile, no route could be evaluated, or the command was interrupted.
 
 ## Guarantees
