@@ -36,7 +36,13 @@ export function createDeclaredRoutes(spec: {
 }): DeclaredRoutes | undefined {
   const { file, log, observed } = spec;
   if (file === undefined) return undefined;
-  const apps = new Set<object>();
+  // Nothing here holds an application. A suite that builds one per test (a Nest app on a new Fastify, with its pool
+  // and its modules) ran out of memory when each one that answered was kept for its routes (the stranger campaign).
+  // So its routes are walked when it first answers and kept as names, and the application is held weakly, for what
+  // it registers after that, for as long as something else holds it.
+  const seen = new WeakSet<object>();
+  const alive: Array<WeakRef<object>> = [];
+  const walked = new Set<string>();
   const written = new Set<string>();
   let complained = false;
   const complain = (err: unknown): void => {
@@ -51,16 +57,23 @@ export function createDeclaredRoutes(spec: {
   // its parent, and the request carries the parent again by the time it finishes; the dispatch record keeps the one
   // the route was matched in.
   const remember = (app: unknown): void => {
-    if ((typeof app === "function" || (typeof app === "object" && app !== null)) && !apps.has(app)) apps.add(app);
+    if ((typeof app !== "function" && (typeof app !== "object" || app === null)) || seen.has(app)) return;
+    seen.add(app);
+    alive.push(new WeakRef(app));
+    for (const route of declaredRoutesOf(app)) walked.add(route);
   };
   const pending = (): string[] => {
+    const routes = new Set(walked);
+    for (let i = alive.length - 1; i >= 0; i--) {
+      const app = alive[i]?.deref();
+      if (app === undefined) alive.splice(i, 1);
+      else for (const route of declaredRoutesOf(app)) routes.add(route);
+    }
     const fresh: string[] = [];
-    for (const app of apps) {
-      for (const route of declaredRoutesOf(app)) {
-        if (written.has(route)) continue;
-        const template = route.slice(route.indexOf(" ") + 1);
-        if (observed(template)) fresh.push(route);
-      }
+    for (const route of routes) {
+      if (written.has(route)) continue;
+      const template = route.slice(route.indexOf(" ") + 1);
+      if (observed(template)) fresh.push(route);
     }
     return fresh;
   };

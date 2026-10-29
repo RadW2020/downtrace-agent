@@ -1,6 +1,8 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import v8 from "node:v8";
+import { runInNewContext } from "node:vm";
 import express from "express";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,6 +30,16 @@ async function room(): Promise<string> {
 }
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
+
+/** Collects garbage until what `ref` points to is gone, or gives up: V8 collects what nothing holds, in its own time. */
+async function collected(ref: WeakRef<object>): Promise<void> {
+  v8.setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  for (let i = 0; i < 20 && ref.deref() !== undefined; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    gc();
+  }
+}
 const everything = (): boolean => true;
 
 async function lines(file: string): Promise<string[][]> {
@@ -89,6 +101,25 @@ describe("createDeclaredRoutes", () => {
     await declared?.write();
     await app.close();
     expect(await lines(file)).toEqual([["GET /users/:id"]]);
+  });
+
+  /**
+   * The stranger campaign: a suite that builds an application per test (HedgeDoc, Nest on Fastify) ran out of memory
+   * under check. Each application that answered was kept for its routes, and with it everything it held: its pool,
+   * its modules, its caches, one per test.
+   */
+  it("keeps no application that answered, and still writes the routes of one that is gone", async () => {
+    const file = join(await room(), "run.routes.jsonl");
+    const declared = createDeclaredRoutes({ file, log: quiet, observed: everything });
+    const gone = (() => {
+      const app = application();
+      declared?.answered({ app });
+      return new WeakRef(app);
+    })();
+    await collected(gone);
+    expect(gone.deref(), "the application is collected once nothing of the application holds it").toBeUndefined();
+    await declared?.write();
+    expect(await lines(file)).toEqual([["GET /health", "POST /orders"]]);
   });
 
   it("leaves out a route the operator excluded: excluded is not observed (ADR 0101)", async () => {
