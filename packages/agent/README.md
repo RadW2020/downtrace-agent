@@ -11,7 +11,7 @@ It observes five things, each of which can be switched off with `DOWNTRACE_INSTR
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma) |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
-| `redis` | Redis commands per request, by server |
+| `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
 
 It watches only the process it is loaded into: one process, one service.
@@ -596,11 +596,16 @@ once». The name is made once per method and host and kept, so a call costs a lo
 ### Redis
 
 The commands each request issues are reported the same way, per server: how many per request, how long they took and
-how many failed. ioredis publishes on a tracing channel, so nothing is patched.
+how many failed. Both Redis clients publish on a tracing channel, so nothing is patched: ioredis, and node-redis
+(`redis`, `@redis/client`) from 5.12. A node-redis older than 5.12 publishes nothing, and its commands are not seen;
+`npm install redis@latest` is what it takes.
 
 Each command is also an **operation**, in the profile and in the black box, named by the command and its server —
-`HGETALL cache:6379` — and never by its key or its arguments, which ioredis puts on the channel and the
-instrumentation does not read. A Redis reached through a unix socket has a path for its server, which no label may
+`HGETALL cache:6379` — and never by its key or its arguments, which both clients put on the channel and the
+instrumentation does not read. A node-redis transaction (`multi()…exec()`) is one operation, `MULTI cache:6379`:
+node-redis publishes the transaction and not the commands inside it, so a change that adds a command to a
+transaction is not seen, and one that runs a transaction per item is. A pipeline (`execAsPipeline()`) is the
+commands it ran, which node-redis publishes one by one. A Redis reached through a unix socket has a path for its server, which no label may
 carry, so its commands travel with their hash alone; a command the channel does not name is counted and is not an
 operation.
 
@@ -783,7 +788,7 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify` or `next` among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `mysql2` and `ioredis` among the dependencies; outgoing HTTP always | says which |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `mysql2`, `ioredis` and `redis` among the dependencies; outgoing HTTP always | says which |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express or Fastify application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).

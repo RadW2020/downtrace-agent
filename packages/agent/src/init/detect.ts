@@ -20,9 +20,10 @@ export const FRAMEWORK_PACKAGES = ["express", "koa", "@strapi/strapi", "fastify"
 
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
- * does: Postgres through `pg` (and Prisma's adapter for it), MySQL through `mysql2`, Redis through `ioredis`.
+ * does: Postgres through `pg` (and Prisma's adapter for it), MySQL through `mysql2`, Redis through `ioredis` and
+ * `redis` (node-redis, from 5.12).
  */
-export const OBSERVED_PACKAGES = ["pg", "@prisma/adapter-pg", "mysql2", "ioredis"] as const;
+export const OBSERVED_PACKAGES = ["pg", "@prisma/adapter-pg", "mysql2", "ioredis", "redis"] as const;
 
 /**
  * The scripts that can be the test command, in the order they are preferred. An integration suite comes first

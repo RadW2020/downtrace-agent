@@ -9,18 +9,33 @@ interface Pending {
   ctx: RequestContext;
   started: number;
   target: string;
+  /** The command's name as the driver said it at the start; undefined when it did not. */
+  command: unknown;
 }
 
 /**
- * What ioredis puts on its tracing channel. The server's identity and the command's name are read; never its
- * arguments, which hold the key and the values (invariant 5).
+ * What ioredis and node-redis put on their tracing channels. The server's identity and the command's name are
+ * read; never its arguments, which hold the key and the values (invariant 5), and which both put there.
  */
 interface CommandMessage {
   command?: unknown;
+  /** node-redis's batches only: `MULTI` or `PIPELINE`. */
+  batchMode?: unknown;
   serverAddress?: unknown;
   serverPort?: unknown;
   error?: unknown;
 }
+
+/**
+ * The channels each command is published on: ioredis's, and node-redis's from 5.12 (`redis`, `@redis/client`).
+ * A node-redis older than that publishes nothing, and its commands are not seen.
+ */
+const COMMANDS = ["ioredis:command", "node-redis:command"] as const;
+/**
+ * node-redis's batches. A pipeline publishes each of its commands on `node-redis:command` as well, so only a
+ * `MULTI` is taken from here: its commands are not published one by one, and the transaction is one command.
+ */
+const BATCHES = "node-redis:batch";
 
 export interface InstrumentRedisDeps {
   log: Logger;
@@ -43,15 +58,14 @@ export interface InstrumentRedisDeps {
 }
 
 /**
- * Observes Redis commands. Nothing is patched: ioredis publishes on a tracing channel, so the agent subscribes to
- * the start and the end of each command and times the difference.
+ * Observes Redis commands. Nothing is patched: ioredis and node-redis publish on tracing channels, so the agent
+ * subscribes to the start and the end of each command and times the difference.
  *
  * The request's context is captured at the start, for the same reason as outgoing HTTP: the end of an asynchronous
  * operation does not necessarily run in the async context of whoever started it.
  */
 export function instrumentRedis(deps: InstrumentRedisDeps): () => void {
   const { log, internalError } = deps;
-  const channel = diagnostics_channel.tracingChannel<CommandMessage>("ioredis:command");
   const pending = new WeakMap<object, Pending>();
 
   const finish = (message: CommandMessage, failed: boolean): void => {
@@ -65,7 +79,7 @@ export function instrumentRedis(deps: InstrumentRedisDeps): () => void {
     recordCallIn(p.ctx, "redis", p.target, now - p.started, isFailure);
     // And what it ran, by its name and its server. A message that does not say which command records no
     // operation, and the counter above stays what it was.
-    const fingerprint = deps.commands?.get(message.command, p.target);
+    const fingerprint = deps.commands?.get(p.command, p.target);
     if (fingerprint) {
       recordOperationIn(p.ctx, {
         kind: "command",
@@ -92,19 +106,36 @@ export function instrumentRedis(deps: InstrumentRedisDeps): () => void {
       }
     };
 
-  const handlers = {
-    start: guarded((message) => {
-      const ctx = currentContext();
-      if (!ctx) return; // a command outside a request belongs to no endpoint
-      pending.set(message as object, { ctx, started: performance.now(), target: targetOf(message) });
-    }),
+  const begin = (message: CommandMessage, command: unknown): void => {
+    const ctx = currentContext();
+    if (!ctx) return; // a command outside a request belongs to no endpoint
+    pending.set(message as object, { ctx, started: performance.now(), target: targetOf(message), command });
+  };
+  const ends = {
     asyncEnd: guarded((message) => finish(message, false)),
     error: guarded((message) => finish(message, true)),
   };
+  const subscriptions = [
+    ...COMMANDS.map((name) => ({
+      channel: diagnostics_channel.tracingChannel<CommandMessage>(name),
+      handlers: { start: guarded((message) => begin(message, message.command)), ...ends },
+    })),
+    {
+      channel: diagnostics_channel.tracingChannel<CommandMessage>(BATCHES),
+      handlers: {
+        start: guarded((message) => {
+          if (message.batchMode === "MULTI") begin(message, "MULTI");
+        }),
+        ...ends,
+      },
+    },
+  ];
 
-  channel.subscribe(handlers);
+  for (const { channel, handlers } of subscriptions) channel.subscribe(handlers);
   log.debug("observing Redis commands");
-  return () => channel.unsubscribe(handlers);
+  return () => {
+    for (const { channel, handlers } of subscriptions) channel.unsubscribe(handlers);
+  };
 }
 
 /** Which Redis this is, so two instances are two dependencies. Empty when the driver does not say. */

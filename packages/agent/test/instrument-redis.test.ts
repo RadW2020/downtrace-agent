@@ -320,3 +320,67 @@ describe("a Redis command is an operation", () => {
     expect(failures.splice(0)).toEqual([broken]);
   });
 });
+
+/**
+ * node-redis (`redis`, `@redis/client`) publishes on channels of its own from 5.12, with the shape ioredis's has:
+ * the command's name in capitals, its server, and its arguments, which nothing here reads. A transaction is
+ * published as a batch and not command by command; a pipeline is published both ways, and only its commands count.
+ */
+describe("node-redis's channels", () => {
+  const nodeRedis = diagnostics_channel.tracingChannel("node-redis:command");
+  const batches = diagnostics_channel.tracingChannel("node-redis:batch");
+  const commandsOf = (ctx: RequestContext) =>
+    [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "command").map((o) => [o.text, o.count]);
+  const server = { serverAddress: "127.0.0.1", serverPort: 6379, clientId: "c1", database: 0 };
+  const observingCommands = (): void => {
+    stops.push(instrumentRedis({ ...deps, commands: new CallFingerprints("command") }));
+  };
+  const published = (on: typeof nodeRedis, message: Record<string, unknown>, fail = false) =>
+    on
+      .tracePromise(async () => {
+        await new Promise((r) => setTimeout(r, 2));
+        if (fail) throw new Error("ERR unknown command");
+      }, message)
+      .catch(() => {});
+
+  it("records a command against the request that issued it, and never its arguments", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await published(nodeRedis, { command: "GET", args: ["GET", "session:ana@cliente.com"], ...server });
+    const [dep] = redisWork(ctx);
+    expect(dep).toMatchObject({ target: "127.0.0.1:6379", calls: 1, errors: 0 });
+    expect(commandsOf(ctx)).toEqual([["GET 127.0.0.1:6379", 1]]);
+    expect(JSON.stringify([...(ctx.operations?.values() ?? [])])).not.toContain("ana@cliente.com");
+  });
+
+  it("counts a command that failed as an error", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await published(nodeRedis, { command: "NOSUCHCOMMAND", args: ["NOSUCHCOMMAND"], ...server }, true);
+    expect(redisWork(ctx)[0]).toMatchObject({ calls: 1, errors: 1 });
+  });
+
+  it("records a transaction as one MULTI, and a pipeline only by its commands", async () => {
+    observingCommands();
+    const ctx = enterRequest();
+    await published(batches, { batchMode: "MULTI", batchSize: 3, ...server });
+    // The pipeline itself, around the commands node-redis publishes one by one for it.
+    await published(batches, { batchMode: "PIPELINE", batchSize: 2, ...server });
+    for (let i = 0; i < 2; i++) await published(nodeRedis, { command: "GET", batchMode: "PIPELINE", ...server });
+    expect(commandsOf(ctx)).toEqual([
+      ["MULTI 127.0.0.1:6379", 1],
+      ["GET 127.0.0.1:6379", 2],
+    ]);
+    expect(redisWork(ctx)[0]?.calls).toBe(3);
+  });
+
+  it("stops observing every channel when told to", async () => {
+    const stop = instrumentRedis(deps);
+    stop();
+    const ctx = enterRequest();
+    await published(nodeRedis, { command: "GET", ...server });
+    await published(batches, { batchMode: "MULTI", ...server });
+    await command({ command: "GET", serverAddress: "127.0.0.1", serverPort: 6379 });
+    expect(redisWork(ctx)).toHaveLength(0);
+  });
+});
