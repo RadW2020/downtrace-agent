@@ -1749,6 +1749,24 @@ describe("the exit status and the text, for CI and for a person", () => {
     expect(result.stdout).toMatch(/POST \/checkout/);
   });
 
+  it("says a database the project depends on and no observer found, and not one it does not depend on", async () => {
+    // With the runner's package store off `NODE_PATH`, nothing resolves but what the project has: it declares mysql2
+    // and has not installed it, and it neither declares nor has pg.
+    const made = await project({
+      ...appFiles(REGRESSION),
+      "package.json": JSON.stringify({ name: "declares-mysql", private: true, dependencies: { mysql2: "^3" } }),
+    });
+    const checked = await check(made, ["--base", "HEAD"], { NODE_PATH: "" });
+    expect(checked.report.status, JSON.stringify(checked.report.failure)).toBe("compared");
+    expect(checked.report.base?.observers.mysql).toBeUndefined();
+    expect(checked.report.base?.observers.pg).toBe("unavailable");
+    const notes = checked.report.notes.join("\n");
+    for (const side of ["base", "change"]) {
+      expect(notes).toContain(`On the ${side}, the project depends on mysql2 and the mysql observer found no driver`);
+    }
+    expect(notes).not.toContain("pg observer");
+  });
+
   it("compares the working tree with a commit that is not HEAD", async () => {
     const made = await project(appFiles({}));
     const first = (await made.git("rev-parse", "HEAD")).trim();

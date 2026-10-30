@@ -100,6 +100,20 @@ describe("when check offers a link", () => {
     );
   });
 
+  it.each([
+    ["mysql", "mysql2"],
+    ["sqlite", "better-sqlite3"],
+    ["mongodb", "mongoose"],
+    ["prisma", "@prisma/client"],
+  ])("offers it when the %s observer found no driver in a project that depends on %s", (observer, dependency) => {
+    // Left out of `observers`, which is how it says it found none (ADR 0240).
+    const report = reportWith([route("GET /products")], { base: { observers: { pg: "on", http: "on" } } });
+    const feedback = feedbackFor(report, context({ dependencies: new Set([dependency]) }));
+    expect(feedback?.why).toBe(`the ${observer} observer found no driver, and the project depends on ${dependency}`);
+    expect(issueOf(feedback?.url ?? "").title).toBe(`check: ${observer} unavailable`);
+    expect(feedbackFor(report, context({ dependencies: new Set(["express"]) }))).toBeNull();
+  });
+
   it("offers it when an observer was unavailable in a project that depends on its driver, and not otherwise", () => {
     const unavailable = { base: { observers: { pg: "unavailable", http: "on", redis: "on", runtime: "on" } } };
     const report = reportWith([route("GET /products")], unavailable);

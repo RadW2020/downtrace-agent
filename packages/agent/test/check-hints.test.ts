@@ -4,9 +4,12 @@ import {
   adviceForUnlinkedBase,
   LOSING_RUNNERS,
   noProfile,
+  OBSERVER_PACKAGES,
   scriptOf,
   type UnlinkedBase,
+  unseenObservers,
 } from "../src/check/hints.ts";
+import { INSTRUMENTS } from "../src/config.ts";
 
 /**
  * A run that left no profile is said, with the likely cause and what to use instead (LOC-01, COB-01). The file does
@@ -224,5 +227,57 @@ describe("what is said of a base that failed with no dependencies, because prepa
     ["the working tree has no node_modules, so linking would bring nothing", { inWorkingTree: false }],
   ])("says nothing of it when %s", (_why, differs) => {
     expect(adviceForUnlinkedBase({ ...unlinked, ...differs })).toBeUndefined();
+  });
+});
+
+describe("the observers of a run that did not find a driver the project depends on", () => {
+  // ADR 0240: every observer but pg leaves its key out when no driver of it resolved, which is «did not say» to the
+  // batch. `check` reads the project's dependencies, and a database the project declares and the observer did not find
+  // is what it is there to say: what that database did is absent from the run, not zero.
+  const watching = { pg: "on", http: "on", redis: "on", runtime: "on" };
+
+  it("names one left out whose driver the project depends on, with the packages", () => {
+    expect(unseenObservers(watching, new Set(["express", "mysql2"]))).toEqual([
+      { observer: "mysql", state: "absent", packages: ["mysql2"] },
+    ]);
+    expect(unseenObservers(watching, new Set(["mongoose", "@prisma/client", "@libsql/client"]))).toEqual([
+      { observer: "sqlite", state: "absent", packages: ["@libsql/client"] },
+      { observer: "mongodb", state: "absent", packages: ["mongoose"] },
+      { observer: "prisma", state: "absent", packages: ["@prisma/client"] },
+    ]);
+  });
+
+  it("names one that said unavailable, whose driver the project depends on", () => {
+    expect(unseenObservers({ ...watching, pg: "unavailable" }, new Set(["slonik"]))).toEqual([
+      { observer: "pg", state: "unavailable", packages: ["slonik"] },
+    ]);
+  });
+
+  it("says nothing of a database the project does not depend on, unavailable or left out", () => {
+    // pg says unavailable in every application without Postgres: MongoDB's, Prisma's on SQLite.
+    expect(unseenObservers({ ...watching, pg: "unavailable" }, new Set(["express", "mongoose"]))).toEqual([
+      { observer: "mongodb", state: "absent", packages: ["mongoose"] },
+    ]);
+    expect(unseenObservers({ ...watching, pg: "unavailable" }, new Set(["express"]))).toEqual([]);
+  });
+
+  it("says nothing of an observer that found its driver, or that was not asked for", () => {
+    const dependencies = new Set(["mysql2", "mongodb"]);
+    expect(unseenObservers({ ...watching, mysql: "on", mongodb: "off" }, dependencies)).toEqual([]);
+  });
+
+  it("says only what said unavailable when the project's dependencies are not known", () => {
+    expect(unseenObservers({ ...watching, pg: "unavailable" }, undefined)).toEqual([
+      { observer: "pg", state: "unavailable", packages: [] },
+    ]);
+  });
+
+  it("says nothing of a run that said nothing of any observer", () => {
+    expect(unseenObservers({}, new Set(["mysql2", "pg"]))).toEqual([]);
+  });
+
+  it("knows a package for every observer of a dependency, and only of those", () => {
+    const ofDependencies = INSTRUMENTS.filter((name) => name !== "http" && name !== "runtime");
+    expect(Object.keys(OBSERVER_PACKAGES).sort()).toEqual([...ofDependencies].sort());
   });
 });

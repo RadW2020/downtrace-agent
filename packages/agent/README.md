@@ -1035,8 +1035,8 @@ For a person, text with the three columns, each route with its evidence. For a c
 
 **When Downtrace could not see something, the report says so and offers a link; it sends nothing.** A run that left
 no profile, a run in which no route could be evaluated, routes in which nothing was observed in a project that
-depends on a driver the instrumentation does not observe (`mongoose`, `better-sqlite3`, `mssql`…), and a Postgres or
-Redis observer that was unavailable in a project that depends on its driver: those are what tells us what Downtrace
+depends on a driver the instrumentation does not observe (`sqlite3`, `mssql`…), and an observer that found no driver in
+a project that depends on one: those are what tells us what Downtrace
 misses in projects we have not seen. The report then has a `feedback`, with `why` and a `url`: a new issue on
 [the public repository](https://github.com/RadW2020/downtrace-agent/issues), filled in with the version, Node, the
 frameworks and data packages the project depends on among names Downtrace knows, the test runner among names it
@@ -1098,7 +1098,9 @@ itself, which differs only for a `main` that is a symlink out of it or that has 
 between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
 batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
-would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found.
+would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found. `downtrace check` reads
+the `package.json` where it runs, and adds a note for each observer, `pg` included, that found no driver your project
+depends on — `mysql2` declared and `mysql` left out —, and none for a database it does not depend on.
 
 Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every

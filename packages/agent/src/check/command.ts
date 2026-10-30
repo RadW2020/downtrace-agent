@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { runInit } from "../init/command.ts";
-import { parsePackageJson } from "../init/detect.ts";
+import { type PackageJson, parsePackageJson } from "../init/detect.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
 import { type CheckConfig, type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
 import { type FeedbackContext, feedbackFor } from "./feedback.ts";
@@ -48,16 +48,20 @@ async function loadConfig(cwd: string, asked: string | undefined, env: NodeJS.Pr
   }
 }
 
-/**
- * What the feedback a report may carry is written from: the project's `package.json` where `check` runs, or nothing
- * of it when there is none to read — the link is still worth offering, with less in it.
- */
-async function feedbackContext(cwd: string, command: string, version: string): Promise<FeedbackContext> {
+/** The project's `package.json` where `check` runs, or undefined when there is none to read. */
+async function projectPackage(cwd: string): Promise<PackageJson | undefined> {
   const read = await readFile(join(cwd, "package.json"), "utf8").then(
     (text) => parsePackageJson(text, "package.json"),
     () => undefined,
   );
-  const pkg = read?.ok === true ? read.pkg : undefined;
+  return read?.ok === true ? read.pkg : undefined;
+}
+
+/**
+ * What the feedback a report may carry is written from: the project's `package.json`, or nothing of it when there is
+ * none to read — the link is still worth offering, with less in it.
+ */
+function feedbackContext(pkg: PackageJson | undefined, command: string, version: string): FeedbackContext {
   return {
     version,
     node: process.version,
@@ -113,6 +117,7 @@ export async function runCli(deps: CliDeps): Promise<number> {
     );
   }
   const timeoutSeconds = parsed.timeoutSeconds ?? configured.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+  const pkg = await projectPackage(cwd);
   const report = await runCheck({
     cwd,
     base: parsed.base,
@@ -120,6 +125,7 @@ export async function runCli(deps: CliDeps): Promise<number> {
     prepare: configured.prepare,
     link: configured.link,
     configFile: loaded.file,
+    dependencies: pkg?.dependencies,
     routes: configured.routes,
     timeoutMs: timeoutSeconds * 1000,
     env: deps.env,
@@ -128,5 +134,5 @@ export async function runCli(deps: CliDeps): Promise<number> {
     signal: deps.signal,
     progress: (line) => deps.stderr(`downtrace: ${line}\n`),
   });
-  return say({ ...report, feedback: feedbackFor(report, await feedbackContext(cwd, command, deps.version)) });
+  return say({ ...report, feedback: feedbackFor(report, feedbackContext(pkg, command, deps.version)) });
 }

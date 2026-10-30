@@ -1,6 +1,6 @@
 import { OBSERVED_PACKAGES, UNOBSERVED_PACKAGES, unobservedOf } from "../init/detect.ts";
 import type { NotEvaluatedReason } from "./compare.ts";
-import { scriptOf } from "./hints.ts";
+import { scriptOf, unseenObservers } from "./hints.ts";
 import type { CheckReport } from "./report.ts";
 
 /**
@@ -74,16 +74,6 @@ export interface FeedbackContext {
   scripts: Readonly<Record<string, string>>;
 }
 
-/** The observers whose package, when the project depends on it, means «it should have been found». */
-const OBSERVER_PACKAGES: Record<string, readonly string[]> = {
-  pg: ["pg", "@prisma/adapter-pg", "postgres"],
-  mysql: ["mysql2"],
-  sqlite: ["better-sqlite3", "@prisma/adapter-better-sqlite3", "libsql", "@libsql/client"],
-  mongodb: ["mongodb", "mongoose"],
-  prisma: ["@prisma/client"],
-  redis: ["ioredis", "redis"],
-};
-
 /** The runner's name, read from the command, or from the package script the command runs. */
 function runnerOf(context: FeedbackContext): string | undefined {
   const script = scriptOf(context.command);
@@ -114,14 +104,13 @@ function whyOf(report: CheckReport, context: FeedbackContext): { why: string; ti
     };
   }
   for (const side of [report.base, report.change]) {
-    for (const [observer, state] of Object.entries(side?.observers ?? {})) {
-      const packages = OBSERVER_PACKAGES[observer] ?? [];
-      if (state === "unavailable" && packages.some((name) => context.dependencies.has(name))) {
-        return {
-          why: `the ${observer} observer was unavailable, and the project depends on ${packages.filter((name) => context.dependencies.has(name)).join(", ")}`,
-          title: `check: ${observer} unavailable`,
-        };
-      }
+    const [unseen] = unseenObservers(side?.observers ?? {}, context.dependencies);
+    if (unseen !== undefined) {
+      const said = unseen.state === "unavailable" ? "was unavailable" : "found no driver";
+      return {
+        why: `the ${unseen.observer} observer ${said}, and the project depends on ${unseen.packages.join(", ")}`,
+        title: `check: ${unseen.observer} unavailable`,
+      };
     }
   }
   return undefined;

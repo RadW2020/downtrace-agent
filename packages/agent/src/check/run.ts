@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { parsePackageJson } from "../init/detect.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
 import { CONFIG_FILE } from "./config.ts";
-import { adviceForNoProfile, adviceForUnlinkedBase, noProfile } from "./hints.ts";
+import { adviceForNoProfile, adviceForUnlinkedBase, noProfile, unseenObservers } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
   type CheckReport,
@@ -73,6 +73,11 @@ export interface CheckOptions {
   link: boolean | undefined;
   /** The file the configuration was read from, as the person reaches it from `cwd`: where advice says to write. */
   configFile: string | undefined;
+  /**
+   * Every package the `package.json` where `check` runs depends on, or undefined when there is none to read: what says
+   * whether an observer that found no driver should have found one.
+   */
+  dependencies: ReadonlySet<string> | undefined;
   /** Routes the project declares, so that one no test calls can be named. */
   routes: readonly string[];
   timeoutMs: number;
@@ -435,7 +440,12 @@ async function cleanUp(made: Made, env: NodeJS.ProcessEnv): Promise<string[]> {
 }
 
 /** What the reader should keep in mind about this comparison, beyond the verdicts. */
-function notesOf(command: string, tallies: Map<Side, RunTally>, routes: readonly RouteResult[]): string[] {
+function notesOf(
+  command: string,
+  tallies: Map<Side, RunTally>,
+  routes: readonly RouteResult[],
+  dependencies: ReadonlySet<string> | undefined,
+): string[] {
   const notes: string[] = [];
   for (const side of ["base", "change"] as const) {
     const tally = tallies.get(side);
@@ -453,13 +463,15 @@ function notesOf(command: string, tallies: Map<Side, RunTally>, routes: readonly
         `${tally.malformed} line${tally.malformed === 1 ? "" : "s"} of the ${side} run's file could not be read and were left out.`,
       );
     }
-    for (const [driver, state] of Object.entries(tally.observers)) {
-      if (state.includes("unavailable")) {
-        notes.push(
-          `On the ${side}, the ${driver} observer was unavailable: the driver could not be resolved from the ` +
-            `application's entry, so what it would have seen is absent from the ${side} run, not zero.`,
-        );
-      }
+    for (const unseen of unseenObservers(tally.observers, dependencies)) {
+      const who =
+        unseen.packages.length > 0
+          ? `the project depends on ${unseen.packages.join(", ")} and the ${unseen.observer} observer found no driver`
+          : `the ${unseen.observer} observer was unavailable`;
+      notes.push(
+        `On the ${side}, ${who}: it could not be resolved from the application's entry, so what it would have seen is ` +
+          `absent from the ${side} run, not zero.`,
+      );
     }
   }
   if (routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")))) {
@@ -673,6 +685,6 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     base: made.sides.base,
     change: made.sides.change,
     routes,
-    notes: notesOf(options.command, tallies, routes),
+    notes: notesOf(options.command, tallies, routes, options.dependencies),
   });
 }
