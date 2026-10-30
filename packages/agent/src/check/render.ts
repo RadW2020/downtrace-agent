@@ -38,7 +38,10 @@ function operationLine(operation: OperationResult): string {
   const name = operation.label ?? "(no text travelled)";
   const identity = operation.hash === null ? operation.id : `${operation.kind} ${operation.hash}`;
   const counts = `${fmt(operation.perRequest.base)} -> ${fmt(operation.perRequest.change)} per request`;
-  return `    ${MOVED[operation.change].padEnd(10)} ${name}  [${identity}]  ${counts}`;
+  // The only operations that are not judged are settings of the session: said, so that one that appeared beside an
+  // unchanged verdict carries its reason.
+  const unjudged = operation.judged ? "" : "  (a setting of the session: shown and not judged)";
+  return `    ${MOVED[operation.change].padEnd(10)} ${name}  [${identity}]  ${counts}${unjudged}`;
 }
 
 function dependencyPart(dependency: DependencyResult): string {

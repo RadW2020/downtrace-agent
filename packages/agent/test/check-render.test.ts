@@ -128,6 +128,56 @@ describe("the report as text", () => {
   });
 });
 
+describe("a setting of the session that moved", () => {
+  // Sequelize's connection setup, run inside the one request that made the pool open a connection (outline/outline).
+  const setup = operation(
+    "query",
+    "4b12b7a5241b79e7",
+    "SET client_min_messages TO warning;SET TIME ZONE INTERVAL ? HOUR TO MINUTE;",
+    1,
+  );
+  const run = (operations: ReturnType<typeof operation>[]) =>
+    readRun(
+      fileOf(
+        batch("p", {
+          intervals: [interval(1000, 1000, [endpoint("POST", "/stars.list", 2, { requestsWithCalls: 2 })])],
+          profile: profile(1000, 1000, [profileEndpoint("POST", "/stars.list", operations)]),
+        }),
+      ),
+    );
+  const q = operation("query", "a", "SELECT id FROM stars WHERE user_id = ?", 2);
+  const report = compared({
+    base: side("main"),
+    change: side("working tree"),
+    routes: compareRuns(run([q]), run([q, setup])),
+    notes: [],
+  });
+
+  it("is listed under Unchanged with how it moved and why that decided nothing", () => {
+    const text = renderText(report);
+    expect(text).toContain("1 of 1 routes evaluated: 0 worse, 1 unchanged.");
+    const [, unchanged] = text.split("Unchanged (1)");
+    expect(unchanged).toMatch(
+      /appeared\s+SET client_min_messages TO warning;SET TIME ZONE INTERVAL \? HOUR TO MINUTE;\s+\[query 4b12b7a5241b79e7\]\s+0 -> 0\.5 per request {2}\(a setting of the session: shown and not judged\)/,
+    );
+    expect(exitCodeOf(report)).toBe(0);
+  });
+
+  it("says so to a coding agent too: moved, not worse, not judged", () => {
+    const json = JSON.parse(renderJson(report)) as CheckReport;
+    expect(json.routes[0]?.verdict).toBe("unchanged");
+    expect(json.routes[0]?.operations.find((operation) => operation.hash === "4b12b7a5241b79e7")).toMatchObject({
+      change: "appeared",
+      worse: false,
+      judged: false,
+    });
+  });
+
+  it("marks only what was not judged", () => {
+    expect(renderText(reportOf())).not.toContain("shown and not judged)");
+  });
+});
+
 describe("the report as JSON", () => {
   const json = JSON.parse(renderJson(reportOf())) as ReturnType<typeof reportOf>;
 

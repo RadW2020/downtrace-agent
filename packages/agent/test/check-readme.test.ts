@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import { USAGE } from "../src/check/args.ts";
-import { BUCKET_ROUTES, MIN_RISE_PER_REQUEST, MIN_RISE_RATIO, NOT_EVALUATED_REASONS } from "../src/check/compare.ts";
+import {
+  BEYOND_SESSION,
+  BUCKET_ROUTES,
+  MIN_RISE_PER_REQUEST,
+  MIN_RISE_RATIO,
+  NOT_EVALUATED_REASONS,
+  NOT_SESSION_LEADS,
+} from "../src/check/compare.ts";
 import { CONFIG_FILE, CONFIG_KEYS } from "../src/check/config.ts";
 import { LOSING_RUNNERS } from "../src/check/hints.ts";
 import { FAILURE_CODES, REPORT_SCHEMA } from "../src/check/report.ts";
@@ -51,6 +58,14 @@ describe("the README on downtrace check", () => {
   it("names the configuration file and the schema of the JSON", () => {
     expect(says(CONFIG_FILE)).toBe(true);
     expect(says(`schema: "${REPORT_SCHEMA}"`)).toBe(true);
+  });
+
+  it.each(NOT_SESSION_LEADS)("says SET %s is judged, not taken for a setting of the session", (word) => {
+    expect(says(`SET ${word}`), word).toBe(true);
+  });
+
+  it.each(BEYOND_SESSION)("says a SET with the scope %s is judged", (word) => {
+    expect(says(word), word).toBe(true);
   });
 
   it("states the thresholds the code has", () => {

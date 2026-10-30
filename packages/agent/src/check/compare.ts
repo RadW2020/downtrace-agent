@@ -1,3 +1,4 @@
+import { MAX_TEXT } from "../fingerprint.ts";
 import {
   COMPOSITION_KINDS,
   type CompositionKind,
@@ -14,6 +15,11 @@ import {
  * on is not quiet, so durations travel as data beside the verdict and no branch below looks at them. And what it
  * never does is turn *«there is nothing to compare»* into *«nothing changed»*: a route a run did not call, did
  * not profile, or ran with nothing observed on it is not evaluated, and says why (COB-01).
+ *
+ * A route is worse when an operation appeared or multiplied, with one exception: a query that only sets something
+ * for the session (`isSessionSetting`) is listed with how it moved and never judged. A pool sends those when it
+ * opens a connection, inside whichever request made it open one, so which request runs them is decided by when the
+ * pool grew and not by the code: the same tree ran twice called a route worse once and unchanged the next time.
  */
 
 /**
@@ -60,8 +66,62 @@ export interface NotEvaluated {
   message: string;
 }
 
-/** How one operation moved. `appeared` and `multiplied` are the two that make a route worse. */
+/**
+ * How one operation moved. `appeared` and `multiplied` are the two that make a route worse, when the operation is
+ * judged at all.
+ */
 export type OperationChange = "appeared" | "multiplied" | "unchanged" | "reduced" | "disappeared";
+
+/**
+ * The words that, right after `SET`, make a statement about something other than the session. Postgres's
+ * `SET LOCAL`, `SET TRANSACTION` and `SET CONSTRAINTS` last until the end of the transaction, and MySQL's
+ * `SET TRANSACTION` with no scope is for the next one: transactions the code opens, so they move with the code and
+ * not with the pool, and are judged like any query. MySQL's `SET PASSWORD`, `SET DEFAULT ROLE` and
+ * `SET RESOURCE GROUP` change an account or a thread, and no pool sends them on connecting. (MySQL reads `SET LOCAL`
+ * as `SET SESSION`; with no driver beside the text, Postgres's reading is taken, the one that leaves the statement
+ * judged.)
+ */
+export const NOT_SESSION_LEADS = ["LOCAL", "TRANSACTION", "CONSTRAINTS", "PASSWORD", "DEFAULT", "RESOURCE"] as const;
+/**
+ * MySQL's scopes past the session, wherever they are in the statement: one `SET` can assign several variables, each
+ * with its own scope (`SET time_zone = ?, GLOBAL max_connections = ?`), and `@@global.` is the same word.
+ */
+export const BEYOND_SESSION = ["GLOBAL", "PERSIST", "PERSIST_ONLY"] as const;
+
+const SET = /^SET\s/i;
+const NOT_SESSION_LEAD = new RegExp(`^SET\\s+(?:${NOT_SESSION_LEADS.join("|")})\\b`, "i");
+const BEYOND_SESSION_WORD = new RegExp(`\\b(?:${BEYOND_SESSION.join("|")})\\b`, "i");
+/** `@rank`, and not `@@session.time_zone`: a user variable is the code's own data, set for its next statement. */
+const USER_VARIABLE = /(?<!@)@(?!@)/;
+
+function isSessionStatement(statement: string): boolean {
+  return (
+    SET.test(statement) &&
+    !NOT_SESSION_LEAD.test(statement) &&
+    !BEYOND_SESSION_WORD.test(statement) &&
+    !USER_VARIABLE.test(statement)
+  );
+}
+
+/**
+ * Whether an operation only sets something for the rest of the session: every statement of its text is a `SET` of
+ * the session, as the fingerprinter wrote it — `SET client_min_messages TO warning;SET TIME ZONE INTERVAL ? HOUR TO
+ * MINUTE;`, which is what Sequelize sends on Postgres when its pool opens a connection, `SET search_path TO public`,
+ * `SET SESSION …`, `SET NAMES utf8mb4`, `SET @@session.time_zone = ?`, `SET autocommit = ?`.
+ *
+ * What it is not, and so stays judged: a `SET` of a transaction or past the session (above), a user variable, a
+ * text that does anything besides setting, a Redis `SET` (a command, and a write), a query whose text did not travel
+ * or that the fingerprinter cut, since what was cut off is unknown. A query is a SQL database's or MongoDB's, and no
+ * MongoDB label starts with `SET`: they are a command and a collection (`find users`).
+ */
+export function isSessionSetting(kind: CompositionKind, label: string | undefined): boolean {
+  if (kind !== "query" || label === undefined || label.length >= MAX_TEXT) return false;
+  const statements = label
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter((statement) => statement !== "");
+  return statements.length > 0 && statements.every(isSessionStatement);
+}
 
 export interface Pair<T> {
   base: T;
@@ -78,6 +138,11 @@ export interface OperationResult {
   label: string | null;
   change: OperationChange;
   worse: boolean;
+  /**
+   * False for a setting of the session (`isSessionSetting`): how it moved is said, and is never worse, because the
+   * pool decides which request runs it.
+   */
+  judged: boolean;
   /** Executions per request, over the requests whose composition is known. */
   perRequest: Pair<number>;
   executions: Pair<number>;
@@ -208,13 +273,15 @@ export function evaluateRoute(id: string, base: RouteTally | undefined, change: 
     const perBase = perRequest(was, base.profiledRequests);
     const perChange = perRequest(is, change.profiledRequests);
     const moved = classify(perBase, perChange);
+    const judged = !isSessionSetting(known.kind, known.label);
     operations.push({
       id: known.id,
       kind: known.kind,
       hash: known.hash ?? null,
       label: known.label ?? null,
       change: moved,
-      worse: moved === "appeared" || moved === "multiplied",
+      worse: judged && (moved === "appeared" || moved === "multiplied"),
+      judged,
       perRequest: { base: perBase, change: perChange },
       executions: { base: was?.executions ?? 0, change: is?.executions ?? 0 },
       msPerExecution: { base: msPerExecution(was), change: msPerExecution(is) },

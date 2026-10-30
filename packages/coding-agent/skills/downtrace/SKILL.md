@@ -25,7 +25,7 @@ The exit status of `check`: 0 no route got worse, 1 at least one did, 2 no compa
 
 ### Rules
 
-1. **Before you say a task is done** that changed code a route runs — a handler, a query, a call it makes, a middleware — run `check` and report its verdict in your answer: how many routes got worse, stayed unchanged and were not evaluated (`summary`); each route that got worse, with the operation that appeared or multiplied and how many times a request ran it before and after; and **each route that was not evaluated, with its `reasons`**. A route that was not evaluated is never reported as unchanged.
+1. **Before you say a task is done** that changed code a route runs — a handler, a query, a call it makes, a middleware — run `check` and report its verdict in your answer: how many routes got worse, stayed unchanged and were not evaluated (`summary`); each route that got worse, with the operation that made it worse (`worse: true`: it appeared or multiplied) and how many times a request ran it before and after; and **each route that was not evaluated, with its `reasons`**. A route that was not evaluated is never reported as unchanged.
 2. If `downtrace.json` does not exist, run `init` first. When its `missing` is not empty, follow each `advice` or tell the person what it says; when it gives a `next`, that is the command to run next.
 3. When `status` is `failed`, no comparison was made: say so, with `failure.code`, `failure.message` and `failure.advice`. It is not a pass, and neither is a run where no route could be evaluated.
 4. `check` judges composition, never time: the durations it shows are data and decide no verdict. It says nothing about what only production traffic produces — a dependency that degrades, a pool that saturates, a change of load.

@@ -23,8 +23,11 @@ import { meaningful, sanitizeName } from "./sanitize.ts";
  * only make a real table name harder to read.
  */
 
-/** Longer than this and the label is truncated. Values are already gone by then, so a cut cannot expose one. */
-const MAX_TEXT = 1024;
+/**
+ * Longer than this and the label is truncated. Values are already gone by then, so a cut cannot expose one. What
+ * was cut off is unknown, which is what `check` needs to know before it reads a label as all of a query.
+ */
+export const MAX_TEXT = 1024;
 
 /**
  * The SQL a query is written in. A quote opens a name in one and a value in the other, a comment opens with a

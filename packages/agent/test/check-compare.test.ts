@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  BEYOND_SESSION,
   BUCKET_ROUTES,
   compareRuns,
+  isSessionSetting,
   MIN_RISE_PER_REQUEST,
   MIN_RISE_RATIO,
   NOT_EVALUATED_REASONS,
+  NOT_SESSION_LEADS,
   type NotEvaluatedReason,
   type RouteResult,
   summarize,
 } from "../src/check/compare.ts";
 import { type RunTally, readRun } from "../src/check/read.ts";
+import { type Dialect, fingerprintOf, MAX_TEXT } from "../src/fingerprint.ts";
 import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint } from "./support/check-batches.ts";
 
 /**
@@ -356,5 +360,236 @@ describe("the verdicts together", () => {
       if (route.reasons.length > 0) expect(route.verdict, route.id).toBe("not-evaluated");
       if (route.verdict === "unchanged") expect(route.reasons).toEqual([]);
     }
+  });
+});
+
+describe("a setting of the session: shown, never judged", () => {
+  /** A query as the instrumentation writes it: the fingerprint of what the driver sent, read in its dialect. */
+  const SQL = (sql: string, count: number, dialect: Dialect = "postgres") => {
+    const { text, hash } = fingerprintOf(sql, dialect);
+    return operation("query", hash, text, count);
+  };
+  const labelOf = (sql: string, dialect: Dialect = "postgres"): string => fingerprintOf(sql, dialect).text;
+
+  // What Sequelize 6 sends on Postgres when its pool opens a connection, inside whichever request made it open one:
+  // outline/outline's `POST /stars.list` was worse in one run of an unchanged tree and unchanged in the next.
+  const SEQUELIZE_SETUP = "SET client_min_messages TO warning;SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE;";
+
+  it("does not make a route worse when a pool opened a connection in one of its requests (0 -> 1 execution)", () => {
+    const base = runOf({ method: "POST", route: "/stars.list", requests: 2, operations: [Q("a", 2)] });
+    const change = runOf({
+      method: "POST",
+      route: "/stars.list",
+      requests: 2,
+      operations: [Q("a", 2), SQL(SEQUELIZE_SETUP, 1)],
+    });
+    const route = only(base, change, "POST /stars.list");
+    expect(route.verdict).toBe("unchanged");
+    // Listed with how it moved, which is what happened, and with why it decided nothing.
+    const setting = route.operations.find((operation) => operation.label?.startsWith("SET ") === true);
+    expect(setting).toMatchObject({
+      label: "SET client_min_messages TO warning;SET TIME ZONE INTERVAL ? HOUR TO MINUTE;",
+      change: "appeared",
+      worse: false,
+      judged: false,
+      perRequest: { base: 0, change: 0.5 },
+      executions: { base: 0, change: 1 },
+    });
+    expect(route.dependencies).toEqual([{ kind: "query", perRequest: { base: 1, change: 1.5 }, worse: false }]);
+    expect(summarize([route])).toEqual({ worse: 0, unchanged: 1, notEvaluated: 0 });
+  });
+
+  it("does not make a route worse when it multiplies either: more connections opened is the pool's doing", () => {
+    const base = runOf({ route: "/p", requests: 10, operations: [Q("a", 10), SQL(SEQUELIZE_SETUP, 1)] });
+    const change = runOf({ route: "/p", requests: 10, operations: [Q("a", 10), SQL(SEQUELIZE_SETUP, 30)] });
+    const route = only(base, change, "GET /p");
+    expect(route.verdict).toBe("unchanged");
+    expect(route.operations.find((operation) => !operation.judged)).toMatchObject({
+      change: "multiplied",
+      worse: false,
+      perRequest: { base: 0.1, change: 3 },
+    });
+  });
+
+  it("leaves a route whose only movement is a setting of the session unchanged, and still lists it", () => {
+    const route = only(
+      runOf({ route: "/health", requests: 4 }),
+      runOf({ route: "/health", requests: 4, operations: [SQL("SET search_path TO public", 1)] }),
+      "GET /health",
+    );
+    expect(route.verdict).toBe("unchanged");
+    expect(route.reasons).toEqual([]);
+    expect(route.operations).toHaveLength(1);
+    expect(route.operations[0]).toMatchObject({ label: "SET search_path TO public", change: "appeared", worse: false });
+  });
+
+  it("judges none of its movements, and says how each one moved", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: [Q("a", 2), SQL("SET NAMES utf8mb4", 2, "mysql")] });
+    const gone = runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] });
+    for (const [change, moved] of [
+      [base, "unchanged"],
+      [gone, "disappeared"],
+    ] as const) {
+      const setting = only(base, change, "GET /p").operations.find(
+        (operation) => operation.label === "SET NAMES utf8mb4",
+      );
+      expect(setting, moved).toMatchObject({ change: moved, worse: false, judged: false });
+    }
+  });
+
+  it("is judged as before when it is not one: every other operation is judged", () => {
+    const route = only(
+      runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] }),
+      runOf({ route: "/p", requests: 2, operations: [Q("a", 2), Q("n", 2), CALL("api", 2), CMD(2)] }),
+      "GET /p",
+    );
+    expect(route.operations.every((operation) => operation.judged)).toBe(true);
+  });
+
+  // What the fingerprinter makes of each form, and not the form as written: that is what the comparison reads.
+  it.each([
+    ["postgres", SEQUELIZE_SETUP],
+    ["postgres", "SET client_min_messages TO warning; SET TIME ZONE INTERVAL '+00:00' HOUR TO MINUTE"],
+    ["postgres", "SET search_path TO tenant_7, public"],
+    ["postgres", "set statement_timeout = 5000"],
+    ["postgres", "SET SESSION statement_timeout = 5000"],
+    ["postgres", "SET TIME ZONE 'UTC'"],
+    ["postgres", "SET TIME ZONE LOCAL"],
+    ["postgres", "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED"],
+    ["postgres", "SET ROLE app_user"],
+    ["postgres", "SET SESSION AUTHORIZATION DEFAULT"],
+    ["postgres", "SET app.tenant_id = '42'"],
+    ["postgres", "/* pool */ SET application_name = 'api'"],
+    ["mysql", "SET NAMES utf8mb4"],
+    ["mysql", "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'"],
+    ["mysql", "SET CHARACTER SET utf8mb4"],
+    ["mysql", "SET SESSION sql_mode = 'STRICT_TRANS_TABLES'"],
+    ["mysql", "SET @@session.time_zone = '+00:00'"],
+    ["mysql", "SET @@time_zone = '+00:00'"],
+    ["mysql", "SET time_zone = '+00:00'"],
+    ["mysql", "SET autocommit = 1"],
+    ["mysql", "SET autocommit=0"],
+    ["mysql", "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"],
+    ["mysql", "SET time_zone = '+00:00', sql_mode = 'ANSI'"],
+  ] as const)("in %s, %s is a setting of the session", (dialect, sql) => {
+    expect(isSessionSetting("query", labelOf(sql, dialect))).toBe(true);
+  });
+
+  /** What follows `SET` when the statement is not about the session: one for every word the source names. */
+  const LEADS: Record<(typeof NOT_SESSION_LEADS)[number], [Dialect, string]> = {
+    LOCAL: ["postgres", "SET LOCAL statement_timeout = 5000"],
+    TRANSACTION: ["postgres", "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"],
+    CONSTRAINTS: ["postgres", "SET CONSTRAINTS ALL DEFERRED"],
+    PASSWORD: ["mysql", "SET PASSWORD = 'secret'"],
+    DEFAULT: ["mysql", "SET DEFAULT ROLE ALL TO app"],
+    RESOURCE: ["mysql", "SET RESOURCE GROUP batch"],
+  };
+  /** A scope past the session, anywhere in the statement: one for every word the source names, in both spellings. */
+  const BEYOND: Record<(typeof BEYOND_SESSION)[number], string[]> = {
+    GLOBAL: [
+      "SET GLOBAL max_connections = 500",
+      "SET @@global.max_connections = 500",
+      "SET GLOBAL TRANSACTION ISOLATION LEVEL READ COMMITTED",
+      "SET time_zone = '+00:00', GLOBAL max_connections = 500",
+    ],
+    PERSIST: ["SET PERSIST max_connections = 500", "SET @@persist.max_connections = 500"],
+    PERSIST_ONLY: ["SET PERSIST_ONLY back_log = 100", "SET @@persist_only.back_log = 100"],
+  };
+
+  it("has a statement for every word the source says is not about the session", () => {
+    expect(Object.keys(LEADS).sort()).toEqual([...NOT_SESSION_LEADS].sort());
+    expect(Object.keys(BEYOND).sort()).toEqual([...BEYOND_SESSION].sort());
+  });
+
+  it.each(NOT_SESSION_LEADS)("SET %s … is not a setting of the session", (word) => {
+    const [dialect, sql] = LEADS[word];
+    expect(isSessionSetting("query", labelOf(sql, dialect))).toBe(false);
+  });
+
+  it.each(BEYOND_SESSION)("a statement with the scope %s is not a setting of the session", (word) => {
+    for (const sql of BEYOND[word]) expect(isSessionSetting("query", labelOf(sql, "mysql")), sql).toBe(false);
+  });
+
+  it.each([
+    ["a user variable, which is the code's own data", "mysql", "SET @rank = 0"],
+    ["a user variable beside a setting", "mysql", "SET time_zone = '+00:00', @rank = 0"],
+    ["a setting and a query in one text", "postgres", "SET search_path TO public; SELECT id FROM users WHERE id = 1"],
+    ["a query and then a setting", "mysql", "SELECT 1; SET NAMES utf8mb4"],
+    ["a query that only names a setting", "postgres", "SELECT set_config('app.tenant_id', '42', false)"],
+    ["a reset", "postgres", "RESET ALL"],
+    ["a show", "postgres", "SHOW search_path"],
+  ] as const)("%s is not a setting of the session", (_what, dialect, sql) => {
+    expect(isSessionSetting("query", labelOf(sql, dialect))).toBe(false);
+  });
+
+  it("is only ever a query: a Redis SET is a write, and an outgoing call is a call", () => {
+    expect(isSessionSetting("command", "SET cache:6379")).toBe(false);
+    expect(isSessionSetting("command", "SET localhost (any port)")).toBe(false);
+    expect(isSessionSetting("call", "SET api.test")).toBe(false);
+  });
+
+  it("is not said of a query whose text did not travel, nor of one the fingerprinter cut", () => {
+    expect(isSessionSetting("query", undefined)).toBe(false);
+    expect(isSessionSetting("query", "")).toBe(false);
+    // What was cut off could be anything: a SELECT after the settings is still work the route does.
+    const cut = labelOf(`${"SET search_path TO public; ".repeat(60)}SELECT id FROM users`);
+    expect(cut.length).toBe(MAX_TEXT);
+    expect(isSessionSetting("query", cut)).toBe(false);
+  });
+
+  it("SET LOCAL still makes a route worse when it appears: it is the code's, for its transaction", () => {
+    const route = only(
+      runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] }),
+      runOf({ route: "/p", requests: 2, operations: [Q("a", 2), SQL("SET LOCAL statement_timeout = 5000", 2)] }),
+      "GET /p",
+    );
+    expect(route.verdict).toBe("worse");
+    expect(route.operations[0]).toMatchObject({
+      label: "SET LOCAL statement_timeout = ?",
+      change: "appeared",
+      worse: true,
+      judged: true,
+    });
+  });
+
+  it("SET TRANSACTION still makes a route worse when it multiplies: it follows the transactions the code opens", () => {
+    const set = (count: number) => SQL("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE", count);
+    const route = only(
+      runOf({ route: "/p", requests: 2, operations: [set(2)] }),
+      runOf({ route: "/p", requests: 2, operations: [set(8)] }),
+      "GET /p",
+    );
+    expect(route.verdict).toBe("worse");
+    expect(route.operations[0]).toMatchObject({ change: "multiplied", worse: true, judged: true });
+  });
+
+  it("a Redis SET still makes a route worse when it appears: it writes data", () => {
+    for (const text of ["SET cache:6379", "SET 127.0.0.1:6379"]) {
+      const route = only(
+        runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] }),
+        runOf({ route: "/p", requests: 2, operations: [Q("a", 2), operation("command", "r-set", text, 2)] }),
+        "GET /p",
+      );
+      expect(route.verdict, text).toBe("worse");
+      expect(route.operations[0], text).toMatchObject({ kind: "command", change: "appeared", worse: true });
+    }
+  });
+
+  it("a text that sets the session and also does something else still makes a route worse", () => {
+    const route = only(
+      runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] }),
+      runOf({
+        route: "/p",
+        requests: 2,
+        operations: [Q("a", 2), SQL("SET search_path TO public; SELECT id FROM users WHERE id = 1", 2)],
+      }),
+      "GET /p",
+    );
+    expect(route.verdict).toBe("worse");
+    expect(route.operations[0]).toMatchObject({
+      label: "SET search_path TO public; SELECT id FROM users WHERE id = ?",
+      change: "appeared",
+      worse: true,
+    });
   });
 });
