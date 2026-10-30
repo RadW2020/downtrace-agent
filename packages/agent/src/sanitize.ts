@@ -52,6 +52,15 @@ const AUTHORITY = String.raw`(?::\/\/|(?<![a-z\d+.-])(?:https?|wss?|ftp|file):(?
  */
 const HOST = String.raw`[^\s/\\?#@:]*(?::\d*)?`;
 
+/** How long a run of letters, digits, `_` and `-` is before it is a token rather than a word. */
+const LONG = 16;
+
+/**
+ * Any long run of letters, digits, `_` and `-`: tokens, hashes, ids, and a handle written with an accent. Named on its
+ * own because a name reads it differently from a sentence (`sanitizeName`).
+ */
+const LONG_RUN = new RegExp(`${EDGE}[${ALNUM}_-]{${LONG},}${EDGE}`, "gu");
+
 /**
  * Anything that looks like a value. Order matters four times. A URL runs first, because the email rule would take
  * the password and the host of `postgres://payroll:hunter@db.internal` and leave the user. A path runs next to it,
@@ -116,8 +125,8 @@ export const VALUE_PATTERNS: readonly RegExp[] = [
   // for that, because taking it out would change the identity of every error and name that carries one
   // (ADR 0167). A UUID is hex by definition, so its class stays ASCII.
   /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
-  // Any long run of letters, digits, `_` and `-`: tokens, hashes, ids, and a handle written with an accent.
-  new RegExp(`${EDGE}[${ALNUM}_-]{16,}${EDGE}`, "gu"),
+  // Any long run of letters, digits, `_` and `-`, above.
+  LONG_RUN,
   // Anything with a digit in it, of any script. A word that carries a number is a value or a version, and neither
   // belongs in an identity.
   new RegExp(String.raw`${EDGE}${WORD}*\p{N}[${ALNUM}_.]*${EDGE}`, "gu"),
@@ -196,19 +205,22 @@ const collapse = (out: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** Whether what `rule` matched is not a value after all, and stays. Only a name has one (`sanitizeName`). */
+type Spare = (rule: RegExp, match: string) => boolean;
+
 /**
- * Replaces whatever each of `rules` matches, in order, then collapses what is left.
+ * Replaces whatever each of `rules` matches, in order, unless `spare` keeps it, then collapses what is left.
  *
- * The one loop both functions below run. Exported so that a test can run it with one rule taken out and see what
+ * The one loop the functions below run. Exported so that a test can run it with one rule taken out and see what
  * that rule decides, rather than run a copy of it that could drift from this one.
  */
-export function sanitizeWith(text: string, rules: readonly RegExp[]): string {
+export function sanitizeWith(text: string, rules: readonly RegExp[], spare?: Spare): string {
   let out = text;
-  for (const rule of rules) out = out.replace(rule, "?");
+  for (const rule of rules) out = out.replace(rule, (match) => (spare?.(rule, match) ? match : "?"));
   return collapse(out);
 }
 
-/** Replaces everything that is a value wherever it appears. For text that is a name and not a sentence. */
+/** Replaces everything that is a value wherever it appears. For text that is not a sentence: the key of a context. */
 export function sanitizeValues(text: string): string {
   return sanitizeWith(text, VALUE_PATTERNS);
 }
@@ -216,6 +228,54 @@ export function sanitizeValues(text: string): string {
 /** The same, plus what is only a value in prose: whatever the sentence put between quotes. */
 export function sanitizeMessage(message: string): string {
   return sanitizeWith(message, MESSAGE_RULES);
+}
+
+/**
+ * A word of a name, where its case breaks it: a run of capitals that no lowercase letter follows (an acronym, or a
+ * word of a name written in capitals), or a capital, or none, and the lowercase letters after it. A mark goes with
+ * the letter it marks. A letter of a script with no case is in no word, and only makes the words around it longer:
+ * where nothing changes case, nothing breaks a name into words.
+ */
+const NAME_WORD = /\p{Lu}+(?![\p{Ll}\p{M}])|\p{Lu}?[\p{Ll}\p{M}]+/gu;
+/** How many letters the words of a name have, on average, at the least. */
+const NAME_WORD_LENGTH = 3;
+/** A digit of any script, read the way `ALNUM` reads one. */
+const NAME_DIGIT = /\p{N}/u;
+
+/**
+ * Whether a long run in a name is the words of a name and not a token.
+ *
+ * Not when it has a digit: that is how almost every generated value is spelled — a UUID, a hash, an id in hex, a
+ * number, a token in base 62 or 64 — and the whole run goes, the words glued to it included, as it does in a message.
+ * Nor when a part of it between `_` and `-` breaks, where its case changes, into words of fewer than three letters on
+ * average. A name's words are words: `dateOfLastAccess` is four words of four letters on average and
+ * `lastHTTPResponseCode` four of five, which is how Prisma, Kysely, Sequelize and TypeORM write names. A token's case
+ * is drawn letter by letter, so it changes every two letters or so: `kQzXwPfLmNbVtRsY` is nine words of fewer than two.
+ * Nor when a part of it that its case does not break is itself a long run: nothing tells sixteen letters in one case,
+ * `kqzxwpflmnbvtrsy` or `mariagarciaperez`, from a token, and a word that long is rare enough in a name to go with them.
+ * The words of `maintainer_approval_required` are each in one case too, and short, and they stay.
+ * Measured on the twenty-one thousand names of sixteen letters or more and no digit in the type declarations this
+ * repository installs, it takes one in fifty, each a run its case does not break — `WSAEPROTONOSUPPORT`,
+ * `lexicographically` — and three in four of the tokens with no digit whose case does break them.
+ */
+function readsAsWords(run: string): boolean {
+  if (NAME_DIGIT.test(run)) return false;
+  return run.split(/[_-]+/).every((part) => {
+    const words = part.match(NAME_WORD) ?? [];
+    const letters = Array.from(part).length;
+    return words.length < 2 ? letters < LONG : letters >= NAME_WORD_LENGTH * words.length;
+  });
+}
+
+/**
+ * Replaces everything that is a value in a name: a quoted SQL identifier.
+ *
+ * The patterns of `sanitizeValues`, in the same order, but for one thing: a long run that reads as words is a long
+ * name and stays. In a sentence a run of sixteen is a token; in a name it is an ordinary column, and an ORM quotes
+ * every name it writes, so Kysely's `"dateOfLastAccess"` went as `?` while the same name unquoted stayed.
+ */
+export function sanitizeName(name: string): string {
+  return sanitizeWith(name, VALUE_PATTERNS, (rule, run) => rule === LONG_RUN && readsAsWords(run));
 }
 
 /**

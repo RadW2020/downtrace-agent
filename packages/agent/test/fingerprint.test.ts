@@ -97,6 +97,94 @@ describe("normalizeQuery", () => {
   });
 });
 
+// An ORM quotes every name it writes — Kysely, Sequelize, TypeORM and Prisma all do — and a column of sixteen
+// characters or more is an ordinary column. The sanitiser's long run, which takes a token out of a message, took
+// those names too: Kysely's `update "users" set "dateOfLastAccess" = $1` travelled as `update "users" set ? = ?`,
+// unreadable, and with the hash of every other update of one long column of `users`, because the hash is a digest
+// of the label. The same name unquoted was kept all along.
+describe("a quoted name of sixteen characters or more", () => {
+  it("is kept, as the same name unquoted is", () => {
+    expect(normalizeQuery(`update "users" set "dateOfLastAccess" = $1 where "id" = $2`)).toBe(
+      `update "users" set "dateOfLastAccess" = ? where "id" = ?`,
+    );
+    expect(normalizeQuery("update users set dateOfLastAccess = $1 where id = $2")).toBe(
+      "update users set dateOfLastAccess = ? where id = ?",
+    );
+    expect(
+      normalizeQuery(
+        `insert into "users" ("id", "roles", "dateOfLastAccess", "notificationSettings") values ($1, $2, $3, $4)`,
+      ),
+    ).toBe(`insert into "users" ("id", "roles", "dateOfLastAccess", "notificationSettings") values (?)`);
+    // Sequelize, as Outline's queries read: a long column, a long alias, a long table.
+    const sequelize =
+      `SELECT "document"."lastModifiedById", "groupMemberships"."id" FROM "collection_group_memberships" AS` +
+      ` "groupMemberships" INNER JOIN "documents" AS "document" ON "document"."collectionId" =` +
+      ` "groupMemberships"."collectionId" WHERE "document"."id" = $1`;
+    expect(normalizeQuery(sequelize)).toBe(sequelize.replace("$1", "?"));
+  });
+
+  it.each([
+    ["camelCase", "dateOfLastAccess"],
+    ["PascalCase", "OrderItemsArchive"],
+    ["snake_case", "maintainer_approval_required"],
+    ["snake_case with words of two letters", "email_verified_at"],
+    ["camelCase with words of two letters", "isUpToDateWithMain"],
+    ["UPPER_SNAKE_CASE", "ORDER_ITEMS_ARCHIVE"],
+    ["kebab-case", "order-items-archive"],
+    ["camelCase with an acronym", "lastHTTPResponseCode"],
+    ["dotted parts", "collectionGroupMemberships.permission"],
+    ["words and spaces", "notificationSettings of customers"],
+    ["letters outside ASCII", "fechaDeÚltimoAcceso"],
+  ])("is kept, %s: %s", (_convention, name) => {
+    expect(normalizeQuery(`SELECT "${name}" FROM t WHERE id = 1`)).toBe(`SELECT "${name}" FROM t WHERE id = ?`);
+  });
+
+  it("gives two queries that differ only in one long quoted column two identities", () => {
+    const last = fingerprintOf(`update "users" set "dateOfLastAccess" = $1 where "id" = $2`);
+    const first = fingerprintOf(`update "users" set "dateOfFirstAccess" = $1 where "id" = $2`);
+    expect(last.text).not.toBe(first.text);
+    expect(last.hash).not.toBe(first.hash);
+  });
+
+  it.each([
+    ["hex after a word", "tenant_8f3a9c2e1b7d4f60"],
+    ["a UUID", "9f1c2d3e-5a7b-4c6d-8e0f-1a2b3c4d5e6f"],
+    ["an object id", "0b6f3c1e9a2d4f7b8c5e1a3d"],
+    ["digits", "tenant_20240917_000123"],
+    ["a name glued to a number", "dateOfLastAccess_4821"],
+    ["a generated token with no digit", "kQzXwPfLmNbVtRsYhJ"],
+    ["a generated token with no digit, after a word", "tenant_kQzXwPfLmNbVtRsY"],
+    ["a generated token with capitals in a row", "tenant_kQZxWPfLmNbVTRsY"],
+    ["a generated token whose case changes every two or three letters", "tenant_QzwXpLmnBvTrSyk"],
+    ["a short generated token after long words", "customer_subscription_kQzXwPfL"],
+    ["a base64url token with no digit", "x-Wq_LzPvKt-NmRbJ"],
+    // The digit takes the whole run, as it did: the parts of it between hyphens are not words for it to leave.
+    ["a token in one case with a digit in it", "kqzxwpfl-4821-mnbvtrsy"],
+    // Nothing breaks a run of sixteen letters in one case into words, so nothing tells it from a token.
+    ["a token in one case with no digit", "kqzxwpflmnbvtrsy"],
+    ["a token in one case with no digit, after a word", "tenant_kqzxwpflmnbvtrsy"],
+    ["words glued in one case", "mariagarciaperez"],
+    ["one word of sixteen letters, in any script", "Geschäftsführung"],
+  ])("still goes as a value when it is %s: %s", (_shape, name) => {
+    expect(normalizeQuery(`SELECT * FROM "${name}" WHERE id = 1`)).toBe("SELECT * FROM ? WHERE id = ?");
+    leaks(`SELECT * FROM "${name}" WHERE id = 1`, name);
+  });
+
+  it("keeps the words of a name and takes the value beside them", () => {
+    expect(normalizeQuery(`SELECT * FROM "notificationSettings of tenant_8f3a9c2e1b7d4f60"`)).toBe(
+      `SELECT * FROM "notificationSettings of ?"`,
+    );
+  });
+
+  it("reads words joined by `_` or `-`, or by their case, as a name, whatever wrote it", () => {
+    // The cost, pinned: a name is told from a token by its digits and by the words it breaks into, and a name built
+    // from data out of words has the shape of a name. It travels as such a name does (ADR 0090's limit), and the way
+    // to keep it home is `DOWNTRACE_QUERY_TEXT=off`.
+    expect(normalizeQuery(`SELECT * FROM "alice_smith_marketing"`)).toBe(`SELECT * FROM "alice_smith_marketing"`);
+    expect(normalizeQuery(`SELECT * FROM "MariaGarciaPerez"`)).toBe(`SELECT * FROM "MariaGarciaPerez"`);
+  });
+});
+
 // Invariant 5: no query literal leaves the user's server. These are the hostile cases, not the polite ones.
 describe("normalizeQuery, against literals that try to survive", () => {
   it("drops a literal with a doubled quote inside it", () => {

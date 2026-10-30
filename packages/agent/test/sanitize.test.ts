@@ -6,6 +6,7 @@ import {
   SEGMENT_RULES,
   type SegmentRule,
   sanitizeMessage,
+  sanitizeName,
   sanitizeValues,
   sanitizeWith,
   VALUE_PATTERNS,
@@ -79,12 +80,26 @@ describe("each rule, as the source lists them", () => {
     expect(left).not.toBe(shape.sanitised);
   });
 
-  // `sanitizeValues` runs only these, for what is a name and not a sentence: a quoted SQL identifier and the key of a
-  // context. Whatever a pattern decides in a message it decides there too.
+  // `sanitizeValues` runs only these, for what is not a sentence: the key of a context. Whatever a pattern decides in
+  // a message it decides there too.
   it.each(rules(VALUE_PATTERNS))("%s decides its case the same way in a name", (_name, rule) => {
     const decided = decidedBy(rule);
     expect(decided).not.toHaveLength(0);
     for (const { message, sanitised } of decided) expect(sanitizeValues(message)).toBe(sanitised);
+  });
+
+  // A quoted SQL identifier runs them too, through `sanitizeName`, which spares a long run that reads as words: in a
+  // name that is a long column, which an ORM quotes like every other. So a name reads every case as `sanitizeValues`
+  // does but the ones whose value is a run of words and nothing else gives it away — and those are what it spares.
+  it("decides every case in a name as it does in a key, but a long run of words", () => {
+    const apart = SANITISER_CASES.filter(({ message }) => sanitizeName(message) !== sanitizeValues(message));
+    expect(apart.map(({ value }) => value)).toEqual([
+      "alice_smith_marketing",
+      "álvaro_garcía_marketing",
+      // Decomposed, as the case writes it: each accent is a mark, and a mark goes with the letter it marks.
+      "martínez_lópez_marketing".normalize("NFD"),
+    ]);
+    for (const { message, value } of apart) expect(sanitizeName(message)).toContain(value);
   });
 });
 

@@ -1,4 +1,4 @@
-import { meaningful, sanitizeValues } from "./sanitize.ts";
+import { meaningful, sanitizeName } from "./sanitize.ts";
 
 /**
  * Turns a query into what it *is*, without what it was *about*.
@@ -174,10 +174,15 @@ const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((
  * the words survive is not a name any more, and goes out as `?` rather than as punctuation pretending to be
  * a label (ADR 0084). A name with no values in it comes back untouched, which is the ordinary case and the
  * reason the label is worth having at all (gh-350).
+ *
+ * But read as a name (`sanitizeName`): a run of sixteen characters or more that reads as words stays. The long
+ * run of a message took it, and an ORM quotes every name it writes, so Kysely's `"dateOfLastAccess"` travelled
+ * as `?` — unreadable, and with one hash for every column of that length the statement could have named. A long
+ * run with a digit in it, or whose case breaks it into words too short to be words, is still a value and goes.
  */
 function quotedName(quoted: string, delimiter: string): string {
   const inner = quoted.slice(1, -1);
-  const sanitised = sanitizeValues(inner);
+  const sanitised = sanitizeName(inner);
   if (sanitised === inner) return quoted;
   return meaningful(sanitised) ? `${delimiter}${sanitised}${delimiter}` : "?";
 }

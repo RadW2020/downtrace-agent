@@ -104,6 +104,23 @@ describe.each(Object.keys(DIALECTS) as Dialect[])("every quote the %s dialect de
     }
   });
 
+  it.each(quotes)("%s: a long name stays where it opens a name, and a long value goes either way", (open, quote) => {
+    // An ORM quotes every name, and a column of sixteen characters is an ordinary one: the sanitiser's long run is
+    // for tokens, and a name that reads as words is not one. What reads as a value goes, whatever opened it.
+    expect(of(`SELECT ${open}tenant_8f3a9c2e1b7d4f60${open} FROM t`).text).toBe("SELECT ? FROM t");
+    expect(of(`SELECT ${open}tenant_kQzXwPfLmNbVtRsY${open} FROM t`).text).toBe("SELECT ? FROM t");
+    expect(of(`SELECT ${open}tenant_kqzxwpflmnbvtrsy${open} FROM t`).text).toBe("SELECT ? FROM t");
+    const last = of(`SELECT ${open}dateOfLastAccess${open} FROM t`);
+    const first = of(`SELECT ${open}dateOfFirstAccess${open} FROM t`);
+    if (quote.opens === "string") {
+      expect(last.text).toBe("SELECT ? FROM t");
+      expect(last.hash, "a value is not an identity").toBe(first.hash);
+    } else {
+      expect(last.text).toBe(`SELECT ${open}dateOfLastAccess${open} FROM t`);
+      expect(last.hash, "two columns are two queries").not.toBe(first.hash);
+    }
+  });
+
   it.each(quotes)("%s: one that opens and never closes is not understood, and says nothing of what it took", (open) => {
     for (const sql of [
       `SELECT ${open}zq-secret`,
@@ -189,6 +206,14 @@ describe("the other rules MySQL has and Postgres does not", () => {
       "SELECT * FROM ?? WHERE id = ? AND n = ?",
     );
     expect(normalizeQuery("INSERT INTO t (a, b) VALUES ?", "mysql")).toBe("INSERT INTO t (a, b) VALUES ?");
+  });
+
+  it("keeps the long names TypeORM writes between backticks", () => {
+    const typeorm =
+      "SELECT `User`.`id` AS `User_id`, `User`.`lastLoginTimestamp` AS `User_lastLoginTimestamp`" +
+      " FROM `user` `User` WHERE `User`.`id` = ?";
+    expect(normalizeQuery(typeorm, "mysql")).toBe(typeorm);
+    expect(understood(typeorm)).toBe(true);
   });
 
   it("keeps a backticked identifier that carries a backtick of its own", () => {

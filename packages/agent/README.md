@@ -714,6 +714,24 @@ not send the query text at all, `DOWNTRACE_QUERY_TEXT=off` suppresses it — wit
 the calls' and the commands' included — and changes nothing else: the hash is the identity, so you keep the whole
 analysis and only lose the readable label.
 
+**A long quoted name stays when it reads as words.** An ORM quotes every name it writes — Kysely, Sequelize, TypeORM
+and Prisma all do — so `update "users" set "dateOfLastAccess" = $1` is `update "users" set "dateOfLastAccess" = ?`,
+and a name between MySQL's backticks stays the same way. A name of sixteen characters or more stays when its case or
+its `_` and `-` break it into words: `dateOfLastAccess`, `maintainer_approval_required`. What a name built from data
+carries is still replaced: a run with a digit in it (`"tenant_8f3a9c2e1b7d4f60"`), a UUID, an email, a run whose case
+breaks it into words shorter than three letters on average, as a generated token's does (`"kQzXwPfLmNbVtRsY"`), and
+sixteen letters or more that nothing breaks (`"tenant_kqzxwpflmnbvtrsy"`, and a long name written in one case, such
+as `"userpreferenceshistory"`, with them). A name made only of such values is `?` whole. A name built from data out of
+words has the shape of a name and travels as one (`"alice_smith_marketing"`); `DOWNTRACE_QUERY_TEXT=off` keeps it
+home.
+
+**The first version that keeps long quoted names changes some query fingerprints, once.** Earlier versions replaced a
+quoted name with a run of sixteen characters or more in it with `?` even when it was a plain name, so the update above
+was `update "users" set ? = ?`, with the hash of every other update of one such column of `users`. Such a query now
+has the name in its label and a hash of its own, so after the upgrade Downtrace sees it as a new query and the old
+one stops being seen. A query whose quoted names have no such run, or one with a digit in it or that reads as a
+token, keeps its hash, and so does every query with no quoted name.
+
 ### When someone asks for detail: a capture
 
 The instrumentation keeps a **black box** in memory: the last tens of seconds request by request, with the operations each
