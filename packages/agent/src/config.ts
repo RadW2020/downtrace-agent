@@ -89,7 +89,7 @@ export interface AgentConfig {
 export type ConfigResult = { ok: true; config: AgentConfig; warnings: string[] } | { ok: false; reason: string };
 
 /** Everything the agent can observe, each switchable on its own so its cost can be measured on its own. */
-export const INSTRUMENTS = ["pg", "mysql", "sqlite", "mongodb", "http", "redis", "runtime"] as const;
+export const INSTRUMENTS = ["pg", "mysql", "sqlite", "mongodb", "prisma", "http", "redis", "runtime"] as const;
 export type Instrument = (typeof INSTRUMENTS)[number];
 
 /** How much of the Postgres observer's attribution runs; see `AgentConfig.pgDepth`. */

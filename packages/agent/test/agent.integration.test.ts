@@ -162,6 +162,7 @@ describe("agent v0 (integration)", () => {
       mysql: "off",
       sqlite: "off",
       mongodb: "off",
+      prisma: "off",
       http: "off",
       redis: "off",
       runtime: "off",

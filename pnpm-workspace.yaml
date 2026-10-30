@@ -8,3 +8,9 @@ allowBuilds:
   # The agent's tests observe SQLite through it, and it builds its native addon in an install script: it fetches a
   # prebuilt binary, and compiles only when none fits.
   better-sqlite3: true
+  # The agent's tests observe Prisma 4 to 6 through its engine, which it downloads in an install script, for the
+  # platform, from Prisma's CDN: the tests then generate their clients with no network. The client's and the CLI's
+  # own scripts generate a client nobody asked for and check versions, and are not needed.
+  '@prisma/engines': true
+  '@prisma/client': false
+  prisma: false

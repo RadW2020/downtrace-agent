@@ -80,6 +80,7 @@ const OBSERVER_PACKAGES: Record<string, readonly string[]> = {
   mysql: ["mysql2"],
   sqlite: ["better-sqlite3", "@prisma/adapter-better-sqlite3", "libsql", "@libsql/client"],
   mongodb: ["mongodb", "mongoose"],
+  prisma: ["@prisma/client"],
   redis: ["ioredis", "redis"],
 };
 

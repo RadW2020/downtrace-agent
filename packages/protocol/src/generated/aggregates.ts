@@ -17,6 +17,10 @@ export type ObserverState2 = "on" | "off" | "unavailable";
  */
 export type ObserverState3 = "on" | "off" | "unavailable";
 /**
+ * Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14).
+ */
+export type ObserverState4 = "on" | "off" | "unavailable";
+/**
  * A value of `Operation.kind` that its `x-error` marks as an error: the ways an error inside a request arrives, and so the sources that can produce one. A query, an outgoing call and a Redis command are things a route ran, never a source of error.
  */
 export type InRequestErrorSource = "error" | "framework" | "explicit";
@@ -43,7 +47,8 @@ export interface AggregatesBatch {
     | "0.8.0"
     | "0.9.0"
     | "0.10.0"
-    | "0.11.0";
+    | "0.11.0"
+    | "0.12.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -250,6 +255,7 @@ export interface Observers {
   mysql?: ObserverState1;
   sqlite?: ObserverState2;
   mongodb?: ObserverState3;
+  prisma?: ObserverState4;
   http?: ObserverState;
   redis?: ObserverState;
   runtime?: ObserverState;
@@ -470,7 +476,7 @@ export interface PostgresStats {
  */
 export interface Dependency {
   /**
-   * What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`). `sqlite` since 0.11.0: a SQLite database in the process, one dependency with an empty `target`, whose statements are operations of kind `query`.
+   * What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`). `sqlite` since 0.11.0: a SQLite database in the process, one dependency with an empty `target`, whose statements are operations of kind `query`. Since 0.12.0 a Prisma client's operation is an operation of kind `query` of the dependency its datasource is, with an empty `target`, named by the action and the model (`findMany Post`), or by its SQL for a raw query.
    */
   kind: "postgres" | "mysql" | "sqlite" | "mongodb" | "redis" | "http";
   /**

@@ -146,7 +146,12 @@ describe("a project it can configure", () => {
     [{ express: "^5", redis: "^5.12.0" }, []],
     [{ express: "^5", redis: "^6" }, []],
     [{ express: "^5", redis: "latest" }, []],
-    [{ express: "^5", "@prisma/client": "^6" }, ["@prisma/client"]],
+    // Prisma before 7 queries through an engine of its own, and its client is observed from 3.15 (ADR 0241); with a
+    // driver adapter it queries through the driver, observed for Postgres and better-sqlite3 and not for MariaDB.
+    [{ express: "^5", "@prisma/client": "^6" }, []],
+    [{ express: "^4", "@prisma/client": "^4.0.0" }, []],
+    [{ express: "^4", "@prisma/client": "~3.10.0" }, ["@prisma/client"]],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mariadb": "^7" }, ["@prisma/adapter-mariadb"]],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-pg": "^7" }, []],
     [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, []],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-better-sqlite3": "^7" }, []],

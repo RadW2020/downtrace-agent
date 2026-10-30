@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CheckReport } from "../src/check/report.ts";
 import { appFiles, cleanEnv, createProject, downtrace, type Project, snapshot } from "./support/check-project.ts";
+import { generatePrisma, PRISMA_DIR, PRISMA_QUIET, type PrismaLayout, prismaSchema } from "./support/prisma-client.ts";
 
 /**
  * `downtrace check`, as a user runs it: the real command, in a real git repository, running a real application
@@ -670,6 +671,151 @@ describe("a Mongoose suite Jest runs, as a Mongoose boilerplate is tested", () =
   });
 
   it("sees the lookups the tests' own copy of the driver sent, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * Prisma before 7, through its engine (ADR 0241): a client generated into `node_modules`, as every Prisma 4 and 5
+ * project has it, in an application Node runs; and one generated into the project, as Prisma 6 asks, under Jest, whose
+ * base generates its own in `prepare` with the working tree's dependencies linked — the generated directory is what
+ * git ignores. The database is a SQLite file both runs use, seeded by each.
+ */
+const PRISMA_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import prismaClient from "@prisma/client";
+
+const { PrismaClient } = prismaClient;
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const prisma = new PrismaClient();
+await prisma.post.deleteMany();
+await prisma.user.deleteMany();
+const ana = await prisma.user.create({ data: { email: "ana@example.com", posts: { create: [{ title: "hello" }] } } });
+const app = express();
+app.get("/users/:id", async (req, res) => {
+  for (let i = 0; i < lookups; i += 1) await prisma.post.findMany({ where: { authorId: ana.id } });
+  res.send("user");
+});
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/users/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await prisma.$disconnect();
+`;
+
+const PRISMA_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const { PrismaClient } = require("./generated/prisma");
+
+const prisma = new PrismaClient();
+let ana;
+beforeAll(async () => {
+  await prisma.post.deleteMany();
+  await prisma.user.deleteMany();
+  ana = await prisma.user.create({ data: { email: "ana@example.com", posts: { create: [{ title: "hello" }] } } });
+});
+afterAll(() => prisma.$disconnect());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await prisma.post.findMany({ where: { authorId: ana.id } });
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+async function prismaProject(
+  layout: PrismaLayout,
+  files: Record<string, string>,
+  config: Record<string, unknown>,
+  link: Record<string, string>,
+): Promise<Checked> {
+  const database = join(await room(), "app.db");
+  const made = await project({
+    ...files,
+    "lookups.txt": "1",
+    "prisma/schema.prisma": prismaSchema(layout, database),
+    ".gitignore": "node_modules\ngenerated\n",
+    "downtrace.json": JSON.stringify({ check: config }),
+  });
+  await mkdir(join(made.dir, "node_modules"), { recursive: true });
+  for (const [name, dir] of Object.entries(link)) await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  await generatePrisma(made.dir, layout, database);
+  // The change: the route now looks its user's posts up once per item, four times a request.
+  await made.write("lookups.txt", "4");
+  return check(made, ["--base", "HEAD"], PRISMA_QUIET);
+}
+
+describe("an application whose data goes through Prisma's engine, with its client in node_modules", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await prismaProject(
+      "default",
+      { "app.mjs": PRISMA_APP },
+      { command: "node app.mjs" },
+      {
+        express: EXPRESS_DIR,
+      },
+    );
+  });
+
+  it("sees the lookups multiplied, under the dependency the datasource is, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    const users = route(checked.report, "GET /users/:id");
+    expect(users.operations[0]).toMatchObject({ label: "findMany Post", kind: "query" });
+    expect(users.dependencies).toEqual([expect.objectContaining({ kind: "query", worse: true })]);
+  });
+
+  it("says the prisma observer was on, on both sides", () => {
+    expect(checked.report.base?.observers.prisma).toBe("on");
+    expect(checked.report.change?.observers.prisma).toBe("on");
+  });
+});
+
+describe("a suite Jest runs, whose Prisma client is generated into the project and by the base's prepare", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await prismaProject(
+      "output",
+      {
+        "users.test.js": PRISMA_SUITE,
+        "package.json": JSON.stringify({ name: "prisma-jest", private: true, jest: { transform: {} } }),
+      },
+      {
+        command: "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+        prepare: "node node_modules/prisma/build/index.js generate --schema prisma/schema.prisma",
+        link: true,
+      },
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, prisma: PRISMA_DIR },
+    );
+  });
+
+  it("sees the lookups the tests' own copy of the client ran, multiplied", () => {
+    expect(checked.report.failure, JSON.stringify(checked.report.failure)).toBeNull();
     expectLookupsMultiplied(checked);
   });
 });

@@ -33,6 +33,7 @@
     "@koa/router": "^15.7.0",
     "@koa/router12": "npm:@koa/router@^12.0.2",
     "@libsql/client": "^0.18.0",
+    "@prisma/client": "^6.19.3",
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/express4": "npm:@types/express@^4.17.25",
@@ -56,6 +57,7 @@
     "mysql2-legacy": "npm:mysql2@3.11.5",
     "pg": "^8.23.0",
     "postgres": "^3.4.9",
+    "prisma": "^6.19.3",
     "redis": "^6.3.0",
     "redis5": "npm:redis@^5.12.1"
   },

@@ -41,6 +41,7 @@ import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
+import { armPrisma, patchPrisma } from "./instrument/prisma.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { armSqlite, patchSqlite } from "./instrument/sqlite.ts";
 import { attachJest, requiredFrom, type SandboxPatch } from "./jest.ts";
@@ -274,6 +275,8 @@ export class Agent {
   private mongoAttach: (() => boolean) | undefined;
   /** SQLite's, the same way, for better-sqlite3 and the libsql `@libsql/client` brings (ADR 0239). */
   private sqliteAttach: (() => boolean) | undefined;
+  /** Prisma's, the same way, for the clients its runtime generated (ADR 0241). */
+  private prismaAttach: (() => boolean) | undefined;
   /** postgres.js's, under the `pg` switch: the same moment, and an import for its ESM copy (ADR 0235). */
   private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
@@ -568,6 +571,7 @@ export class Agent {
       mysql: "off",
       sqlite: "off",
       mongodb: "off",
+      prisma: "off",
       http: "off",
       redis: "off",
       runtime: "off",
@@ -688,6 +692,26 @@ export class Agent {
         patch: (database) => patchSqlite(database, "unknown", sqliteDeps),
       });
     }
+    // Prisma 4 to 6 through its engine, whose operations are queries of the dependency its datasource is (ADR 0241). A
+    // raw query is named by the cache of its dialect, there when that dialect's switch is on, as it is by default.
+    if (on.has("prisma")) {
+      const prismaDeps = {
+        log: this.log,
+        internalError,
+        fingerprints: { postgres: this.fingerprints, mysql: this.mysqlFingerprints, sqlite: this.sqliteFingerprints },
+        errors: this.errors,
+      };
+      const armed = armPrisma({ ...prismaDeps, from: entry });
+      said(observers, "prisma", armed.state);
+      this.prismaAttach = armed.attach;
+      sandbox.push({
+        // `@prisma/client`, and a client generated into the project, which is required by its path: Prisma names that
+        // directory for itself (`../generated/prisma`). What is not a client is left alone by the patch.
+        matches: (name) => name.includes("prisma"),
+        patch: (client) =>
+          patchPrisma((client as { PrismaClient?: unknown } | null | undefined)?.PrismaClient, "unknown", prismaDeps),
+      });
+    }
     this.stopJest = attachJest({ patches: sandbox, internalError });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
@@ -705,7 +729,13 @@ export class Agent {
     }
     // A request context is only worth opening if something is going to record into it.
     this.instrumented =
-      on.has("pg") || on.has("mysql") || on.has("sqlite") || on.has("mongodb") || on.has("http") || on.has("redis");
+      on.has("pg") ||
+      on.has("mysql") ||
+      on.has("sqlite") ||
+      on.has("mongodb") ||
+      on.has("prisma") ||
+      on.has("http") ||
+      on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
     if (on.has("runtime")) {
       this.runtime.start();
@@ -1206,6 +1236,7 @@ export class Agent {
     if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
     if (this.mongoAttach?.()) this.mongoAttach = undefined;
     if (this.sqliteAttach?.()) this.sqliteAttach = undefined;
+    if (this.prismaAttach?.()) this.prismaAttach = undefined;
     if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
@@ -1397,7 +1428,11 @@ async function settledWithin(these: Promise<unknown>[], deadline: AbortSignal): 
  * database the application does not use, and an `unavailable` for each of those would bury the one that matters; the
  * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093).
  */
-function said(observers: Observers, name: "mysql" | "sqlite" | "mongodb", state: "on" | "unavailable"): void {
+function said(
+  observers: Observers,
+  name: "mysql" | "sqlite" | "mongodb" | "prisma",
+  state: "on" | "unavailable",
+): void {
   if (state === "on") observers[name] = "on";
   else delete observers[name];
 }

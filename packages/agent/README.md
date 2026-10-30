@@ -9,10 +9,11 @@ It observes six things, each of which can be switched off with `DOWNTRACE_INSTRU
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
-| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, [through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
 | `sqlite` | [SQLite](#sqlite) statements per request through `better-sqlite3` or `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either), their time and errors |
 | `mongodb` | [MongoDB](#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
+| `prisma` | [Prisma](#prisma)'s operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
 | `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
 
@@ -65,7 +66,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — the floor and the ceiling are derived, see below). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
-| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,sqlite,mongodb,http,redis,runtime` |
+| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,sqlite,mongodb,prisma,http,redis,runtime` |
 | `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch for weighing the fine detail and the profile on their own (ADR 0080, gh-570); leave it alone in production |
 | `DOWNTRACE_PG_DEPTH` | no | `full` (default), `context` or `wrapper`: how much of the Postgres observer's attribution runs — `context` attributes the calls and the waits without looking at the query text, `wrapper` only leaves the patch in place. The benchmark's switch for weighing the observer part by part (gh-592); leave it alone in production |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
@@ -606,29 +607,28 @@ What the instrumentation does with the driver, and what it gives up:
 
 ### Prisma
 
-Prisma is observed when it reaches Postgres through `pg`, and only then. What decides it is not the version of the ORM
-but the engine that runs its queries, so it was measured, version by version, with this instrumentation loaded through
-`--import` and a real Postgres 17 behind it (Prisma 5.22.0, 6.7.0, 6.16.0, 6.19.3 and 7.10.0):
+Prisma is observed two ways, by the engine that runs its queries: Prisma 7, and 6.16 or later with
+`engineType = "client"`, query through a driver adapter, and are seen through that driver, as SQL; before 7, on Prisma's
+own engine, a client `prisma-client-js` generated is seen through the client itself, as Prisma's operations (ADR 0241).
+Measured version by version, with this instrumentation loaded through `--import`:
 
 | Your Prisma | Its queries go | Observed |
 |---|---|---|
-| 7.x, with `@prisma/adapter-pg` | through `pg`: 7 has no engine of its own and requires an adapter | **Yes** |
-| 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with `@prisma/adapter-pg` | through `pg`, as 7 does | **Yes** |
-| 5.x, and 6.x on its default engine, with `@prisma/adapter-pg` | from Prisma's query engine, which calls the adapter, and so `pg`, from a thread of its own | **No** |
-| 5.x, and 6.x on its default engine, with no adapter: what Prisma 5 does unless told otherwise | from the query engine, which speaks to Postgres itself and never touches `pg` | **No** |
+| 7.x, with `@prisma/adapter-pg` or `@prisma/adapter-better-sqlite3` | through `pg` or `better-sqlite3`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`) |
+| 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with either adapter | through the driver, as 7 does | **Yes**, the same |
+| 3.15 to 6.x on its default engine, with no adapter: what Prisma does before 7 unless told otherwise | from Prisma's query engine, which speaks to the database itself | **Yes**, as Prisma's operations (`prisma`), measured on 3.15.2, 4.0.0, 4.16.2, 5.22.0 and 6.19.3 |
+| 5.x, and 6.x on its default engine, with an adapter | from the query engine, which calls the adapter, and so its driver, from a thread of its own | **No** |
 | Any version with another adapter (Neon, MariaDB, …) | through that adapter's own driver | **No**: it was not looked at |
 
-When it is observed, nothing is asked of you: a Prisma query is a query of the route that ran it, with its time and its
+**Through the driver**, nothing is asked of you: a Prisma query is a query of the route that ran it, with its time and its
 errors, and its fingerprint in the route's profile, like any `pg` query. The queries of `prisma.$transaction` carry the
 `BEGIN` and the `COMMIT` that Prisma sends, because they are queries. Prisma sends its values as parameters, so what a
 `findMany({ where: { name } })` is called is `… WHERE "public"."User"."name" = ? OFFSET ?`; SQL that you write yourself with
 a value in it (`$queryRawUnsafe`) is normalised like any other, and the value does not leave. Prisma merges calls to
 `findUnique` of the same shape made in the same tick into one query (`WHERE "id" IN (…)`), and that query is counted
 once, for the request whose call came first: measured on 7.10.0, four requests that asked for the same row in one tick
-made one query.
-
-To be observed, then: Prisma 7, or on 6.16 or later `engineType = "client"` in the generator block of the schema, and
-the adapter. No tracing and no OpenTelemetry are involved:
+made one query. To be observed this way: Prisma 7, or on 6.16 or later `engineType = "client"` in the generator block of
+the schema, and the adapter. No tracing and no OpenTelemetry are involved:
 
 ```ts
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -636,11 +636,34 @@ import { PrismaPg } from "@prisma/adapter-pg";
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 ```
 
-How to tell which row you are in: with `DOWNTRACE_INSPECT`, a route whose Prisma queries are seen has a `postgres`
-dependency. A route that queries through Prisma and has none is in one of the **No** rows, and is not a route that makes no
-queries.
+**Through the client**, on Prisma's own engine, nothing is asked of you either. Every operation of a generated client goes
+through one method of its class, and the instrumentation wraps it (switch `prisma`):
 
-**Why the engine's queries are not seen.** With an adapter, the engine calls it from a thread of its own, so the query
+- **Each operation is one query, of the database the datasource is** — `postgresql` and `cockroachdb` are Postgres, and
+  `mysql`, `sqlite` and `mongodb` their own — **named by its action and its model**: `findMany Post`, `create User`,
+  `count Order`. Never its arguments. A raw query is named by its SQL, normalised as that database reads it:
+  `` prisma.$queryRaw`select "id" from "User" where "email" = ${email}` `` is `select "id" from "User" where "email" = ?`.
+- **It counts what your code asked for.** An `include` is one operation, however many statements the engine runs for
+  it; the `findUnique`s Prisma batches in one tick are each one, as you wrote them; every operation of a
+  `$transaction`, of an interactive one, and of a client `$extends` made is counted; a middleware that answers without
+  the engine is not. A loop that runs a `findMany` per item is the N+1 `check` is for, and it is seen.
+- **Where the client is found.** In the module cache, from the first request, resolved and not loaded at start-up as
+  for `pg`: the client generated into `node_modules/.prisma/client`, which every Prisma 3 to 5 project has, and one
+  generated into a directory of your own (`output = "../generated/prisma"`, what Prisma 6 asks for), as long as it is
+  loaded as CommonJS. Under Jest, the copy of a module whose name has `prisma` in it — `@prisma/client`,
+  `../generated/prisma`. Not seen: a client the `prisma-client` generator wrote as ES modules, one a bundler inlined,
+  and one a test runner loads outside Node's module cache — Vitest, a client generated into your project's directory;
+  one in `node_modules/.prisma/client` it leaves to Node, and that one is seen.
+- **Not counted twice.** A client given a driver adapter is left alone: its SQL is the driver's to count.
+- **SQL Server** is not observed: the protocol has no dependency for it.
+- `observers` in the batch says `prisma: on` when `@prisma/client` resolves from your application, and nothing when it
+  does not.
+
+How to tell which row you are in: with `DOWNTRACE_INSPECT`, a route whose Prisma queries are seen has a `postgres` (or
+`mysql`, `sqlite`, `mongodb`) dependency. A route that queries through Prisma and has none is in one of the **No** rows,
+and is not a route that makes no queries.
+
+**Why the engine's queries are not seen through an adapter.** With an adapter, the engine calls it from a thread of its own, so the query
 reaches `pg` carrying none of the request's async context: `pg` sees every query, outside any request, and a query
 outside a request counts for no route. The instrumentation counts a query for the request whose code ran it and never
 guesses which one that was. The versions that run their queries in JavaScript run them in the context of the call that
@@ -904,8 +927,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `mongodb` (6 and later), `mongoose` (8 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mysql`, `sqlite3`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and `@prisma/client` without `@prisma/adapter-pg` or `@prisma/adapter-better-sqlite3` — before Prisma 7 its queries go through an engine of its own —, and `mongodb` before 6, `mongoose` before 8 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `mongodb` (6 and later), `mongoose` (8 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `sqlite3`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg` and `@prisma/adapter-better-sqlite3` (`@prisma/adapter-mariadb`, …), whose driver Prisma then queries through, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -1066,14 +1089,14 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `postgres`, `mysql2`, `better-sqlite3`, `libsql`, `mongodb` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+`pg`, `postgres`, `mysql2`, `better-sqlite3`, `libsql`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
 application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, and the `mongodb` Mongoose brings, from where Mongoose is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
 itself, which differs only for a `main` that is a symlink out of it or that has a `node_modules` of its own
 between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
-batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite` and `mongodb` are reported `on` when found,
+batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
 would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found.
 

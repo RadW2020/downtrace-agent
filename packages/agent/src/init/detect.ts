@@ -33,7 +33,8 @@ export const FRAMEWORK_PACKAGES = [
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
  * postgres.js (`postgres`), MySQL through `mysql2`, SQLite through `better-sqlite3` (and Prisma's adapter for it) and
  * `libsql` (and `@libsql/client`, which opens a file with it), MongoDB through `mongodb` (and Mongoose, which sends
- * every command through it), Redis through `ioredis` and `redis` (node-redis, from 5.12). A
+ * every command through it), Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis`
+ * (node-redis, from 5.12). A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -49,6 +50,7 @@ export const OBSERVED_PACKAGES = [
   "@libsql/client",
   "mongodb",
   "mongoose",
+  "@prisma/client",
   "ioredis",
   "redis",
 ] as const;
@@ -61,17 +63,19 @@ export const OBSERVED_PACKAGES = [
 export const UNOBSERVED_PACKAGES = ["mysql", "sqlite3", "mssql", "oracledb", "kafkajs", "amqplib"] as const;
 
 /**
- * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's client when it has no driver adapter the
- * instrumentation observes: before Prisma 7 its queries go through an engine of its own, which talks to the database
- * without a Node.js driver (the stranger campaign: a Prisma 4 application, every route `nothing-observed`).
+ * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the
+ * instrumentation does not observe: a client given one queries through that driver, and is left to its observer
+ * (ADR 0241), so with `@prisma/adapter-mariadb` nothing is seen.
  */
 export function unobservedOf(
   dependencies: ReadonlySet<string>,
   ranges: ReadonlyMap<string, string> = new Map(),
 ): string[] {
   const unobserved: string[] = UNOBSERVED_PACKAGES.filter((name) => dependencies.has(name));
-  if (dependencies.has("@prisma/client") && !PRISMA_ADAPTERS.some((adapter) => dependencies.has(adapter))) {
-    unobserved.push("@prisma/client");
+  for (const name of dependencies) {
+    if (name.startsWith("@prisma/adapter-") && !(PRISMA_ADAPTERS as readonly string[]).includes(name)) {
+      unobserved.push(name);
+    }
   }
   for (const name of OBSERVED_PACKAGES) if (dependencies.has(name) && tooOld(name, ranges)) unobserved.push(name);
   return unobserved;
@@ -92,10 +96,12 @@ export function observedOf(
  * The first version of a package the instrumentation observes, as `[major, minor]`, where it does not observe the ones
  * before: the MongoDB driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8,
  * the first on it — before them the driver answers through callbacks, from whichever request gave its pool a
- * connection back —; and node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
- * observer reads (`instrument/redis.ts`).
+ * connection back —; node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
+ * observer reads (`instrument/redis.ts`); and Prisma's client from 3.15, the first read with the method its operations
+ * go through (ADR 0241).
  */
 const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: number]>> = {
+  "@prisma/client": [3, 15],
   mongodb: [6, 0],
   mongoose: [8, 0],
   redis: [5, 12],
