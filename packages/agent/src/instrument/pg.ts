@@ -126,8 +126,8 @@ export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): Armed {
     // not as a peer, so the copy its queries go through is not always the application's: with pnpm the application has
     // none at its root, and with npm a `pg` of the application's that the adapter's range does not take is a second
     // module beside the adapter's. Measured with 7.10.0, and what a query through it is counted by is the patch on
-    // the copy that ran it (DT-92).
-    beside: ["@prisma/adapter-pg"],
+    // the copy that ran it (DT-92). MikroORM's package for Postgres brings one too, pinned to a single version.
+    beside: ["@prisma/adapter-pg", "@mikro-orm/postgresql"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (pg, version) => {

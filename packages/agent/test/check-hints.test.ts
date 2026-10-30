@@ -10,6 +10,7 @@ import {
   unseenObservers,
 } from "../src/check/hints.ts";
 import { INSTRUMENTS } from "../src/config.ts";
+import { OBSERVED_PACKAGES } from "../src/init/detect.ts";
 
 /**
  * A run that left no profile is said, with the likely cause and what to use instead (LOC-01, COB-01). The file does
@@ -251,6 +252,15 @@ describe("the observers of a run that did not find a driver the project depends 
     expect(unseenObservers({ ...watching, pg: "unavailable" }, new Set(["slonik"]))).toEqual([
       { observer: "pg", state: "unavailable", packages: ["slonik"] },
     ]);
+    expect(unseenObservers({ ...watching, pg: "unavailable" }, new Set(["@mikro-orm/postgresql"]))).toEqual([
+      { observer: "pg", state: "unavailable", packages: ["@mikro-orm/postgresql"] },
+    ]);
+  });
+
+  it("knows each package init says is observed, under the observer that observes it", () => {
+    // Two lists of one fact: what init promises is what check misses when the observer found no driver.
+    const named = Object.values(OBSERVER_PACKAGES).flat();
+    expect([...named].sort()).toEqual([...OBSERVED_PACKAGES].sort());
   });
 
   it("says nothing of a database the project does not depend on, unavailable or left out", () => {

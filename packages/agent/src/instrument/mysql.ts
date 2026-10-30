@@ -120,13 +120,15 @@ export function patchMysql(module: unknown, version: string, deps: InstrumentMys
 }
 
 /**
- * The start-up half, as `pg`'s: resolve `mysql2` from the application's root, load nothing, and patch from the
- * start of the first request at which the application has loaded it (ADR 0209).
+ * The start-up half, as `pg`'s: resolve `mysql2` from the application's root, and from MikroORM's package for MySQL,
+ * which brings its own, load nothing, and patch from the start of the first request at which the application has
+ * loaded it (ADR 0209).
  */
 export function armMysql(deps: InstrumentMysqlDeps & { from?: string | undefined }): Armed {
   return armDriver<unknown>({
     driver: "mysql2",
     from: deps.from ?? applicationEntry(),
+    beside: ["@mikro-orm/mysql"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (module, version) => {

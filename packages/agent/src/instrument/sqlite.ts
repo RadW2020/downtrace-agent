@@ -212,16 +212,17 @@ export function addonStatementOf(resolved: string, cache: NodeJS.Require["cache"
 
 /**
  * The start-up half, as `pg`'s: resolve each driver from the application's root, and from the packages that bring
- * their own — `@libsql/client` its libsql, Prisma's adapter its better-sqlite3 (DT-92) — load nothing, and patch from
- * the start of the first request at which the application has loaded one (ADR 0209). Both ship only CommonJS, so an
- * `import` puts them in the module cache too.
+ * their own — `@libsql/client` its libsql, Prisma's adapter its better-sqlite3 (DT-92), MikroORM's packages whichever
+ * they pin — load nothing, and patch from the start of the first request at which the application has loaded one
+ * (ADR 0209). All three ship only CommonJS, so an `import` puts them in the module cache too.
  */
 export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefined }): Armed {
   const from = deps.from ?? applicationEntry();
+  // `@mikro-orm/sqlite` is on better-sqlite3 from 7, and on node-sqlite3 before.
   const better = armDriver<unknown>({
     driver: "better-sqlite3",
     from,
-    beside: ["@prisma/adapter-better-sqlite3"],
+    beside: ["@prisma/adapter-better-sqlite3", "@mikro-orm/sqlite", "@mikro-orm/better-sqlite"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (module, version, require, resolved) => {
@@ -231,7 +232,7 @@ export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefin
   const libsql = armDriver<unknown>({
     driver: "libsql",
     from,
-    beside: ["@libsql/client"],
+    beside: ["@libsql/client", "@mikro-orm/libsql"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (module, version) => {
@@ -239,9 +240,11 @@ export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefin
     },
   });
   // node-sqlite3, the callback driver Knex and Sequelize open SQLite with: both ask the application to install it.
+  // MikroORM before 7 brings its own.
   const sqlite3 = armDriver<unknown>({
     driver: "sqlite3",
     from,
+    beside: ["@mikro-orm/sqlite"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (module, version) => {

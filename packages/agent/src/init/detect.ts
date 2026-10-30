@@ -34,7 +34,7 @@ export const FRAMEWORK_PACKAGES = [
  * postgres.js (`postgres`), MySQL through `mysql2`, SQLite through `better-sqlite3` (and Prisma's adapter for it) and
  * `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends
  * every command through it), Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis`
- * (node-redis, from 5.12). A
+ * (node-redis, from 5.12), and MikroORM through the driver each of its packages for a database brings. A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -43,14 +43,20 @@ export const OBSERVED_PACKAGES = [
   "@prisma/adapter-pg",
   "slonik",
   "postgres",
+  "@mikro-orm/postgresql",
   "mysql2",
+  "@mikro-orm/mysql",
   "better-sqlite3",
   "@prisma/adapter-better-sqlite3",
   "libsql",
   "@libsql/client",
   "sqlite3",
+  "@mikro-orm/sqlite",
+  "@mikro-orm/better-sqlite",
+  "@mikro-orm/libsql",
   "mongodb",
   "mongoose",
+  "@mikro-orm/mongodb",
   "@prisma/client",
   "ioredis",
   "redis",
@@ -96,8 +102,8 @@ export function observedOf(
 /**
  * The first version of a package the instrumentation observes, as `[major, minor]`, where it does not observe the ones
  * before: the MongoDB driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8,
- * the first on it — before them the driver answers through callbacks, from whichever request gave its pool a
- * connection back —; node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
+ * the first on it, and MikroORM's package for it from 6, which brings 6 — before them the driver answers through
+ * callbacks, from whichever request gave its pool a connection back —; node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
  * observer reads (`instrument/redis.ts`); and Prisma's client from 3.15, the first read with the method its operations
  * go through (ADR 0241).
  */
@@ -105,6 +111,7 @@ const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: num
   "@prisma/client": [3, 15],
   mongodb: [6, 0],
   mongoose: [8, 0],
+  "@mikro-orm/mongodb": [6, 0],
   redis: [5, 12],
 };
 

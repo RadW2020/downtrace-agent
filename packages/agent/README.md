@@ -507,7 +507,8 @@ required as CommonJS, on postgres.js 3.4.9. What it does not say, and why:
 When your application uses `mysql2`, the instrumentation does the same for MySQL, as a dependency of its own
 (`mysql`): the queries each request makes, how long they took, how many failed, and how long the request waited
 for a connection from a `mysql2` pool, apart from the query that followed it. TypeORM, Sequelize and knex — which
-is what Strapi uses — reach MySQL through `mysql2`, so they are observed through it; nothing is asked of them.
+is what Strapi uses — reach MySQL through `mysql2`, so they are observed through it; nothing is asked of them. So does
+MikroORM, whose `@mikro-orm/mysql` brings a `mysql2` of its own: that one is observed too, from where the package is.
 The target is the host and the port of the server (the socket path, for a socket), never the user, the password
 or the database. Prepared statements (`execute`) count like queries.
 
@@ -549,7 +550,8 @@ What the instrumentation does with the driver, and what it gives up:
 ### SQLite
 
 When your application opens a SQLite database through `better-sqlite3`, or through `libsql` — which is what
-`@libsql/client` opens a `file:` URL with, and so Drizzle and Prisma 7's adapters on either — the instrumentation
+`@libsql/client` opens a `file:` URL with, and so Drizzle and Prisma 7's adapters on either, and MikroORM's packages for
+SQLite, whose driver they bring — the instrumentation
 observes it as a dependency of its own (`sqlite`): the statements each request runs, how long they took and how many
 failed. Each statement is an operation of kind `query`, normalised as SQLite reads it: a single quote delimits a
 value; a double quote, a backtick and a bracket delimit a name, kept while nothing in it looks like a value; and a
@@ -594,7 +596,7 @@ unique index refused, are failures.
 What the instrumentation does with the driver, and what it gives up:
 
 - **It wraps one method, `Connection.prototype.command`**, which every command the driver sends goes through, on the
-  driver your application loads and on the one Mongoose brings when that is another. It is put in place from the
+  driver your application loads and on the one Mongoose or `@mikro-orm/mongodb` brings when that is another. It is put in place from the
   first request, resolved and not loaded at start-up, as for `pg`. Arguments, results and errors pass through
   untouched, and if the wrapper itself fails the command still runs. Run with the driver against the tests' own server
   on 6.21 and 7.7, with Mongoose 9, and against MongoDB 7.
@@ -936,8 +938,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mysql`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg` and `@prisma/adapter-better-sqlite3` (`@prisma/adapter-mariadb`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg` and `@prisma/adapter-better-sqlite3` (`@prisma/adapter-mariadb`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -1099,7 +1101,7 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
 `pg`, `postgres`, `mysql2`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, and the `mongodb` Mongoose brings, from where Mongoose is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, the `mongodb` Mongoose brings, from where Mongoose is, and the driver each of MikroORM's packages for a database brings, from where that package is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`

@@ -178,6 +178,32 @@ describe("what the project runs", () => {
     expect(found.repository).toBe(false);
   });
 
+  it("knows each MikroORM package for a database goes through the driver it brings, and MariaDB's is not one", async () => {
+    const found = await detect(
+      await project({}),
+      pkg({
+        dependencies: {
+          "@mikro-orm/core": "^7",
+          "@mikro-orm/postgresql": "^7",
+          "@mikro-orm/mysql": "^7",
+          "@mikro-orm/sqlite": "^7",
+          "@mikro-orm/better-sqlite": "^6",
+          "@mikro-orm/libsql": "^7",
+          "@mikro-orm/mongodb": "^7",
+          "@mikro-orm/mariadb": "^7",
+        },
+      }),
+    );
+    expect(found.observed).toEqual([
+      "@mikro-orm/postgresql",
+      "@mikro-orm/mysql",
+      "@mikro-orm/sqlite",
+      "@mikro-orm/better-sqlite",
+      "@mikro-orm/libsql",
+      "@mikro-orm/mongodb",
+    ]);
+  });
+
   /**
    * A package observed only from a version on is judged by its declared range: one that cannot reach that version is
    * not observed. node-redis publishes on its diagnostics channel from 5.12 (`instrument/redis.ts`), and a range that
@@ -202,6 +228,8 @@ describe("what the project runs", () => {
     ["mongodb", "6", true],
     ["mongoose", "^7.8.0", false],
     ["mongoose", "^8", true],
+    ["@mikro-orm/mongodb", "^5.9.8", false],
+    ["@mikro-orm/mongodb", "^6.4.0", true],
   ])("reads %s declared as %s as observed: %s", (name, range, observed) => {
     const dependencies = new Set([name]);
     const ranges = new Map([[name, range]]);

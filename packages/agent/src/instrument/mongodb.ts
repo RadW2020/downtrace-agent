@@ -183,15 +183,15 @@ export function connectionModuleOf(resolved: string): string {
 }
 
 /**
- * The start-up half, as `pg`'s: resolve `mongodb` from the application's root, and from Mongoose's, which brings its
- * own (DT-92), load nothing, and patch from the start of the first request at which the application has loaded it
- * (ADR 0209). The driver ships only CommonJS, so an `import` of it puts it in the module cache too.
+ * The start-up half, as `pg`'s: resolve `mongodb` from the application's root, and from Mongoose's and MikroORM's,
+ * which bring their own (DT-92), load nothing, and patch from the start of the first request at which the application
+ * has loaded it (ADR 0209). The driver ships only CommonJS, so an `import` of it puts it in the module cache too.
  */
 export function armMongo(deps: InstrumentMongoDeps & { from?: string | undefined }): Armed {
   return armDriver<unknown>({
     driver: "mongodb",
     from: deps.from ?? applicationEntry(),
-    beside: ["mongoose"],
+    beside: ["mongoose", "@mikro-orm/mongodb"],
     log: deps.log,
     internalError: deps.internalError,
     patch: (_module, version, require, resolved) => {
