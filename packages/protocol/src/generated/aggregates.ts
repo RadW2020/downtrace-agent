@@ -5,6 +5,18 @@
  */
 export type ObserverState = "on" | "off" | "unavailable";
 /**
+ * Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14).
+ */
+export type ObserverState1 = "on" | "off" | "unavailable";
+/**
+ * Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14).
+ */
+export type ObserverState2 = "on" | "off" | "unavailable";
+/**
+ * Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14).
+ */
+export type ObserverState3 = "on" | "off" | "unavailable";
+/**
  * A value of `Operation.kind` that its `x-error` marks as an error: the ways an error inside a request arrives, and so the sources that can produce one. A query, an outgoing call and a Redis command are things a route ran, never a source of error.
  */
 export type InRequestErrorSource = "error" | "framework" | "explicit";
@@ -235,6 +247,9 @@ export interface AgentInfo {
  */
 export interface Observers {
   pg?: ObserverState;
+  mysql?: ObserverState1;
+  sqlite?: ObserverState2;
+  mongodb?: ObserverState3;
   http?: ObserverState;
   redis?: ObserverState;
   runtime?: ObserverState;

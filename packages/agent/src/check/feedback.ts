@@ -77,6 +77,9 @@ export interface FeedbackContext {
 /** The observers whose package, when the project depends on it, means «it should have been found». */
 const OBSERVER_PACKAGES: Record<string, readonly string[]> = {
   pg: ["pg", "@prisma/adapter-pg", "postgres"],
+  mysql: ["mysql2"],
+  sqlite: ["better-sqlite3", "@prisma/adapter-better-sqlite3", "libsql", "@libsql/client"],
+  mongodb: ["mongodb", "mongoose"],
   redis: ["ioredis", "redis"],
 };
 

@@ -571,7 +571,8 @@ What the instrumentation does with the driver, and what it gives up:
   and those are named like any other. `@libsql/client` prepares at every query, so all of its are named.
 - **`@libsql/client` against a server** — Turso, `libsql://`, `http://` — is outgoing HTTP or a WebSocket, not this.
 - **`sqlite3`**, the callback driver, is not observed, and `init` says it.
-- `observers` in the batch has no key for it, as for MySQL: `DOWNTRACE_DEBUG=1` says at start-up whether it attached.
+- `observers` in the batch says `on` when a driver was found; when none was, it says nothing, as for an application
+  that does not use it.
 
 ### MongoDB
 
@@ -600,7 +601,8 @@ What the instrumentation does with the driver, and what it gives up:
 - **Mongoose 5 to 7, on the drivers 3 to 5, are not observed.** Those drivers answer through callbacks, and their pool
   hands a waiting request its connection from the request that gave it back: what a wrapper recorded would not be
   known to be the request's. `init` says it, from the range your `package.json` declares.
-- `observers` in the batch has no key for it, as for MySQL: `DOWNTRACE_DEBUG=1` says at start-up whether it attached.
+- `observers` in the batch says `on` when a driver was found; when none was, it says nothing, as for an application
+  that does not use it.
 
 ### Prisma
 
@@ -1071,10 +1073,9 @@ the link points to, as it is for Node, and the link itself when the process runs
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
 itself, which differs only for a `main` that is a symlink out of it or that has a `node_modules` of its own
 between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
-batch's observers, which `DOWNTRACE_INSPECT` shows you. A `mysql2` that cannot be resolved is not observed, and the
-batch does not say so yet: the protocol's `observers` names four switches and has no key for it, so without a
-MySQL dependency on a route you cannot tell «the application does not use it» from «it could not be found».
-`DOWNTRACE_DEBUG=1` says it at start-up.
+batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite` and `mongodb` are reported `on` when found,
+and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
+would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found.
 
 Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every

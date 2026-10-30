@@ -87,6 +87,19 @@ describe("when check offers a link", () => {
     expect(issueOf(feedback?.url ?? "").title).toBe("check: sqlite3 not observed");
   });
 
+  it.each([
+    ["mysql", "mysql2"],
+    ["sqlite", "better-sqlite3"],
+    ["sqlite", "@libsql/client"],
+    ["mongodb", "mongoose"],
+  ])("offers it when the %s observer was unavailable in a project that depends on %s", (observer, dependency) => {
+    const unavailable = { base: { observers: { [observer]: "unavailable", http: "on" } } };
+    const report = reportWith([route("GET /products")], unavailable);
+    expect(feedbackFor(report, context({ dependencies: new Set([dependency]) }))?.why).toBe(
+      `the ${observer} observer was unavailable, and the project depends on ${dependency}`,
+    );
+  });
+
   it("offers it when an observer was unavailable in a project that depends on its driver, and not otherwise", () => {
     const unavailable = { base: { observers: { pg: "unavailable", http: "on", redis: "on", runtime: "on" } } };
     const report = reportWith([route("GET /products")], unavailable);

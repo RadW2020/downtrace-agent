@@ -594,6 +594,18 @@
         "pg": {
           "$ref": "#/$defs/ObserverState"
         },
+        "mysql": {
+          "$ref": "#/$defs/ObserverState",
+          "description": "Since 0.11.0. Absent from an older sender, which had no word for it."
+        },
+        "sqlite": {
+          "$ref": "#/$defs/ObserverState",
+          "description": "Since 0.11.0. Absent from an older sender, which had no word for it."
+        },
+        "mongodb": {
+          "$ref": "#/$defs/ObserverState",
+          "description": "Since 0.11.0. Absent from an older sender, which had no word for it."
+        },
         "http": {
           "$ref": "#/$defs/ObserverState"
         },

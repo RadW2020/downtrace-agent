@@ -565,6 +565,9 @@ export class Agent {
     // the case that used to disappear into a `log.debug` nobody reads.
     const observers: Observers = {
       pg: "off",
+      mysql: "off",
+      sqlite: "off",
+      mongodb: "off",
       http: "off",
       redis: "off",
       runtime: "off",
@@ -613,8 +616,7 @@ export class Agent {
         this.postgresJsAttach = postgresJs.attach;
       }
     }
-    // MySQL through `mysql2`, the same way (DT-91). It has no key in `observers`: the protocol names four
-    // switches and the schema refuses a fifth, so whether it attached is said in the log and not in the batch.
+    // MySQL through `mysql2`, the same way (DT-91), said in `observers` since protocol 0.11.0 (ADR 0240).
     const mysqlDeps = {
       log: this.log,
       internalError,
@@ -623,9 +625,11 @@ export class Agent {
     };
     if (on.has("mysql")) {
       if (this.mysqlModule !== undefined) {
-        patchMysql(this.mysqlModule, "unknown", mysqlDeps);
+        observers.mysql = patchMysql(this.mysqlModule, "unknown", mysqlDeps) ? "on" : "unavailable";
       } else {
-        this.mysqlAttach = armMysql({ ...mysqlDeps, from: entry }).attach;
+        const armed = armMysql({ ...mysqlDeps, from: entry });
+        said(observers, "mysql", armed.state);
+        this.mysqlAttach = armed.attach;
       }
     }
     // Under Jest every module a test file requires comes from Jest's own registry, never from the cache the
@@ -662,19 +666,23 @@ export class Agent {
         patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
       });
     }
-    // MongoDB through its driver, and so through Mongoose (ADR 0237). No key in `observers` either, as for MySQL.
+    // MongoDB through its driver, and so through Mongoose (ADR 0237).
     if (on.has("mongodb")) {
       const mongoDeps = { log: this.log, internalError, errors: this.errors };
-      this.mongoAttach = armMongo({ ...mongoDeps, from: entry }).attach;
+      const armed = armMongo({ ...mongoDeps, from: entry });
+      said(observers, "mongodb", armed.state);
+      this.mongoAttach = armed.attach;
       sandbox.push({
         matches: (name, from) => name === "./connection" && requiredFrom(from, "mongodb", "lib", "cmap", "connect.js"),
         patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
       });
     }
-    // SQLite in the process, through better-sqlite3 or libsql (ADR 0239). No key in `observers`, as for MySQL.
+    // SQLite in the process, through better-sqlite3 or libsql (ADR 0239).
     if (on.has("sqlite")) {
       const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
-      this.sqliteAttach = armSqlite({ ...sqliteDeps, from: entry }).attach;
+      const armed = armSqlite({ ...sqliteDeps, from: entry });
+      said(observers, "sqlite", armed.state);
+      this.sqliteAttach = armed.attach;
       sandbox.push({
         matches: (name) => name === "better-sqlite3" || name === "libsql",
         patch: (database) => patchSqlite(database, "unknown", sqliteDeps),
@@ -1381,6 +1389,17 @@ async function settledWithin(these: Promise<unknown>[], deadline: AbortSignal): 
   });
   await Promise.race([Promise.allSettled(these), timedOut]);
   deadline.removeEventListener("abort", passed);
+}
+
+/**
+ * What an observer of a database the application may not use says once armed (ADR 0240): `on` when a driver resolved,
+ * and nothing when none did. With every switch asked for by default, a driver that does not resolve is almost always a
+ * database the application does not use, and an `unavailable` for each of those would bury the one that matters; the
+ * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093).
+ */
+function said(observers: Observers, name: "mysql" | "sqlite" | "mongodb", state: "on" | "unavailable"): void {
+  if (state === "on") observers[name] = "on";
+  else delete observers[name];
 }
 
 /**

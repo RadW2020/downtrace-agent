@@ -191,13 +191,21 @@ describe("an Express app with a mysql2 pool", () => {
     expect(shop.database.received.join("\n")).toContain("ana@cliente.com");
   });
 
-  it("says nothing about it in `observers`, which the schema does not let it name", async () => {
+  it("says it in `observers`, which names every switch since protocol 0.11.0", async () => {
     const shop = await startShop({ instrument: new Set(["mysql"]) });
     await hit(shop.url, "/orders/1");
     await shop.agent.stop();
     const batch = shop.sink.batches[0];
     expect(validate(batch), JSON.stringify(validate.errors)).toBe(true);
-    expect(batch?.agent.observers).toEqual({ pg: "off", http: "off", redis: "off", runtime: "off" });
+    expect(batch?.agent.observers).toEqual({
+      pg: "off",
+      mysql: "on",
+      sqlite: "off",
+      mongodb: "off",
+      http: "off",
+      redis: "off",
+      runtime: "off",
+    });
   });
 
   it("keeps the shape of a profile that was asked to send no text: the hashes, and not the labels", async () => {

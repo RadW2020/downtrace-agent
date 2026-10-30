@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/agent.ts";
-import type { AgentConfig, Instrument } from "../src/config.ts";
+import { type AgentConfig, INSTRUMENTS, type Instrument } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
 import { testConfig } from "./support/agent-config.ts";
 
@@ -36,13 +36,13 @@ describe("what the batch says it is observing", () => {
     }
   });
 
-  it("says off for all four rather than going quiet when nothing is instrumented", () => {
+  it("says off for every switch rather than going quiet when nothing is instrumented", () => {
     // `none` is an answer. Reporting it as absence would say «this sender did not tell us», which is what an
     // instrumentation older than 0.7.0 says, and the two must not read alike.
     const agent = new Agent(config([]), { log: quiet });
     agent.start();
     try {
-      expect(agent.observers).toEqual({ pg: "off", http: "off", redis: "off", runtime: "off" });
+      expect(agent.observers).toEqual(Object.fromEntries(INSTRUMENTS.map((name) => [name, "off"])));
     } finally {
       void agent.stop();
     }
@@ -67,6 +67,16 @@ describe("what the batch says it is observing", () => {
     agent.start();
     try {
       expect(agent.observers?.pg).toBe("unavailable");
+    } finally {
+      void agent.stop();
+    }
+  });
+
+  it("says unavailable for MySQL too, which it could only log before protocol 0.11.0 (ADR 0240)", () => {
+    const agent = new Agent(config(["mysql"]), { log: quiet, mysqlModule: { notAConnection: true } });
+    agent.start();
+    try {
+      expect(agent.observers?.mysql).toBe("unavailable");
     } finally {
       void agent.stop();
     }

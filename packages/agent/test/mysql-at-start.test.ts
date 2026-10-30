@@ -143,9 +143,18 @@ describe("mysql2 as an application starts it", () => {
         ].sort(),
       );
 
-      // The first batch of the process says what it watches, and has no word for MySQL.
-      expect(batches[0]?.agent.observers).toMatchObject({ pg: "unavailable", http: "on", redis: "on", runtime: "on" });
-      expect(batches[0]?.agent.observers).not.toHaveProperty("mysql");
+      // The first batch of the process says what it watches, MySQL among it (protocol 0.11.0).
+      expect(batches[0]?.agent.observers).toMatchObject({
+        pg: "unavailable",
+        mysql: "on",
+        http: "on",
+        redis: "on",
+        runtime: "on",
+      });
+      // And says nothing of the databases whose drivers this application does not have: every switch is asked for,
+      // and an `unavailable` for each would bury the one that matters (ADR 0240). Postgres keeps its own.
+      expect(batches[0]?.agent.observers).not.toHaveProperty("sqlite");
+      expect(batches[0]?.agent.observers).not.toHaveProperty("mongodb");
 
       const wire = batches.map((b) => JSON.stringify(b)).join("\n");
       for (const secret of ["dt-user-zq", "hunter2-zq", "payroll-zq", "ana-zq"]) {

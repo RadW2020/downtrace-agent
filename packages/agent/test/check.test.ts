@@ -773,6 +773,11 @@ describe("a suite whose application keeps its data in SQLite, through better-sql
   it("sees the lookups of a statement prepared at start-up multiplied, and exits 1", () => {
     expectLookupsMultiplied(checked);
   });
+
+  it("says the sqlite observer was on, on both sides", () => {
+    expect(checked.report.base?.observers.sqlite).toBe("on");
+    expect(checked.report.change?.observers.sqlite).toBe("on");
+  });
 });
 
 describe("a suite Jest runs, whose application keeps its data in a file through @libsql/client", () => {

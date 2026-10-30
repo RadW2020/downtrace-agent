@@ -1,3 +1,4 @@
+import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import {
   configFromEnv,
@@ -82,6 +83,12 @@ describe("which observers to run", () => {
     expect([...parseInstruments(undefined)].sort()).toEqual([...INSTRUMENTS].sort());
     expect([...parseInstruments("all")].sort()).toEqual([...INSTRUMENTS].sort());
     expect([...parseInstruments("")].sort()).toEqual([...INSTRUMENTS].sort());
+  });
+
+  it("has a key in the protocol's `observers` for every switch, and the protocol none for another (ADR 0240)", () => {
+    const observers = (AGGREGATES_SCHEMA_V0 as { $defs: { Observers: { properties: Record<string, unknown> } } }).$defs
+      .Observers.properties;
+    expect(Object.keys(observers).sort()).toEqual([...INSTRUMENTS].sort());
   });
 
   it("still understands none, which is what the documented switch has always meant", () => {
