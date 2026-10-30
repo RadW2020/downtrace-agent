@@ -1709,6 +1709,56 @@ describe("the base of the project", () => {
     expect(checked.report.failure?.advice).not.toContain('"link"');
   });
 
+  /**
+   * parse-community/parse-server, in the stranger campaign: its specs require `lib/`, the Babel build of `src/` that git
+   * ignores, so the base's checkout had none, and its first spec failed on `Cannot find module '../lib/…'` with nothing
+   * said of why. The advice names what the base lacks and the prepare that builds it; with that prepare, the base runs.
+   */
+  async function builtLibProject(config: Record<string, unknown>): Promise<Project> {
+    const files = appFiles({});
+    const made = await project({
+      ...files,
+      "app.mjs": `import { createRequire } from "node:module";\ncreateRequire(import.meta.url)("./lib/greeting");\n${files["app.mjs"] ?? ""}`,
+      "src/greeting.js": 'module.exports = "hi";\n',
+      "build.mjs":
+        'import { copyFileSync, mkdirSync } from "node:fs";\nmkdirSync("lib", { recursive: true });\n' +
+        'copyFileSync("src/greeting.js", "lib/greeting.js");\n',
+      "package.json": JSON.stringify({ name: "built-lib", private: true, scripts: { build: "node build.mjs" } }),
+      "package-lock.json": "{}\n",
+      ".gitignore": "node_modules/\nlib/\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs", ...config } }),
+    });
+    // What the build left in the working tree.
+    await made.write("lib/greeting.js", 'module.exports = "hi";\n');
+    await made.write("regressions.json", JSON.stringify(REGRESSION));
+    return made;
+  }
+
+  it("says what a base lacks that a build makes, and the prepare that builds it", async () => {
+    const made = await builtLibProject({});
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "command-failed", side: "base" });
+    expect(checked.report.failure?.outputTail).toContain("Cannot find module './lib/greeting'");
+    const advice = checked.report.failure?.advice ?? "";
+    expect(advice).toContain("The base has no lib/");
+    expect(advice).toContain('"prepare": "npm run build"');
+    expect(advice).toContain('"link": true');
+
+    // The advice, followed: the base builds, and the comparison is made.
+    const followed = await builtLibProject({ prepare: "npm run build", link: true });
+    const compared = await check(followed, ["--base", "HEAD"]);
+    expect(compared.report.status, JSON.stringify(compared.report.failure)).toBe("compared");
+    expect(route(compared.report, "POST /checkout").verdict).toBe("worse");
+  });
+
+  it("says the prepare did not make what the base lacks, when one was given", async () => {
+    const made = await builtLibProject({ prepare: "true", link: true });
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.report.failure).toMatchObject({ code: "command-failed", side: "base" });
+    expect(checked.report.failure?.advice).toContain("prepare ran and did not make it");
+  });
+
   it("is a project inside a repository: the base runs in the same directory of its checkout", async () => {
     const inner = Object.fromEntries(
       Object.entries(appFiles({})).map(([path, text]) => [`services/api/${path}`, text]),

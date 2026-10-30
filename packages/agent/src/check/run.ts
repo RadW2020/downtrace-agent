@@ -2,10 +2,17 @@ import { execFile, spawn } from "node:child_process";
 import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
-import { parsePackageJson } from "../init/detect.ts";
+import { commandFor, LOCKFILES, type PackageManager, packageManagerOf, parsePackageJson } from "../init/detect.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
 import { CONFIG_FILE } from "./config.ts";
-import { adviceForNoProfile, adviceForUnlinkedBase, noProfile, unseenObservers } from "./hints.ts";
+import {
+  adviceForNoProfile,
+  adviceForUnbuiltBase,
+  adviceForUnlinkedBase,
+  missingModulesIn,
+  noProfile,
+  unseenObservers,
+} from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
   type CheckReport,
@@ -371,6 +378,54 @@ async function dependenciesFrom(dir: string, top: string): Promise<boolean> {
   }
 }
 
+/** The endings a spec written without one is found with: what `require` tries, and what a TypeScript build leaves. */
+const SPEC_ENDINGS = ["", ".js", ".cjs", ".mjs", ".json", ".ts"];
+
+/**
+ * The first directory or file on the way to one of `missing` that the base lacks and the working tree has, from the top
+ * of the repository, a directory with its `/`: what a build makes and git does not keep. Undefined when none is —
+ * what was not found is not under the base, or the working tree lacks it too, and then it is not a build's.
+ */
+async function lackedByBase(missing: readonly string[], baseDir: string, top: string): Promise<string | undefined> {
+  // Only a sentence of advice rides on these reads: one that fails is a file that is not there.
+  const kind = async (at: string) => (await stat(at).catch(() => undefined))?.isDirectory();
+  for (const file of missing) {
+    if (!inside(baseDir, file)) continue;
+    const parts = relative(baseDir, file).split(sep);
+    for (let i = 1; i <= parts.length; i += 1) {
+      const piece = parts.slice(0, i).join(sep);
+      if ((await kind(join(baseDir, piece))) !== undefined) continue;
+      for (const ending of i === parts.length ? SPEC_ENDINGS : [""]) {
+        const directory = await kind(join(top, piece + ending));
+        if (directory !== undefined) return directory ? `${piece}${sep}` : piece + ending;
+      }
+      break;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The project's `build` script as its package manager runs it — the one `packageManager` names, else the one of the
+ * nearest lockfile up to the top of the repository, else npm — or undefined when it has none.
+ */
+async function buildCommandIn(dir: string, top: string): Promise<string | undefined> {
+  const text = await readFile(join(dir, "package.json"), "utf8").catch(() => undefined);
+  const read = text === undefined ? undefined : parsePackageJson(text, "package.json");
+  if (read?.ok !== true || read.pkg.scripts.build === undefined) return undefined;
+  let lockfile: PackageManager | undefined;
+  for (let at = dir; lockfile === undefined; at = dirname(at)) {
+    for (const [name, manager] of LOCKFILES) {
+      if ((await stat(join(at, name)).catch(() => undefined)) !== undefined) {
+        lockfile = manager;
+        break;
+      }
+    }
+    if (at === top || dirname(at) === at) break;
+  }
+  return commandFor(packageManagerOf(read.pkg.packageManager, lockfile), "build");
+}
+
 function inside(parent: string, path: string): boolean {
   const from = relative(parent, path);
   return from === "" || (!from.startsWith("..") && !from.startsWith(sep));
@@ -573,6 +628,17 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
       inBase: await dependenciesFrom(baseProject, baseDir),
       configFile: options.configFile ?? CONFIG_FILE,
     });
+  /** What to add to a failure of the base's, when its tests asked for what a build makes and the base lacks it. */
+  const unbuilt = async (outputTail: string): Promise<string | undefined> => {
+    const missing = await lackedByBase(missingModulesIn(outputTail, baseProject), baseDir, top);
+    if (missing === undefined) return undefined;
+    return adviceForUnbuiltBase({
+      missing,
+      build: await buildCommandIn(baseProject, top),
+      prepare: options.prepare !== undefined,
+      configFile: options.configFile ?? CONFIG_FILE,
+    });
+  };
   if (link) {
     try {
       await linkDependencies(top, baseDir, made.links);
@@ -653,7 +719,7 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
         ? "the test command was stopped"
         : `the test command exited with ${ran.exitCode ?? "no status"}`;
       const fix = side === "base" ? `make the tests pass on ${ref}, or choose another --base` : "fix the tests first";
-      const more = side === "base" ? await unlinked() : undefined;
+      const more = side === "base" ? ((await unlinked()) ?? (await unbuilt(ran.outputTail))) : undefined;
       throw new CheckFailure("command-failed", side, what, {
         advice: `A comparison needs two runs that end well: ${fix}.${more === undefined ? "" : ` ${more}`}`,
         outputTail: ran.outputTail,

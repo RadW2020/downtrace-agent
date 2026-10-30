@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 /**
  * What to say when a run left no profile (LOC-01, COB-01).
  *
@@ -167,6 +170,83 @@ export function adviceForUnlinkedBase(base: UnlinkedBase): string | undefined {
     'The base has no node_modules and the working tree has one: with "prepare" given, check links nothing into the ' +
     `base. If prepare does not install the dependencies, add "link": true to "check" in ${base.configFile}, and ` +
     "the working tree's are linked into the base before prepare runs."
+  );
+}
+
+/**
+ * The three ways a runner says a module was not found: Node's CommonJS message, followed by its require stack, whose
+ * first file is the one that asked (Vitest writes it too, for a `require`); the ESM message, Node's with the path and
+ * Vitest's with the spec, followed by the file that imported it; and Jest's, with that file relative to where it runs.
+ */
+const NOT_FOUND = [
+  /Cannot find module '([^']+)'\s*\n\s*Require stack:\s*\n\s*- ([^\n]+)/g,
+  /Cannot find module '([^']+)' imported from '?([^'\s]+)'?/g,
+  /Cannot find module '([^']+)' from '([^']+)'/g,
+];
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the colours a runner writes are control characters.
+const COLOURS = /\u001b\[[0-9;]*m/g;
+
+/**
+ * The files a failed run's output says it could not find, as absolute paths, in the order it says them: a relative
+ * spec from the directory of the file that asked for it, an absolute one or a `file:` URL as it is, and the file
+ * itself from `cwd` when the runner wrote it relative (Jest). A bare name is a package, which the dependencies answer
+ * for and a build does not: left out, as is a builtin.
+ */
+export function missingModulesIn(output: string, cwd: string): string[] {
+  const text = output.replace(COLOURS, "");
+  const found: string[] = [];
+  for (const pattern of NOT_FOUND) {
+    for (const [, spec = "", from = ""] of text.matchAll(pattern)) {
+      const asker = path.resolve(cwd, from.trim());
+      let missing: string | undefined;
+      if (spec.startsWith("file:")) {
+        try {
+          missing = fileURLToPath(spec);
+        } catch {
+          missing = undefined;
+        }
+      } else if (path.isAbsolute(spec)) {
+        missing = spec;
+      } else if (spec.startsWith("./") || spec.startsWith("../")) {
+        missing = path.resolve(path.dirname(asker), spec);
+      }
+      if (missing !== undefined && !found.includes(missing)) found.push(missing);
+    }
+  }
+  return found;
+}
+
+/** What the base lacked that the working tree has, of what its run could not find. */
+export interface UnbuiltBase {
+  /**
+   * The first directory or file on the way to it that the base lacks, from the top of the repository, as the sentence
+   * writes it: a directory ends in its `/` (`lib/`).
+   */
+  missing: string;
+  /** The project's own `build` script, as its package manager runs it, or undefined when it has none. */
+  build: string | undefined;
+  /** Whether the configuration gives `prepare`. */
+  prepare: boolean;
+  /** The file the configuration was read from, as the person reaches it from where `check` ran. */
+  configFile: string;
+}
+
+/**
+ * The sentence for a base whose tests asked for what a build makes: a file git ignores and the working tree has, which
+ * a fresh checkout does not (Parse Server's specs require `lib/`, its Babel build). `prepare` builds it; with `link`,
+ * on the working tree's dependencies, since a build needs its compiler and installs nothing.
+ */
+export function adviceForUnbuiltBase(base: UnbuiltBase): string {
+  const missing = base.missing;
+  if (base.prepare) {
+    return `The base has no ${missing}, which the working tree has: prepare ran and did not make it. The tests ask for it, so "prepare" in ${base.configFile} has to build it.`;
+  }
+  const build = base.build ?? `<the command that builds ${missing}>`;
+  return (
+    `The base has no ${missing}, which the working tree has and git does not keep: a fresh checkout lacks what a build ` +
+    `makes, and the tests ask for it. Add "prepare": "${build}" and "link": true to "check" in ${base.configFile}: the ` +
+    "working tree's dependencies are linked into the base, and prepare builds it there before the tests run."
   );
 }
 

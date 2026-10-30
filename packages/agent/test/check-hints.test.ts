@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   adviceForNoProfile,
+  adviceForUnbuiltBase,
   adviceForUnlinkedBase,
   LOSING_RUNNERS,
+  missingModulesIn,
   noProfile,
   OBSERVER_PACKAGES,
   scriptOf,
@@ -228,6 +230,84 @@ describe("what is said of a base that failed with no dependencies, because prepa
     ["the working tree has no node_modules, so linking would bring nothing", { inWorkingTree: false }],
   ])("says nothing of it when %s", (_why, differs) => {
     expect(adviceForUnlinkedBase({ ...unlinked, ...differs })).toBeUndefined();
+  });
+});
+
+/**
+ * The modules a failed run could not find, read off its output as Node, Vitest and Jest write it (the messages are the
+ * ones Node 26, Vitest 4 and Jest 30 printed for a test that requires a file nobody built). A spec that names a
+ * package is the dependencies' business, and left out.
+ */
+describe("the modules a run's output says it could not find", () => {
+  const at = "/tmp/dt/base";
+
+  it("reads Node's CommonJS message, from the first file of its require stack", () => {
+    const output = [
+      "Error: Cannot find module '../lib/Adapters/Cache/SchemaCache'",
+      "Require stack:",
+      `- ${at}/spec/helper.js`,
+      "    at Function._resolveFilename (node:internal/modules/cjs/loader:1430:15)",
+    ].join("\n");
+    expect(missingModulesIn(output, at)).toEqual([`${at}/lib/Adapters/Cache/SchemaCache`]);
+  });
+
+  it("reads the ESM message, Node's with the path and Vitest's with the spec", () => {
+    const node = `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${at}/dist/app.js' imported from ${at}/test/b.mjs`;
+    const vitest = `Error: Cannot find module '../dist/app.js' imported from ${at}/test/c.test.mjs`;
+    expect(missingModulesIn(`${node}\n${vitest}`, at)).toEqual([`${at}/dist/app.js`]);
+  });
+
+  it("reads Jest's, whose file is relative to where the tests run", () => {
+    expect(missingModulesIn("    Cannot find module '../dist/app' from 'test/d.test.js'", at)).toEqual([
+      `${at}/dist/app`,
+    ]);
+  });
+
+  it("reads through the colours a runner writes, and leaves out a package and a builtin", () => {
+    const output = [
+      `\u001b[31mError: Cannot find module './gen/schema.js' imported from ${at}/src/a.mjs\u001b[39m`,
+      "Error: Cannot find module 'left-pad'",
+      "Require stack:",
+      `- ${at}/src/b.js`,
+      `Error: Cannot find module '@scope/pkg/sub' imported from ${at}/src/c.mjs`,
+    ].join("\n");
+    expect(missingModulesIn(output, at)).toEqual([`${at}/src/gen/schema.js`]);
+  });
+
+  it("finds nothing in an output that says nothing of a module", () => {
+    expect(missingModulesIn("AssertionError: expected 200, got 500", at)).toEqual([]);
+  });
+});
+
+describe("the advice for a base that lacks what a build makes", () => {
+  it("names what is missing, the build, and both keys, in the file the configuration was read from", () => {
+    const advice = adviceForUnbuiltBase({
+      missing: "lib/",
+      build: "npm run build",
+      prepare: false,
+      configFile: "downtrace.json",
+    });
+    expect(advice).toContain("lib/");
+    expect(advice).toContain('"prepare": "npm run build"');
+    expect(advice).toContain('"link": true');
+    expect(advice).toContain('to "check" in downtrace.json');
+  });
+
+  it("says what to write when the project has no build script to name", () => {
+    const advice = adviceForUnbuiltBase({ missing: "dist/", build: undefined, prepare: false, configFile: "d.json" });
+    expect(advice).toContain('"prepare": "<the command that builds dist/>"');
+  });
+
+  it("says the prepare given did not make it, and asks for nothing it already has", () => {
+    const advice = adviceForUnbuiltBase({
+      missing: "lib/",
+      build: "npm run build",
+      prepare: true,
+      configFile: "downtrace.json",
+    });
+    expect(advice).toContain("prepare");
+    expect(advice).toContain("lib/");
+    expect(advice).not.toContain('"link": true');
   });
 });
 
