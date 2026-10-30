@@ -1,5 +1,12 @@
 # @downtrace/protocol
 
+## 0.11.0
+
+### Minor Changes
+
+- e78ac13: Protocol 0.11.0 also lets `observers` name `mysql`, `sqlite` and `mongodb`, beside `pg`, `http`, `redis` and `runtime`: every switch of `DOWNTRACE_INSTRUMENT` has a key, with the same three states and absence read as «did not say».
+- bae0493: Protocol 0.11.0: a dependency may be of kind `sqlite`, a SQLite database the process opens itself, whose statements are operations of kind `query` normalised as SQLite reads them.
+
 ## 0.10.0
 
 ### Minor Changes
