@@ -1,5 +1,22 @@
 # @downtrace/agent
 
+## 0.15.0
+
+### Minor Changes
+
+- 06743b6: Prisma 3.15 to 6 on its own engine is observed (ADR 0241): each operation of a client `prisma-client-js` generated — `findMany Post`, `create User`, a raw query by its SQL — is a query of the dependency its datasource is, Postgres, MySQL, SQLite or MongoDB, so the loop that runs a `findMany` per item is seen and `check` calls the route worse. A new switch, `prisma`, said in `observers`. A client with a driver adapter is left to its driver's observer, as before. `init` says `@prisma/client` is observed from 3.15, and names a Prisma adapter whose driver is not (`@prisma/adapter-mariadb`).
+- 1ceafb6: SQLite through `sqlite3` (node-sqlite3, 5 and 6) is observed, the callback driver Knex and Sequelize open SQLite with: each statement is a query of the `sqlite` dependency, read as SQLite, counted from the call in the request that made it to the callback the driver answers through, a statement that does not compile counted as failed. `init` no longer names `sqlite3` as not observed.
+
+### Patch Changes
+
+- 3dedf37: `downtrace check` says, in its notes and its feedback, an observer that found no driver the project's `package.json` depends on — MySQL, SQLite, MongoDB and Prisma, which leave their key out of `observers` when they find none, as much as Postgres's `unavailable` — and no longer says Postgres's `unavailable` for a project that does not depend on Postgres.
+- b903c4a: `downtrace check` refuses `"link": true` with a `prepare` that runs an install itself (`pnpm install`, `npm ci`, `yarn`…), which would write through the links into the working tree's `node_modules`; the advice to add `link` names the configuration file that was read, `--config` included; and a link made before one that failed is taken away first, like the rest.
+- 2f46f17: `downtrace init` reads the Prisma schema where Prisma looks for it, and names `@prisma/client` as not observed when its generator is `prisma-client` on Prisma's own engine before 7 — what `prisma init` writes in 6.19, a client the instrumentation cannot reach — instead of saying it is observed.
+- 560597b: A Prisma client generated into the project's own directory (`output = "../generated/prisma"`, what Prisma 6 asks for) is observed in an application Node runs: Prisma copies its runtime beside such a client, and the instrumentation only looked for `@prisma/client`'s, so every route of such an application was `nothing-evaluated` (ADR 0242).
+- 0bb1c75: Under `downtrace check`, a Prisma client Vitest runs from the project's own directory (`output = "../generated/prisma"`) is observed: Vitest loads that client outside Node's module cache, where the instrumentation looked for it, and every route came back `nothing-evaluated`. Under `check` Prisma's runtime is now wrapped as Node loads it, so every client class it makes is patched where it is made (ADR 0243).
+- Updated dependencies [06743b6]
+  - @downtrace/protocol@0.12.0
+
 ## 0.14.0
 
 ### Minor Changes

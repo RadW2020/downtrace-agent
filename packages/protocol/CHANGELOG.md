@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.12.0
+
+### Minor Changes
+
+- 06743b6: Protocol 0.12.0: `observers` has a `prisma` switch, and a Prisma client's operation is a `query` of the dependency its datasource is, labelled by the action and the model (`findMany Post`).
+
 ## 0.11.0
 
 ### Minor Changes
