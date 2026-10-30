@@ -133,7 +133,9 @@ describe("a project it can configure", () => {
    * later every route came back `nothing-observed`. What the project's work goes through is known before a run.
    */
   it.each([
-    [{ express: "^5", "better-sqlite3": "^11" }, ["better-sqlite3"]],
+    // SQLite through better-sqlite3 and libsql (ADR 0239); `sqlite3` answers through callbacks and is not observed.
+    [{ express: "^5", "better-sqlite3": "^11" }, []],
+    [{ express: "^5", sqlite3: "^5" }, ["sqlite3"]],
     [{ express: "^5", mongoose: "^9" }, []],
     // Mongoose before 8 runs on a driver before 6, which answers through callbacks (ADR 0237).
     [{ express: "^4", mongoose: "^5.7.7" }, ["mongoose"]],
@@ -146,7 +148,8 @@ describe("a project it can configure", () => {
     [{ express: "^5", redis: "latest" }, []],
     [{ express: "^5", "@prisma/client": "^6" }, ["@prisma/client"]],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-pg": "^7" }, []],
-    [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, ["@libsql/client"]],
+    [{ hono: "^4", "drizzle-orm": "^0.44", "@libsql/client": "^0.15" }, []],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-better-sqlite3": "^7" }, []],
   ])(
     "says which of its data packages it does not observe, %j, and is configured all the same",
     async (deps, unobserved) => {

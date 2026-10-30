@@ -34,7 +34,7 @@ export const MAX_TEXT = 1024;
  * different character, and the only way to read a text safely is to read it the way the server that will run it
  * does — which is the database the driver talks to, and not something the text says about itself (DT-91).
  */
-export type Dialect = "postgres" | "mysql";
+export type Dialect = "postgres" | "mysql" | "sqlite";
 
 /** What a character that opens a quoted span is the start of. */
 export interface Quote {
@@ -43,6 +43,11 @@ export interface Quote {
    * and all, for as long as it is one — closed, and with nothing in it that looks like a value (gh-350).
    */
   opens: "string" | "identifier";
+  /**
+   * The character that closes it, where it is not the one that opened it: SQLite's `[name]`. A closer of its own
+   * found where nothing is open is a character the scanner has no rule for.
+   */
+  closes?: string;
   /**
    * Whether a backslash takes the next character with it, so that `\'` does not close. Where the server reads
    * it both ways depending on a setting the text does not carry (`standard_conforming_strings` in Postgres,
@@ -103,6 +108,23 @@ export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
     hashComments: true,
     dashCommentNeedsBlank: true,
     executableComments: true,
+  },
+  sqlite: {
+    // A double quote is a name, as in Postgres, and so are SQLite's two compatibility quotes (ADR 0239). SQLite
+    // takes a double-quoted word for a string when no column has that name, and better-sqlite3 is built without
+    // that; a value written that way is read as a name, and what looks like a value in it goes all the same.
+    // There is no backslash escape anywhere: `'C:\'` is a string that ends at its second quote.
+    quotes: {
+      "'": { opens: "string", backslash: false },
+      '"': { opens: "identifier", backslash: false },
+      "`": { opens: "identifier", backslash: false },
+      "[": { opens: "identifier", backslash: false, closes: "]" },
+    },
+    dollarQuoting: false,
+    nestedComments: false,
+    hashComments: false,
+    dashCommentNeedsBlank: false,
+    executableComments: false,
   },
 };
 
@@ -183,11 +205,11 @@ const PUNCTUATION = new Set("()[]{},;.:*=<>+-/%|&^~!?@#'\"`$".split("").filter((
  * as `?` — unreadable, and with one hash for every column of that length the statement could have named. A long
  * run with a digit in it, or whose case breaks it into words too short to be words, is still a value and goes.
  */
-function quotedName(quoted: string, delimiter: string): string {
+function quotedName(quoted: string, open: string, close: string): string {
   const inner = quoted.slice(1, -1);
   const sanitised = sanitizeName(inner);
   if (sanitised === inner) return quoted;
-  return meaningful(sanitised) ? `${delimiter}${sanitised}${delimiter}` : "?";
+  return meaningful(sanitised) ? `${open}${sanitised}${close}` : "?";
 }
 
 /**
@@ -212,6 +234,10 @@ export function normalizeQuery(sql: string, dialect: Dialect = "postgres"): stri
 
 function scanQuery(sql: string, dialect: Dialect): Scan {
   const rules = DIALECTS[dialect];
+  /** The closers that are characters of their own: one found with nothing open is not SQL this dialect runs. */
+  const closers = new Set(
+    Object.values(rules.quotes).flatMap((quote) => (quote.closes === undefined ? [] : [quote.closes])),
+  );
   /** Where Postgres has dollar quoting a `$` opens a body; where it has none, it is a letter of a name. */
   const dollarIsName = !rules.dollarQuoting;
   const out: string[] = [];
@@ -241,6 +267,7 @@ function scanQuery(sql: string, dialect: Dialect): Scan {
     // prevent (gh-348). Unread is unread: it becomes `?`, as an unclosed literal does, in every dialect.
     const quote = rules.quotes[c];
     if (quote !== undefined) {
+      const close = quote.closes ?? c;
       const start = i;
       i++;
       let closed = false;
@@ -249,8 +276,8 @@ function scanQuery(sql: string, dialect: Dialect): Scan {
           i += 2;
           continue;
         }
-        if (sql[i] === c) {
-          if (sql[i + 1] === c) {
+        if (sql[i] === close) {
+          if (sql[i + 1] === close) {
             i += 2;
             continue;
           }
@@ -265,9 +292,10 @@ function scanQuery(sql: string, dialect: Dialect): Scan {
         emit("?");
         continue;
       }
-      emit(quote.opens === "string" ? "?" : quotedName(sql.slice(start, i), c));
+      emit(quote.opens === "string" ? "?" : quotedName(sql.slice(start, i), c, close));
       continue;
     }
+    if (closers.has(c)) unknown = true;
 
     if (c === "$" && rules.dollarQuoting) {
       // `$1`: a placeholder the application already wrote.

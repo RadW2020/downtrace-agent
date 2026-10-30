@@ -35,6 +35,9 @@ const POSTGRESJS_DIR = dirname(dirname(dirname(createRequire(import.meta.url).re
 const MONGODB_DIR = dirname(createRequire(import.meta.url).resolve("mongodb/package.json"));
 const MONGOOSE_DIR = dirname(createRequire(import.meta.url).resolve("mongoose/package.json"));
 const MONGO_WIRE = new URL("./support/mongo-wire.mjs", import.meta.url);
+/** SQLite's two drivers: better-sqlite3, and `@libsql/client`, whose exports name no `package.json` either. */
+const BETTER_SQLITE3_DIR = dirname(createRequire(import.meta.url).resolve("better-sqlite3/package.json"));
+const LIBSQL_CLIENT_DIR = dirname(dirname(createRequire(import.meta.url).resolve("@libsql/client")));
 /** Hono's, the same way: `require` resolves `dist/cjs/index.js`. */
 const HONO_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("hono"))));
 
@@ -667,6 +670,125 @@ describe("a Mongoose suite Jest runs, as a Mongoose boilerplate is tested", () =
   });
 
   it("sees the lookups the tests' own copy of the driver sent, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * SQLite in the process (ADR 0239): better-sqlite3 with its statement prepared once at start-up, as its users write it,
+ * and `@libsql/client` on a file under Jest, as Drizzle's starters are tested. Nothing to start: the database is a file.
+ */
+const BETTER_SQLITE3_APP = `
+import { readFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import express from "express";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const db = new Database(":memory:");
+db.exec('create table "users" ("id" integer primary key, "email" text)');
+db.prepare('insert into "users" ("email") values (?)').run("ana@example.com");
+const byId = db.prepare('select * from "users" where "id" = ?');
+const app = express();
+app.get("/users/:id", (req, res) => {
+  for (let i = 0; i < lookups; i += 1) byId.get(Number(req.params.id));
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/users/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+db.close();
+`;
+
+const LIBSQL_SUITE = `
+const http = require("node:http");
+const { mkdtempSync, readFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const express = require("express");
+const { createClient } = require("@libsql/client");
+
+const client = createClient({ url: "file:" + join(mkdtempSync(join(tmpdir(), "libsql-")), "app.db") });
+beforeAll(async () => {
+  await client.execute('create table "users" ("id" integer primary key, "email" text)');
+  await client.execute({ sql: 'insert into "users" ("email") values (?)', args: ["ana@example.com"] });
+});
+afterAll(() => client.close());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) {
+      await client.execute({ sql: 'select * from "users" where "id" = ?', args: [Number(req.params.id)] });
+    }
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+async function sqliteProject(files: Record<string, string>, command: string, link: Record<string, string>) {
+  const made = await createProject({
+    ...files,
+    "lookups.txt": "1",
+    ".gitignore": "node_modules\n",
+    "downtrace.json": JSON.stringify({ check: { command } }),
+  });
+  projects.push(made);
+  await mkdir(join(made.dir, "node_modules", "@libsql"), { recursive: true });
+  for (const [name, dir] of Object.entries(link)) await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  // The change: the route now looks its user up once per item, four times a request.
+  await made.write("lookups.txt", "4");
+  return check(made, ["--base", "HEAD"]);
+}
+
+describe("a suite whose application keeps its data in SQLite, through better-sqlite3", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await sqliteProject({ "app.mjs": BETTER_SQLITE3_APP }, "node app.mjs", {
+      express: EXPRESS_DIR,
+      "better-sqlite3": BETTER_SQLITE3_DIR,
+    });
+  });
+
+  it("sees the lookups of a statement prepared at start-up multiplied, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+describe("a suite Jest runs, whose application keeps its data in a file through @libsql/client", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await sqliteProject(
+      {
+        "users.test.js": LIBSQL_SUITE,
+        "package.json": JSON.stringify({ name: "libsql-jest", private: true, jest: { transform: {} } }),
+      },
+      "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, "@libsql/client": LIBSQL_CLIENT_DIR },
+    );
+  });
+
+  it("sees the lookups the tests' own copy of libsql ran, multiplied", () => {
     expectLookupsMultiplied(checked);
   });
 });

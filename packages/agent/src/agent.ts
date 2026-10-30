@@ -42,6 +42,7 @@ import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
+import { armSqlite, patchSqlite } from "./instrument/sqlite.ts";
 import { attachJest, requiredFrom, type SandboxPatch } from "./jest.ts";
 import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -215,6 +216,8 @@ export class Agent {
    * the cache is the dialect it reads it in (ADR 0086). Never shared with the Postgres one.
    */
   private readonly mysqlFingerprints: FingerprintCache | undefined;
+  /** And SQLite's, which reads a bracket as a name and a backslash as nothing (ADR 0239). */
+  private readonly sqliteFingerprints: FingerprintCache | undefined;
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
   private readonly errors: ErrorFingerprintCache;
   /**
@@ -269,6 +272,8 @@ export class Agent {
   private mysqlAttach: (() => boolean) | undefined;
   /** MongoDB's, the same way, for the driver and the copy Mongoose brings (ADR 0237). */
   private mongoAttach: (() => boolean) | undefined;
+  /** SQLite's, the same way, for better-sqlite3 and the libsql `@libsql/client` brings (ADR 0239). */
+  private sqliteAttach: (() => boolean) | undefined;
   /** postgres.js's, under the `pg` switch: the same moment, and an import for its ESM copy (ADR 0235). */
   private postgresJsAttach: (() => boolean) | undefined;
   private stopHttp: (() => void) | undefined;
@@ -388,6 +393,7 @@ export class Agent {
     // reported error, and the cost of always having them is two empty maps and no work on the hot path.
     if (config.instrument.has("pg") && config.pgDepth === "full") this.fingerprints = new FingerprintCache();
     if (config.instrument.has("mysql")) this.mysqlFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "mysql");
+    if (config.instrument.has("sqlite")) this.sqliteFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "sqlite");
     this.errors = new ErrorFingerprintCache();
     this.named = config.minimal ? withheldName : undefined;
     this.calls = new CallFingerprints("call", { named: this.named });
@@ -665,6 +671,15 @@ export class Agent {
         patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
       });
     }
+    // SQLite in the process, through better-sqlite3 or libsql (ADR 0239). No key in `observers`, as for MySQL.
+    if (on.has("sqlite")) {
+      const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
+      this.sqliteAttach = armSqlite({ ...sqliteDeps, from: entry }).attach;
+      sandbox.push({
+        matches: (name) => name === "better-sqlite3" || name === "libsql",
+        patch: (database) => patchSqlite(database, "unknown", sqliteDeps),
+      });
+    }
     this.stopJest = attachJest({ patches: sandbox, internalError });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
@@ -681,7 +696,8 @@ export class Agent {
       observers.redis = "on";
     }
     // A request context is only worth opening if something is going to record into it.
-    this.instrumented = on.has("pg") || on.has("mysql") || on.has("mongodb") || on.has("http") || on.has("redis");
+    this.instrumented =
+      on.has("pg") || on.has("mysql") || on.has("sqlite") || on.has("mongodb") || on.has("http") || on.has("redis");
     // Self-observation, not instrumentation of the application: Node's own histogram and performance observer.
     if (on.has("runtime")) {
       this.runtime.start();
@@ -1181,6 +1197,7 @@ export class Agent {
     if (this.pgAttach?.()) this.pgAttach = undefined;
     if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
     if (this.mongoAttach?.()) this.mongoAttach = undefined;
+    if (this.sqliteAttach?.()) this.sqliteAttach = undefined;
     if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global

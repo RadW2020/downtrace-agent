@@ -6,4 +6,4 @@ export const DEPENDENCIES_MAX_ITEMS_V0 = 64;
 export const EVIDENCE_REQUESTS_MAX_ITEMS_V0 = 4096;
 
 /** The dependency kinds the schema names, in the order it names them. */
-export const DEPENDENCY_KINDS_V0 = ["postgres", "mysql", "mongodb", "redis", "http"] as const;
+export const DEPENDENCY_KINDS_V0 = ["postgres", "mysql", "sqlite", "mongodb", "redis", "http"] as const;

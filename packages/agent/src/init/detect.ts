@@ -31,8 +31,9 @@ export const FRAMEWORK_PACKAGES = [
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2`, MongoDB through `mongodb` (and Mongoose, which sends every
- * command through it), Redis through `ioredis` and `redis` (node-redis, from 5.12). A
+ * postgres.js (`postgres`), MySQL through `mysql2`, SQLite through `better-sqlite3` (and Prisma's adapter for it) and
+ * `libsql` (and `@libsql/client`, which opens a file with it), MongoDB through `mongodb` (and Mongoose, which sends
+ * every command through it), Redis through `ioredis` and `redis` (node-redis, from 5.12). A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -42,6 +43,10 @@ export const OBSERVED_PACKAGES = [
   "slonik",
   "postgres",
   "mysql2",
+  "better-sqlite3",
+  "@prisma/adapter-better-sqlite3",
+  "libsql",
+  "@libsql/client",
   "mongodb",
   "mongoose",
   "ioredis",
@@ -53,16 +58,7 @@ export const OBSERVED_PACKAGES = [
  * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
  * route whose work went through it.
  */
-export const UNOBSERVED_PACKAGES = [
-  "mysql",
-  "better-sqlite3",
-  "sqlite3",
-  "@libsql/client",
-  "mssql",
-  "oracledb",
-  "kafkajs",
-  "amqplib",
-] as const;
+export const UNOBSERVED_PACKAGES = ["mysql", "sqlite3", "mssql", "oracledb", "kafkajs", "amqplib"] as const;
 
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's client when it has no driver adapter the
@@ -74,10 +70,15 @@ export function unobservedOf(
   ranges: ReadonlyMap<string, string> = new Map(),
 ): string[] {
   const unobserved: string[] = UNOBSERVED_PACKAGES.filter((name) => dependencies.has(name));
-  if (dependencies.has("@prisma/client") && !dependencies.has("@prisma/adapter-pg")) unobserved.push("@prisma/client");
+  if (dependencies.has("@prisma/client") && !PRISMA_ADAPTERS.some((adapter) => dependencies.has(adapter))) {
+    unobserved.push("@prisma/client");
+  }
   for (const name of OBSERVED_PACKAGES) if (dependencies.has(name) && tooOld(name, ranges)) unobserved.push(name);
   return unobserved;
 }
+
+/** Prisma's driver adapters whose driver the instrumentation observes: with one, Prisma 7 queries through it. */
+const PRISMA_ADAPTERS = ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3"] as const;
 
 /** The packages of `OBSERVED_PACKAGES` a project depends on, in a version the instrumentation observes. */
 export function observedOf(

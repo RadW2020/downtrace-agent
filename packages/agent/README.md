@@ -11,6 +11,7 @@ It observes six things, each of which can be switched off with `DOWNTRACE_INSTRU
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma's too, [where it goes through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
 | `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
+| `sqlite` | [SQLite](#sqlite) statements per request through `better-sqlite3` or `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either), their time and errors |
 | `mongodb` | [MongoDB](#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
 | `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
@@ -64,7 +65,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
 | `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
 | `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — the floor and the ceiling are derived, see below). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
-| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,mongodb,http,redis,runtime` |
+| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,sqlite,mongodb,http,redis,runtime` |
 | `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch for weighing the fine detail and the profile on their own (ADR 0080, gh-570); leave it alone in production |
 | `DOWNTRACE_PG_DEPTH` | no | `full` (default), `context` or `wrapper`: how much of the Postgres observer's attribution runs — `context` attributes the calls and the waits without looking at the query text, `wrapper` only leaves the patch in place. The benchmark's switch for weighing the observer part by part (gh-592); leave it alone in production |
 | `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
@@ -544,6 +545,34 @@ What the instrumentation does with the driver, and what it gives up:
   ([below](#beside-your-error-tracker)): the mechanism is the same — it resolves the driver and loads nothing — but
   nobody has run the pair.
 
+### SQLite
+
+When your application opens a SQLite database through `better-sqlite3`, or through `libsql` — which is what
+`@libsql/client` opens a `file:` URL with, and so Drizzle and Prisma 7's adapters on either — the instrumentation
+observes it as a dependency of its own (`sqlite`): the statements each request runs, how long they took and how many
+failed. Each statement is an operation of kind `query`, normalised as SQLite reads it: a single quote delimits a
+value; a double quote, a backtick and a bracket delimit a name, kept while nothing in it looks like a value; and a
+backslash escapes nothing. `select * from "users" where "email" = 'ana@example.com'` is
+`select * from "users" where "email" = ?`.
+
+What the instrumentation does with the driver, and what it gives up:
+
+- **It wraps the methods that run a statement** — `run`, `get`, `all`, `iterate` — on the class every statement of the
+  driver shares, and `exec`, and `prepare` to learn each statement's text where libsql keeps none. A statement your
+  application prepares once at start-up and runs in every request is counted at each run. It is put in place from the
+  first request, resolved and not loaded at start-up, as for `pg`, on the driver your application loads and on the
+  libsql `@libsql/client` brings. Results and errors pass through untouched. Run with better-sqlite3 12, libsql 0.5
+  and `@libsql/client` 0.18, on `:memory:`.
+- **One dependency, with no target.** A database file's path is your machine's; every file is one `sqlite`.
+- **Preparing is not running**, and is not counted. `iterate` counts the statement once, when the loop starts; the time
+  the loop spends reading rows is the loop's.
+- **A libsql statement prepared before the instrumentation was in place** — at start-up, before the first request —
+  is counted against the dependency and has no label: libsql keeps no text of a statement. better-sqlite3 keeps it,
+  and those are named like any other. `@libsql/client` prepares at every query, so all of its are named.
+- **`@libsql/client` against a server** — Turso, `libsql://`, `http://` — is outgoing HTTP or a WebSocket, not this.
+- **`sqlite3`**, the callback driver, is not observed, and `init` says it.
+- `observers` in the batch has no key for it, as for MySQL: `DOWNTRACE_DEBUG=1` says at start-up whether it attached.
+
 ### MongoDB
 
 When your application uses MongoDB through its official driver, `mongodb` 6 or 7 — and so through Mongoose 8 and 9,
@@ -873,8 +902,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mongodb` (6 and later), `mongoose` (8 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mysql`, `better-sqlite3`, `sqlite3`, `@libsql/client`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and `@prisma/client` without `@prisma/adapter-pg` — before Prisma 7 its queries go through an engine of its own —, and `mongodb` before 6, `mongoose` before 8 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `mongodb` (6 and later), `mongoose` (8 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `sqlite3`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and `@prisma/client` without `@prisma/adapter-pg` or `@prisma/adapter-better-sqlite3` — before Prisma 7 its queries go through an engine of its own —, and `mongodb` before 6, `mongoose` before 8 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -1035,8 +1064,8 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `postgres`, `mysql2`, `mongodb` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, and the `mongodb` Mongoose brings, from where Mongoose is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+`pg`, `postgres`, `mysql2`, `better-sqlite3`, `libsql`, `mongodb` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, and the `mongodb` Mongoose brings, from where Mongoose is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`

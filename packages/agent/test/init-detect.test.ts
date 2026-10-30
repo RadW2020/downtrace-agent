@@ -163,7 +163,7 @@ describe("what the project runs", () => {
       }),
     );
     expect(found.frameworks).toEqual(["express"]);
-    expect(found.observed).toEqual(["pg", "postgres", "ioredis", "redis"]);
+    expect(found.observed).toEqual(["pg", "postgres", "better-sqlite3", "ioredis", "redis"]);
     expect(found.repository).toBe(true);
     expect(found.next).toBeUndefined();
   });

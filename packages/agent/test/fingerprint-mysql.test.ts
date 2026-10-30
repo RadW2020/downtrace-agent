@@ -76,6 +76,8 @@ describe.each(Object.keys(DIALECTS) as Dialect[])("every quote the %s dialect de
   });
 
   it.each(quotes)("%s: what it opens, closed, doubled or escaped, is read as the dialect reads it", (open, quote) => {
+    // What closes it: the same character, or the one the dialect pairs with it (`[` and `]` in SQLite).
+    const close = quote.closes ?? open;
     if (quote.opens === "string") {
       // A value: it goes whatever is inside, and doubling the delimiter puts one inside without closing.
       expect(of(`SELECT ${open}zq-secret${open}`).text).toBe("SELECT ?");
@@ -83,22 +85,23 @@ describe.each(Object.keys(DIALECTS) as Dialect[])("every quote the %s dialect de
       expect(of(`SELECT ${open}zq-secret${open} FROM t WHERE a = 1`).text).toBe("SELECT ? FROM t WHERE a = ?");
     } else {
       // A name: it stays, with its delimiters, and a doubled delimiter is a character of the name.
-      expect(of(`SELECT ${open}Order Items${open}`).text).toBe(`SELECT ${open}Order Items${open}`);
-      expect(of(`SELECT ${open}a${open}${open}b${open}`).text).toBe(`SELECT ${open}a${open}${open}b${open}`);
+      expect(of(`SELECT ${open}Order Items${close}`).text).toBe(`SELECT ${open}Order Items${close}`);
+      expect(of(`SELECT ${open}a${close}${close}b${close}`).text).toBe(`SELECT ${open}a${close}${close}b${close}`);
       // And it is only a name while nothing in it is a value (gh-350).
-      expect(of(`SELECT * FROM ${open}user ana@cliente.com 4821${open}`).text).not.toContain("ana@cliente.com");
-      expect(of(`SELECT * FROM ${open}user ana@cliente.com 4821${open}`).text).not.toContain("4821");
+      expect(of(`SELECT * FROM ${open}user ana@cliente.com 4821${close}`).text).not.toContain("ana@cliente.com");
+      expect(of(`SELECT * FROM ${open}user ana@cliente.com 4821${close}`).text).not.toContain("4821");
     }
-    expect(of(`SELECT ${open}Order Items${open}`).class, "a closed one is understood").toBeUndefined();
+    expect(of(`SELECT ${open}Order Items${close}`).class, "a closed one is understood").toBeUndefined();
 
     // A backslash takes the delimiter with it only where the dialect says it does.
-    const escaped = of(`SELECT ${open}a\\${open}zq-secret${open}`);
+    const escaped = of(`SELECT ${open}a\\${close}zq-secret${close}`);
     if (quote.backslash) {
       expect(escaped.class, "the escaped delimiter did not close it").toBeUndefined();
-      expect(escaped.text).toBe(quote.opens === "string" ? "SELECT ?" : `SELECT ${open}a\\${open}zq-secret${open}`);
+      expect(escaped.text).toBe(quote.opens === "string" ? "SELECT ?" : `SELECT ${open}a\\${close}zq-secret${close}`);
     } else {
       // It closed at the delimiter after the backslash, and what follows is read as syntax, which here is a
-      // name and a minus and a name; the third delimiter then opens another and nothing closes it.
+      // name and a minus and a name; the third delimiter then opens another and nothing closes it — or, where the
+      // closer is a character of its own, closes what nothing opened.
       expect(escaped.class, "the third delimiter never closes").toBeDefined();
       expect(escaped.text).toBe("");
     }
@@ -107,16 +110,17 @@ describe.each(Object.keys(DIALECTS) as Dialect[])("every quote the %s dialect de
   it.each(quotes)("%s: a long name stays where it opens a name, and a long value goes either way", (open, quote) => {
     // An ORM quotes every name, and a column of sixteen characters is an ordinary one: the sanitiser's long run is
     // for tokens, and a name that reads as words is not one. What reads as a value goes, whatever opened it.
-    expect(of(`SELECT ${open}tenant_8f3a9c2e1b7d4f60${open} FROM t`).text).toBe("SELECT ? FROM t");
-    expect(of(`SELECT ${open}tenant_kQzXwPfLmNbVtRsY${open} FROM t`).text).toBe("SELECT ? FROM t");
-    expect(of(`SELECT ${open}tenant_kqzxwpflmnbvtrsy${open} FROM t`).text).toBe("SELECT ? FROM t");
-    const last = of(`SELECT ${open}dateOfLastAccess${open} FROM t`);
-    const first = of(`SELECT ${open}dateOfFirstAccess${open} FROM t`);
+    const close = quote.closes ?? open;
+    expect(of(`SELECT ${open}tenant_8f3a9c2e1b7d4f60${close} FROM t`).text).toBe("SELECT ? FROM t");
+    expect(of(`SELECT ${open}tenant_kQzXwPfLmNbVtRsY${close} FROM t`).text).toBe("SELECT ? FROM t");
+    expect(of(`SELECT ${open}tenant_kqzxwpflmnbvtrsy${close} FROM t`).text).toBe("SELECT ? FROM t");
+    const last = of(`SELECT ${open}dateOfLastAccess${close} FROM t`);
+    const first = of(`SELECT ${open}dateOfFirstAccess${close} FROM t`);
     if (quote.opens === "string") {
       expect(last.text).toBe("SELECT ? FROM t");
       expect(last.hash, "a value is not an identity").toBe(first.hash);
     } else {
-      expect(last.text).toBe(`SELECT ${open}dateOfLastAccess${open} FROM t`);
+      expect(last.text).toBe(`SELECT ${open}dateOfLastAccess${close} FROM t`);
       expect(last.hash, "two columns are two queries").not.toBe(first.hash);
     }
   });

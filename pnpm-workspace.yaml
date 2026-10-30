@@ -5,3 +5,6 @@ packages:
 allowBuilds:
   '@parcel/watcher': false
   unrs-resolver: false
+  # The agent's tests observe SQLite through it, and it builds its native addon in an install script: it fetches a
+  # prebuilt binary, and compiles only when none fits.
+  better-sqlite3: true

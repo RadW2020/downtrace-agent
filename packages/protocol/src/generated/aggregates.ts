@@ -20,7 +20,18 @@ export interface AggregatesBatch {
   /**
    * Protocol version this batch conforms to. Every published minor of v0 stays acceptable.
    */
-  protocol: "0.1.0" | "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0" | "0.9.0" | "0.10.0";
+  protocol:
+    | "0.1.0"
+    | "0.2.0"
+    | "0.3.0"
+    | "0.4.0"
+    | "0.5.0"
+    | "0.6.0"
+    | "0.7.0"
+    | "0.8.0"
+    | "0.9.0"
+    | "0.10.0"
+    | "0.11.0";
   agent: AgentInfo;
   instance: InstanceInfo;
   deploy: DeployInfo;
@@ -444,9 +455,9 @@ export interface PostgresStats {
  */
 export interface Dependency {
   /**
-   * What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`).
+   * What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`). `sqlite` since 0.11.0: a SQLite database in the process, one dependency with an empty `target`, whose statements are operations of kind `query`.
    */
-  kind: "postgres" | "mysql" | "mongodb" | "redis" | "http";
+  kind: "postgres" | "mysql" | "sqlite" | "mongodb" | "redis" | "http";
   /**
    * Host for outgoing HTTP (`api.stripe.com`); empty when the dependency is a single one, like the application's own database.
    */
