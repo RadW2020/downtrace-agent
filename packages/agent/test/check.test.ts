@@ -1089,6 +1089,119 @@ describe("the base of the project", () => {
     expect(checked.report.failure).toMatchObject({ code: "setup-failed", side: "base" });
     expect(checked.report.failure?.message).toContain("exited with 3");
     expect(checked.report.failure?.outputTail).toContain("no");
+    // The working tree has no node_modules either: linking would have brought nothing, so it is not advised.
+    expect(checked.report.failure?.advice).toBeNull();
+  });
+
+  /**
+   * sahat/hackathon-starter, in the stranger campaign: its postinstall compiles the CSS the pages need into a file
+   * git ignores, so the base's checkout has none and its pages answered 500. The base needs `prepare` to compile it,
+   * and the compiler is in the working tree's node_modules, which `prepare` alone left unlinked. `fake-sass` is that
+   * compiler; the application will not start without `styles.css`.
+   */
+  async function compiledCssProject(config: Record<string, unknown>): Promise<Project> {
+    const files = appFiles({});
+    const made = await project({
+      ...files,
+      "app.mjs": `import { readFileSync } from "node:fs";\nif (!readFileSync("styles.css", "utf8").includes("body")) throw new Error("no styles.css");\n${files["app.mjs"] ?? ""}`,
+      ".gitignore": "node_modules/\nstyles.css\n.env\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs", ...config } }),
+    });
+    await made.write(
+      "node_modules/fake-sass/build.mjs",
+      'import { writeFileSync } from "node:fs";\nwriteFileSync("styles.css", "body {}\\n");\n',
+    );
+    // What the postinstall left in the working tree, and the machine's configuration.
+    await made.write("styles.css", "body {}\n");
+    await made.write(".env", "SECRET=hunter2-zq\n");
+    await made.write("regressions.json", JSON.stringify(REGRESSION));
+    return made;
+  }
+
+  it("links the working tree's dependencies before prepare runs, when link says so, and gives them back untouched", async () => {
+    // The prepare also asserts what it runs with: the links already there, and no package manager that would
+    // install through them on its own.
+    const made = await compiledCssProject({
+      link: true,
+      prepare:
+        'test -L node_modules && grep -q SECRET= .env && test "$npm_config_verify_deps_before_run" = false && ' +
+        'test "$pnpm_config_verify_deps_before_run" = false && node node_modules/fake-sass/build.mjs',
+    });
+    const before = await snapshot(made);
+    const tmp = await room();
+    const checked = await check(made, ["--base", "HEAD"], { TMPDIR: tmp });
+    expect(checked.report.status, checked.stderr + JSON.stringify(checked.report.failure)).toBe("compared");
+    expect(route(checked.report, "POST /checkout").verdict).toBe("worse");
+    expect(await snapshot(made)).toEqual(before);
+    expect(await worktrees(made)).toEqual([made.dir]);
+    expect(await readdir(tmp)).toEqual([]);
+  });
+
+  it("links nothing when prepare is given without link, and says link when the prepare fails for want of them", async () => {
+    const made = await compiledCssProject({ prepare: "node node_modules/fake-sass/build.mjs" });
+    const before = await snapshot(made);
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "setup-failed", side: "base" });
+    expect(checked.report.failure?.message).toContain("the prepare command exited with 1");
+    expect(checked.report.failure?.outputTail).toContain("fake-sass");
+    expect(checked.report.failure?.advice).toContain('"link": true');
+    expect(checked.report.failure?.advice).toContain("If prepare does not install");
+    expect(await snapshot(made)).toEqual(before);
+  });
+
+  /** A project whose application imports a package the working tree has installed, and git ignores. */
+  async function dependentProject(config: Record<string, unknown>): Promise<Project> {
+    const files = appFiles({});
+    const made = await project({
+      ...files,
+      "app.mjs": `import "fake-dep";\n${files["app.mjs"] ?? ""}`,
+      ".gitignore": "node_modules/\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs", ...config } }),
+    });
+    await made.write(
+      "node_modules/fake-dep/package.json",
+      '{"name":"fake-dep","type":"module","exports":"./index.js"}',
+    );
+    await made.write("node_modules/fake-dep/index.js", "export default 1;\n");
+    await made.write("regressions.json", JSON.stringify(REGRESSION));
+    return made;
+  }
+
+  it("says link when the base's tests fail with no dependencies, prepare given and link not", async () => {
+    const made = await dependentProject({ prepare: "true" });
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "command-failed", side: "base" });
+    expect(checked.report.failure?.outputTail).toContain("fake-dep");
+    expect(checked.report.failure?.advice).toContain("make the tests pass on HEAD");
+    expect(checked.report.failure?.advice).toContain('"link": true');
+  });
+
+  it("takes the links away when the prepare fails after them, and follows none of them", async () => {
+    const made = await compiledCssProject({ link: true, prepare: "test -L node_modules && echo linked && exit 3" });
+    const before = await snapshot(made);
+    const tmp = await room();
+    const checked = await check(made, ["--base", "HEAD"], { TMPDIR: tmp });
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "setup-failed", side: "base" });
+    expect(checked.report.failure?.message).toContain("exited with 3");
+    expect(checked.report.failure?.outputTail).toContain("linked");
+    // Linked already, so there is nothing to advise about linking.
+    expect(checked.report.failure?.advice).toBeNull();
+    expect(await snapshot(made)).toEqual(before);
+    expect(await worktrees(made)).toEqual([made.dir]);
+    expect(await readdir(tmp)).toEqual([]);
+  });
+
+  it("links nothing when link is false and there is no prepare, as the key says", async () => {
+    const made = await dependentProject({ link: false });
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "command-failed", side: "base" });
+    expect(checked.report.failure?.outputTail).toContain("fake-dep");
+    // The person said false: the report does not argue with it.
+    expect(checked.report.failure?.advice).not.toContain('"link"');
   });
 
   it("is a project inside a repository: the base runs in the same directory of its checkout", async () => {

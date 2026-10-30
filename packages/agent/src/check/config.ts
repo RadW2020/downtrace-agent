@@ -21,6 +21,12 @@ import { dirname, join } from "node:path";
  * Every key of `check` is optional, and a command on the command line takes the place of `command`. A key
  * `check` does not know is an error and not a shrug: «commmand» left alone would be a missing command said in
  * the wrong words. Keys outside `check` are not this file's to judge.
+ *
+ * `prepare` and `link` say what the base gets that a fresh checkout lacks. Unsaid, the working tree's dependencies
+ * are linked into the base when there is no `prepare`, and are not when there is one, which installs the base's own.
+ * `"link": true` links them before a `prepare` that needs them and does not install (a project that compiles what
+ * git ignores, as a `postinstall` does), and `"link": false` links nothing, `prepare` or not: the key says what is
+ * done, whatever the other one says.
  */
 
 export const CONFIG_FILE = "downtrace.json";
@@ -30,6 +36,11 @@ export interface CheckConfig {
   command: string | undefined;
   /** Run in the base checkout before the tests, for what a fresh checkout lacks. */
   prepare: string | undefined;
+  /**
+   * Whether the working tree's dependencies and environment files are linked into the base, before `prepare`.
+   * Absent: they are when there is no `prepare`, and are not when there is.
+   */
+  link: boolean | undefined;
   /** Routes the project has, as `METHOD /template`: what lets a route no test calls be named. */
   routes: string[];
   /** How long a test run may take, in seconds. Absent: the default. */
@@ -41,12 +52,13 @@ export type ConfigResult = { ok: true; config: CheckConfig } | { ok: false; reas
 export const EMPTY_CONFIG: CheckConfig = {
   command: undefined,
   prepare: undefined,
+  link: undefined,
   routes: [],
   timeoutSeconds: undefined,
 };
 
 /** The keys of `check`, in the order the README documents them. */
-export const CONFIG_KEYS = ["command", "prepare", "routes", "timeout"] as const;
+export const CONFIG_KEYS = ["command", "routes", "prepare", "link", "timeout"] as const;
 
 /** `["npm", "test", "--", "a b"]` as one line a shell reads back the same way. */
 export function shellJoin(args: readonly string[]): string {
@@ -99,6 +111,7 @@ export function parseConfig(text: string, source: string): ConfigResult {
   if (check.prepare !== undefined && (typeof check.prepare !== "string" || check.prepare.trim() === "")) {
     return fail('"check.prepare" must be a command line');
   }
+  if (check.link !== undefined && typeof check.link !== "boolean") return fail('"check.link" must be true or false');
 
   const routes: string[] = [];
   if (check.routes !== undefined) {
@@ -120,6 +133,7 @@ export function parseConfig(text: string, source: string): ConfigResult {
     config: {
       command,
       prepare: typeof check.prepare === "string" ? check.prepare : undefined,
+      link: check.link,
       routes,
       timeoutSeconds: typeof timeout === "number" ? timeout : undefined,
     },

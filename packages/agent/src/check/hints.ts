@@ -15,6 +15,9 @@
  * runs the tests without it. That is read from the command and from the script it runs, and said with how to keep
  * the value, and never as a runner's pool (the stranger campaign). A run in which no process wrote anything is said
  * as such: a process that loads the instrumentation writes as it ends, unless it ends abruptly having seen nothing.
+ *
+ * And what to add when the base failed on a checkout with no dependencies because `check` linked none into it:
+ * `adviceForUnlinkedBase`, at the end.
  */
 
 export interface LosingRunner {
@@ -133,4 +136,34 @@ export function noProfile(run: NoProfileRun): { message: string; advice: string 
     return { message, advice: named ? `${NOTHING_WROTE} ${adviceForNoProfile(run.command)}` : NOTHING_WROTE };
   }
   return { message, advice: adviceForNoProfile(run.command) };
+}
+
+/**
+ * What a base that failed lacked, when it may be dependencies `check` did not link: with `prepare` given and `link`
+ * unsaid, nothing is linked, on the reading that `prepare` installs the base's own. A `prepare` that only builds what
+ * git ignores — hackathon-starter compiles its CSS in `postinstall`, and its base needs `npm run scss` — then fails
+ * for want of the compiler, or leaves a base whose tests do (the stranger campaign).
+ */
+export interface UnlinkedBase {
+  /** Whether the configuration gives `prepare`. */
+  prepare: boolean;
+  /** `check.link` as the configuration says it, undefined when it does not. */
+  link: boolean | undefined;
+  /** Whether the working tree has a `node_modules` in the project's directory, or above it to the top. */
+  inWorkingTree: boolean;
+  /** The same, in the base's checkout, after its `prepare`. */
+  inBase: boolean;
+}
+
+/**
+ * The sentence that points at `"link": true`, or undefined when that is not the likely cause: the base was linked,
+ * the person said `false`, the base has dependencies of its own, or the working tree has none to link.
+ */
+export function adviceForUnlinkedBase(base: UnlinkedBase): string | undefined {
+  if (!base.prepare || base.link !== undefined || base.inBase || !base.inWorkingTree) return undefined;
+  return (
+    'The base has no node_modules and the working tree has one: with "prepare" given, check links nothing into the ' +
+    'base. If prepare does not install the dependencies, add "link": true to "check" in downtrace.json, and the ' +
+    "working tree's are linked into the base before prepare runs."
+  );
 }

@@ -19,7 +19,8 @@ describe("reading the configuration", () => {
     const text = JSON.stringify({
       check: {
         command: "npm test",
-        prepare: "pnpm install --offline",
+        prepare: "pnpm run scss",
+        link: true,
         routes: ["get /products", "POST /checkout"],
         timeout: 120,
       },
@@ -28,7 +29,8 @@ describe("reading the configuration", () => {
       ok: true,
       config: {
         command: "npm test",
-        prepare: "pnpm install --offline",
+        prepare: "pnpm run scss",
+        link: true,
         routes: ["GET /products", "POST /checkout"],
         timeoutSeconds: 120,
       },
@@ -46,6 +48,26 @@ describe("reading the configuration", () => {
     }
   });
 
+  it("leaves link unsaid when the file does not say it: whether the base is linked then follows prepare", () => {
+    for (const text of [
+      "{}",
+      '{"check":{}}',
+      '{"check":{"prepare":"npm run scss"}}',
+      '{"check":{"command":"npm test"}}',
+    ]) {
+      expect(parseConfig(text, "x")).toMatchObject({ ok: true, config: { link: undefined } });
+    }
+  });
+
+  it("reads link as written, false with no prepare included: a key that says false is not linked", () => {
+    expect(parseConfig('{"check":{"link":false}}', "x")).toMatchObject({ ok: true, config: { link: false } });
+    expect(parseConfig('{"check":{"link":true}}', "x")).toMatchObject({ ok: true, config: { link: true } });
+    expect(parseConfig('{"check":{"link":false,"prepare":"npm ci"}}', "x")).toMatchObject({
+      ok: true,
+      config: { link: false, prepare: "npm ci" },
+    });
+  });
+
   it("does not judge the keys outside check, which are not its to judge", () => {
     expect(parseConfig('{"project":"x","check":{"command":"npm test"}}', "x").ok).toBe(true);
   });
@@ -59,6 +81,14 @@ describe("reading the configuration", () => {
     ["an empty command", '{"check":{"command":" "}}', '"check.command" must be'],
     ["a command list with a number in it", '{"check":{"command":["npm",1]}}', '"check.command" must be'],
     ["a prepare that is not a string", '{"check":{"prepare":true}}', '"check.prepare" must be'],
+    ["a link that is a string", '{"check":{"link":"true"}}', '"check.link" must be true or false'],
+    ["a link that is a number", '{"check":{"link":1}}', '"check.link" must be true or false'],
+    ["a link that is null", '{"check":{"link":null}}', '"check.link" must be true or false'],
+    [
+      "a link that is a list of directories",
+      '{"check":{"link":["node_modules"]}}',
+      '"check.link" must be true or false',
+    ],
     ["routes that are not a list", '{"check":{"routes":"GET /a"}}', '"check.routes" must be a list'],
     ["a route with no method", '{"check":{"routes":["/a"]}}', 'write it as "GET /products"'],
     ["a route that is not a string", '{"check":{"routes":[4]}}', 'write it as "GET /products"'],

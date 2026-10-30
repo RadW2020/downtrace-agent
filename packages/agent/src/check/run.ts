@@ -1,10 +1,10 @@
 import { execFile, spawn } from "node:child_process";
 import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { parsePackageJson } from "../init/detect.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
-import { adviceForNoProfile, noProfile } from "./hints.ts";
+import { adviceForNoProfile, adviceForUnlinkedBase, noProfile } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
   type CheckReport,
@@ -63,8 +63,13 @@ export interface CheckOptions {
   base: string | undefined;
   /** The test command, run by a shell. */
   command: string;
-  /** Run in the base before the tests; when it is given the base's dependencies are its business, not ours. */
+  /** Run in the base before the tests, after the links when there are any. */
   prepare: string | undefined;
+  /**
+   * Whether the working tree's dependencies and environment files are linked into the base. Undefined: they are
+   * when there is no `prepare`, and are not when there is one, whose business the base's dependencies then are.
+   */
+  link: boolean | undefined;
   /** Routes the project declares, so that one no test calls can be named. */
   routes: readonly string[];
   timeoutMs: number;
@@ -280,8 +285,9 @@ export function runEnv(
 /**
  * Links each directory of dependencies of the working tree into the base, in the same place. A fresh checkout has
  * none, and installing them would need the network. The base then runs on the project's own dependencies:
- * a package of the repository itself, linked into them, is the working tree's and not the base's — what
- * `prepare` is for.
+ * a package of the repository itself, linked into them, is the working tree's and not the base's — what a `prepare`
+ * that installs is for, and why `prepare` alone links nothing. With `link` it links them first, for a `prepare` that
+ * needs them and installs nothing: one that installed would write through the links into the working tree's.
  *
  * And each environment file the base lacks: a `.env` git ignores is the machine's configuration and not code
  * under comparison, the same on both sides, and without it the base's tests of a project that reads one fail
@@ -340,6 +346,18 @@ async function scriptsIn(dir: string): Promise<Record<string, string>> {
   }
   const read = parsePackageJson(text, "package.json");
   return read.ok ? read.pkg.scripts : {};
+}
+
+/**
+ * Whether Node, resolving a package from `dir`, would find a `node_modules` there or above it, up to `top`: a
+ * workspace's dependencies are often hoisted to the top of the repository.
+ */
+async function dependenciesFrom(dir: string, top: string): Promise<boolean> {
+  for (let at = dir; ; at = dirname(at)) {
+    // A directory that cannot be read has none to give: this only chooses a sentence of advice.
+    if ((await stat(join(at, "node_modules")).catch(() => undefined))?.isDirectory() === true) return true;
+    if (at === top || dirname(at) === at) return false;
+  }
 }
 
 function inside(parent: string, path: string): boolean {
@@ -527,7 +545,16 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     });
   }
 
-  if (options.prepare === undefined) {
+  const link = options.link ?? options.prepare === undefined;
+  /** What to add to a failure of the base's, when it may be the dependencies that were not linked into it. */
+  const unlinked = async (): Promise<string | undefined> =>
+    adviceForUnlinkedBase({
+      prepare: options.prepare !== undefined,
+      link: options.link,
+      inWorkingTree: await dependenciesFrom(cwd, top),
+      inBase: await dependenciesFrom(baseProject, baseDir),
+    });
+  if (link) {
     try {
       made.links.push(...(await linkDependencies(top, baseDir)));
     } catch (err) {
@@ -537,23 +564,32 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
         `could not link the dependencies into the base: ${(err as Error).message}`,
       );
     }
-  } else {
+  }
+  if (options.prepare !== undefined) {
     options.progress(`base: preparing: ${options.prepare}`);
+    const env: NodeJS.ProcessEnv = { ...withoutDowntrace(options.env), DOWNTRACE_CHECK_ORIGIN: cwd };
+    if (link) {
+      // The dependencies are the working tree's, linked: a `pnpm run` in the prepare must not install into them, as
+      // a run of the tests must not (`runEnv`).
+      env.npm_config_verify_deps_before_run = "false";
+      env.pnpm_config_verify_deps_before_run = "false";
+    }
     const prepared = await runCommand({
       command: options.prepare,
       cwd: baseProject,
-      env: { ...withoutDowntrace(options.env), DOWNTRACE_CHECK_ORIGIN: cwd },
+      env,
       timeoutMs: options.timeoutMs,
       signal: options.signal,
     }).catch((err: unknown) => {
       throw new CheckFailure("setup-failed", "base", `could not start the prepare command: ${(err as Error).message}`);
     });
     if (prepared.timedOut || prepared.exitCode !== 0) {
+      const advice = await unlinked();
       throw new CheckFailure(
         "setup-failed",
         "base",
         `the prepare command ${prepared.timedOut ? "timed out" : `exited with ${prepared.exitCode ?? "no status"}`}`,
-        { outputTail: prepared.outputTail },
+        { outputTail: prepared.outputTail, ...(advice === undefined ? {} : { advice }) },
       );
     }
   }
@@ -598,8 +634,9 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
         ? "the test command was stopped"
         : `the test command exited with ${ran.exitCode ?? "no status"}`;
       const fix = side === "base" ? `make the tests pass on ${ref}, or choose another --base` : "fix the tests first";
+      const more = side === "base" ? await unlinked() : undefined;
       throw new CheckFailure("command-failed", side, what, {
-        advice: `A comparison needs two runs that end well: ${fix}.`,
+        advice: `A comparison needs two runs that end well: ${fix}.${more === undefined ? "" : ` ${more}`}`,
         outputTail: ran.outputTail,
       });
     }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { adviceForNoProfile, LOSING_RUNNERS, noProfile, scriptOf } from "../src/check/hints.ts";
+import {
+  adviceForNoProfile,
+  adviceForUnlinkedBase,
+  LOSING_RUNNERS,
+  noProfile,
+  scriptOf,
+  type UnlinkedBase,
+} from "../src/check/hints.ts";
 
 /**
  * A run that left no profile is said, with the likely cause and what to use instead (LOC-01, COB-01). The file does
@@ -180,4 +187,29 @@ describe("the script a test command runs", () => {
       expect(scriptOf(command)).toBeUndefined();
     },
   );
+});
+
+describe("what is said of a base that failed with no dependencies, because prepare was given without link", () => {
+  // The stranger campaign: hackathon-starter compiles its CSS in postinstall, into a file git ignores, so its base
+  // needs `prepare: "npm run scss"`; with prepare given nothing was linked, and the prepare failed on `sass: not
+  // found`. What it needed was the working tree's node_modules linked first, and the report did not say so.
+  const unlinked: UnlinkedBase = { prepare: true, link: undefined, inWorkingTree: true, inBase: false };
+
+  it("names the key, and the condition it is safe on: a prepare that does not install", () => {
+    const advice = adviceForUnlinkedBase(unlinked) ?? "";
+    expect(advice).toContain('"link": true');
+    expect(advice).toContain("downtrace.json");
+    expect(advice).toContain("If prepare does not install");
+    expect(advice).toContain("before prepare runs");
+  });
+
+  it.each<[string, Partial<UnlinkedBase>]>([
+    ["link is false, which the person chose", { link: false }],
+    ["link is true, so the base was linked", { link: true }],
+    ["there is no prepare, so the base was linked", { prepare: false }],
+    ["the base has a node_modules, which prepare made", { inBase: true }],
+    ["the working tree has no node_modules, so linking would bring nothing", { inWorkingTree: false }],
+  ])("says nothing of it when %s", (_why, differs) => {
+    expect(adviceForUnlinkedBase({ ...unlinked, ...differs })).toBeUndefined();
+  });
 });

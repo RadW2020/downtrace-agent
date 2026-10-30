@@ -111,6 +111,7 @@ export async function runCli(deps: CliDeps): Promise<number> {
     base: parsed.base,
     command,
     prepare: configured.prepare,
+    link: configured.link,
     routes: configured.routes,
     timeoutMs: timeoutSeconds * 1000,
     env: deps.env,
