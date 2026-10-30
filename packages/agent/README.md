@@ -1119,13 +1119,15 @@ depends on — `mysql2` declared and `mysql` left out —, and none for a databa
 
 Express route templates are used when present, and for a mounted router the template is the mount **as it was
 registered** plus the route: `app.use("/tenants/:tenant", router)` is `/tenants/:tenant/users/:id` for every
-tenant — one route, not one per tenant. That is also what keeps a tenant's name out of the template when it is
+tenant — one route, not one per tenant. A router inside an app that is itself mounted has both mounts:
+`app.use("/1", api)` and `api.use(router)`, as Parse Server mounts its routes, is `/1/classes/:className`. That is also what keeps a tenant's name out of the template when it is
 a plain word the heuristic below leaves as written. The route a request matched keeps that template when it fails
 and the error is answered outside the router that held it: the mount is read from the dispatch that matched the
 route, not from the `baseUrl` Express leaves behind. When a mount's pattern cannot be recovered with confidence,
 its segments come out as `:param` instead of the values they carried — the requests still group under one stable
 route. That happens for a mount registered with a regular expression (there is no pattern to read), for an app
-mounted under a router (Express records no prefix in that case), for a mount registered before the instrumentation
+mounted under a router (Express records no prefix in that case), for a request through one of two mounts of the same
+app (Express records only the last, and the other is never named after it), for a mount registered before the instrumentation
 started — start the agent before the routes are registered, and `--import` does that for you — and for routes
 registered on a copy of Express different from the one the agent wrapped (a duplicated dependency). A middleware that
 answers under a mount before any route matched — a 401 from `app.use("/tenants/:tenant", auth)` — keeps the mount's

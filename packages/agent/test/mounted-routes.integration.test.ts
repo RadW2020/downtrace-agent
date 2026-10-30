@@ -1,13 +1,17 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { AGGREGATES_PATH, AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import express from "express";
+import express4 from "express4";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import type { AgentConfig } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
+import { armMounts } from "../src/mounts.ts";
 import { testConfig } from "./support/agent-config.ts";
+import { express4Root } from "./support/express4-root.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 ajv.addKeyword("x-latency-boundaries-ms");
@@ -285,5 +289,107 @@ describe("a mounted router carries its pattern, not its value (gh-858)", () => {
     expect(byRoute.get("/:param/:param/:param/users/:id")).toBe(2);
     expect(body).not.toContain("acme-corp");
     expect(body).not.toContain("otro");
+  });
+});
+
+/**
+ * A router mounted inside a sub-app that is itself mounted: Parse Server's shape (`app.use("/1", api)`, its routes on
+ * a router `api.use(router)` carries) and Ghost's. The walk from the sub-app's router lined `baseUrl` up from its
+ * start, where the parent app's mount is, and every mount came out as `:param` (the stranger campaign, Express 4 and
+ * 5 alike). Express 4's record is armed from a root whose `express` is Express 4, as its own tests do (gh-900).
+ */
+const KITS = [
+  { name: "Express 5", express, arm: async (): Promise<void> => {} },
+  {
+    name: "Express 4",
+    express: express4 as unknown as typeof express,
+    arm: async (): Promise<void> => {
+      const root = await express4Root();
+      cleanups.push(root.close);
+      armMounts(path.join(root.base, "app.js"));
+    },
+  },
+];
+
+describe.each(KITS)("a route on a router inside a mounted sub-app, on $name", (kit) => {
+  async function served(
+    build: (app: express.Express, sub: express.Express, router: express.Router) => void,
+    paths: string[],
+  ): Promise<{ routes: Map<string, number>; body: string }> {
+    await kit.arm();
+    const sink = await startSink();
+    const agent = createAgent(config(sink.url), { log: quiet });
+    agent.start();
+    const app = kit.express();
+    const sub = kit.express();
+    const router = kit.express.Router();
+    build(app, sub, router);
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    cleanups.push(
+      () => agent.stop(),
+      () => new Promise<void>((r) => server.close(() => r())),
+      sink.close,
+    );
+    for (const path of paths) expect(await hit(url, path), path).toBe(200);
+    expect(await agent.flushNow()).toBe(true);
+    return { routes: routesOf(sink.batches[0]), body: JSON.stringify(sink.batches[0]) };
+  }
+  const ok = (_req: express.Request, res: express.Response): void => {
+    res.json({});
+  };
+
+  it("names the sub-app's mount when the router is mounted with no path, as Parse Server mounts its own", async () => {
+    const { routes } = await served(
+      (app, sub, router) => {
+        router.get("/classes/:className", ok);
+        sub.use(router);
+        app.use("/1", sub);
+      },
+      ["/1/classes/GameScore", "/1/classes/Player"],
+    );
+    expect([...routes]).toEqual([["/1/classes/:className", 2]]);
+  });
+
+  it("names the sub-app's mount when the router is mounted at /", async () => {
+    const { routes } = await served(
+      (app, sub, router) => {
+        router.get("/classes/:className", ok);
+        sub.use("/", router);
+        app.use("/api", sub);
+      },
+      ["/api/classes/GameScore"],
+    );
+    expect([...routes]).toEqual([["/api/classes/:className", 1]]);
+  });
+
+  it("names both mounts by their patterns, and keeps their values out", async () => {
+    const { routes, body } = await served(
+      (app, sub, router) => {
+        router.get("/users/:id", ok);
+        sub.use("/teams/:team", router);
+        app.use("/orgs/:org", sub);
+      },
+      ["/orgs/acme-corp/teams/team-zq-red/users/42", "/orgs/otro/teams/team-zq-blue/users/7"],
+    );
+    expect([...routes]).toEqual([["/orgs/:org/teams/:team/users/:id", 2]]);
+    expect(body).not.toContain("acme-corp");
+    expect(body).not.toContain("team-zq");
+  });
+
+  it("never names a request by another mount of the same sub-app", async () => {
+    // Express keeps one `mountpath` on an app, the last it was mounted at: a request through the other mount cannot be
+    // named from it, and is `:param` — not the other mount's name, which would count it on a route it did not take.
+    const { routes } = await served(
+      (app, sub) => {
+        sub.get("/classes/:className", ok);
+        app.use("/1", sub);
+        app.use("/parse", sub);
+      },
+      ["/1/classes/GameScore", "/parse/classes/Player"],
+    );
+    expect(routes.get("/parse/classes/:className"), "only the request that went through /parse").toBe(1);
+    expect(routes.get("/:param/classes/:className")).toBe(1);
   });
 });

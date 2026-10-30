@@ -333,22 +333,47 @@ function mountLinks(app: unknown, route: object, base: string): MountLink[] {
       return base === "" ? [] : [{ value: base, pattern: undefined }];
     }
     const tail = base.slice(direct.reduce((n, l) => n + l.value.length, 0));
-    return tail === "" ? direct : [...direct, { value: tail, pattern: undefined }];
+    if (tail === "") return direct;
+    // What the walk did not account for is in front of the anchor's mounts when apps are mounted above it, not after
+    // them: a router mounted with no path took nothing, and the parent's mount was all of `baseUrl` (Parse Server's
+    // `app.use("/1", api)` and `api.use(router)`). A cut that accounts for all of it says so; the tail stays the
+    // answer when none does.
+    const whole = apps.length > 0 ? cutLinks(anchor, route, base, apps, { whole: true }) : undefined;
+    return whole ?? [...direct, { value: tail, pattern: undefined }];
   }
   // The anchor's mounts could not be lined up against `baseUrl` as it stands — the usual reason is that
   // apps mounted above the anchor put their value in front of it, and that value is as long as its
-  // parameters made it. Try the walk from each cut at a segment boundary, the smallest first.
+  // parameters made it. Try the walk from each cut at a segment boundary, the smallest first: one that accounts
+  // for all of `baseUrl`, and else the first that accounts for some.
   if (apps.length > 0) {
-    for (const cut of cutCandidates(base)) {
-      const fromCut = walkRouterLinks(anchor, route, base.slice(cut));
-      if (fromCut !== undefined && cutFits(apps, base.slice(0, cut))) {
-        const links = [...appAsLinks(apps, base.slice(0, cut)), ...fromCut];
-        const tail = base.slice(cut + fromCut.reduce((n, l) => n + l.value.length, 0));
-        return tail === "" ? links : [...links, { value: tail, pattern: undefined }];
-      }
-    }
+    const cut =
+      cutLinks(anchor, route, base, apps, { whole: true }) ?? cutLinks(anchor, route, base, apps, { whole: false });
+    if (cut !== undefined) return cut;
   }
   return [{ value: base, pattern: undefined }];
+}
+
+/**
+ * The first cut of `base` at which the apps above take what is in front and the anchor's mounts what follows, as
+ * links, or undefined when no cut does. With `whole`, only a cut after which nothing of `baseUrl` is left over; without
+ * it, what is left over is one link without a pattern, `:param` per segment.
+ */
+function cutLinks(
+  anchor: RouterLike,
+  route: object,
+  base: string,
+  apps: (string | undefined)[],
+  options: { whole: boolean },
+): MountLink[] | undefined {
+  for (const cut of cutCandidates(base)) {
+    const fromCut = walkRouterLinks(anchor, route, base.slice(cut));
+    if (fromCut === undefined || !cutFits(apps, base.slice(0, cut))) continue;
+    const tail = base.slice(cut + fromCut.reduce((n, l) => n + l.value.length, 0));
+    if (options.whole && tail !== "") continue;
+    const links = [...appAsLinks(apps, base.slice(0, cut)), ...fromCut];
+    return tail === "" ? links : [...links, { value: tail, pattern: undefined }];
+  }
+  return undefined;
 }
 
 /**
@@ -686,20 +711,54 @@ function cutFits(app: (string | undefined)[], prefix: string): boolean {
   return prefix.split("/").filter((s) => s !== "").length >= need;
 }
 
-/** The cuts at a segment boundary of `base`, the smallest first: where an app's value may end. */
+/**
+ * The cuts at a segment boundary of `base`, the smallest first: where an app's value may end, and so where what is
+ * left for the answering app's own mounts starts — at a `/`, as `baseUrl` does, or at its end.
+ */
 function cutCandidates(base: string): number[] {
-  const cuts = new Set<number>([0]);
-  for (let i = 0; i < base.length; i += 1) if (base[i] === "/") cuts.add(i + 1);
+  const cuts = new Set<number>([0, base.length]);
+  for (let i = 0; i < base.length; i += 1) if (base[i] === "/") cuts.add(i);
   return [...cuts].sort((a, b) => a - b);
 }
 
 /**
  * The app chain as links: its patterns, or — when a mount's pattern cannot be said — the value the chain
  * took of `baseUrl`, as one link without a pattern, so it comes out as `:param` per segment.
+ *
+ * Express keeps one `mountpath` on an app, the last it was mounted at: an app mounted at `/1` and at `/parse` says
+ * `/parse` for a request that went through `/1`. Patterns of words and `:name`s are checked against the value they
+ * stand for, and one that does not fit it is no pattern of this request's: `:param`, rather than another mount's
+ * name. A pattern with more in it than that has no reading to check, and is taken as Express recorded it.
  */
 function appAsLinks(app: (string | undefined)[], prefix: string): MountLink[] {
-  if (app.some((p) => p === undefined)) return prefix === "" ? [] : [{ value: prefix, pattern: undefined }];
-  return app.map((pattern) => ({ value: "", pattern }));
+  const unknown = prefix === "" ? [] : [{ value: prefix, pattern: undefined }];
+  if (app.some((p) => p === undefined)) return unknown;
+  const patterns = app as string[];
+  if (!patternsFit(patterns, prefix)) return unknown;
+  return patterns.map((pattern) => ({ value: "", pattern }));
+}
+
+/**
+ * Whether plain patterns — words and `:name`s — read `value`, segment for segment, as Express matches a mount: a word
+ * whatever its case, a `:name` any one segment. True for a pattern that is not plain, which cannot be read here.
+ */
+function patternsFit(patterns: readonly string[], value: string): boolean {
+  if (patterns.some((pattern) => plainSegmentCount(pattern) === undefined)) return true;
+  const wanted = patterns.flatMap((pattern) => pattern.split("/").filter((s) => s !== ""));
+  const got = value.split("/").filter((s) => s !== "");
+  if (wanted.length !== got.length) return false;
+  return wanted.every(
+    (segment, i) => segment.startsWith(":") || segment.toLowerCase() === decoded(got[i] ?? "").toLowerCase(),
+  );
+}
+
+/** A segment of a path as its words are, or as it came when it does not decode. */
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 /**
