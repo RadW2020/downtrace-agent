@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { applicationEntry, preservesSymlinksMain } from "../src/entry.ts";
+import { applicationEntry, basesOf, preservesSymlinksMain, resolutionBases } from "../src/entry.ts";
 
 /**
  * DT-34. Node runs an application's main module from its realpath, and the instrumentation resolved `pg` and
@@ -204,6 +204,27 @@ describe("applicationEntry", () => {
  * a link with those flags reports the main module it ran, and the reading has to agree with it. The table is
  * not a belief about Node's parser; it is checked against it on every run.
  */
+describe("resolutionBases, under check", () => {
+  it("is the entry alone outside check", () => {
+    expect(resolutionBases("/srv/app/dist/server.js", undefined)).toBe("/srv/app/dist/server.js");
+  });
+
+  it("is the entry and then the project, as a directory to start inside", () => {
+    const runner = "/store/links/vitest/4.1.12/abc/node_modules/vitest/vitest.mjs";
+    expect(resolutionBases(runner, "/work/ghost")).toEqual([runner, `/work/ghost${path.sep}`]);
+    expect(resolutionBases(runner, `/work/ghost${path.sep}`)).toEqual([runner, `/work/ghost${path.sep}`]);
+  });
+
+  it("is the entry alone when the entry is the project's directory", () => {
+    expect(resolutionBases(`/work/app${path.sep}`, "/work/app")).toBe(`/work/app${path.sep}`);
+  });
+
+  it("is read back in its order", () => {
+    expect(basesOf("/srv/app/server.js")).toEqual(["/srv/app/server.js"]);
+    expect(basesOf(["/a/runner.js", "/b/"])).toEqual(["/a/runner.js", "/b/"]);
+  });
+});
+
 describe("preservesSymlinksMain agrees with Node", () => {
   const rows: Array<[string, string[], string | undefined]> = [
     ["nothing", [], undefined],

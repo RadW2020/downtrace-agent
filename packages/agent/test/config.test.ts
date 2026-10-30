@@ -325,3 +325,22 @@ describe("the file check reads the declared routes from", () => {
     }
   });
 });
+
+describe("the project check runs the tests of", () => {
+  const inspecting = { DOWNTRACE_INSPECT: "/tmp/run.jsonl" };
+
+  it("is what DOWNTRACE_CHECK_PROJECT says, and only check sets it", () => {
+    const result = configFromEnv({ ...inspecting, DOWNTRACE_CHECK_PROJECT: " /work/app " });
+    expect(result.ok && result.config.checkProject).toBe("/work/app");
+  });
+
+  it("is nothing when absent, blank or relative: a path the modules cannot resolve from", () => {
+    for (const value of [undefined, "", "  ", "app", "./app"]) {
+      const result = configFromEnv({
+        ...inspecting,
+        ...(value === undefined ? {} : { DOWNTRACE_CHECK_PROJECT: value }),
+      });
+      expect(result.ok && result.config.checkProject).toBeUndefined();
+    }
+  });
+});

@@ -265,7 +265,7 @@ function withoutDowntrace(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 export function runEnv(
   parent: NodeJS.ProcessEnv,
-  run: { registerUrl: string; inspectFile: string; routesFile: string; side: Side },
+  run: { registerUrl: string; inspectFile: string; routesFile: string; project: string; side: Side },
 ): NodeJS.ProcessEnv {
   const env = withoutDowntrace(parent);
   const preload = `--import=${run.registerUrl}`;
@@ -273,6 +273,9 @@ export function runEnv(
   env.DOWNTRACE_INSPECT = run.inspectFile;
   // The routes the applications declare, beside the batches: what names a route no test called (ESC-18).
   env.DOWNTRACE_CHECK_ROUTES = run.routesFile;
+  // Where the tests run: the application's modules resolve from there too, and not only from the runner, which a
+  // package manager may keep where nothing of the project resolves (`resolutionBases`).
+  env.DOWNTRACE_CHECK_PROJECT = run.project;
   env.DOWNTRACE_INTERVAL_MS = WINDOW_MS;
   env.DOWNTRACE_PROFILE_MS = WINDOW_MS;
   env.DOWNTRACE_ENV = "check";
@@ -623,7 +626,7 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     const ran = await runCommand({
       command: options.command,
       cwd: dir,
-      env: runEnv(options.env, { registerUrl: options.registerUrl, inspectFile: file, routesFile, side }),
+      env: runEnv(options.env, { registerUrl: options.registerUrl, inspectFile: file, routesFile, project: dir, side }),
       timeoutMs: options.timeoutMs,
       signal: options.signal,
     }).catch((err: unknown) => {

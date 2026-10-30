@@ -27,7 +27,7 @@ import {
   recordOperationIn,
 } from "./context.ts";
 import { createDeclaredRoutes, type DeclaredRoutes } from "./declared.ts";
-import { applicationEntry } from "./entry.ts";
+import { applicationEntry, resolutionBases } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
 import { Excluded } from "./exclude.ts";
@@ -529,12 +529,15 @@ export class Agent {
     // process keeps the main module's symlinks — and not the symlinked binary it may have been started through
     // (DT-34). Once, here, at start-up: never in a request. It cannot throw (invariant 2).
     const entry = applicationEntry({ preserveSymlinksMain: this.config.preserveSymlinksMain });
+    // And under `check`, the project the tests are of: the main module is then the runner, which a package manager
+    // may keep where nothing of the application resolves (`resolutionBases`).
+    const from = resolutionBases(entry, this.config.checkProject);
     // The mount record arms here and not at the load of `mounts.ts`: an import of the package must not load
     // express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
     // and `register` calls `start()` during `--import`, before the application registers anything, so no
     // pattern is lost. `armMounts` cannot throw; a failure to arm leaves the `:param` fallback, and the
     // application goes on (invariant 2).
-    armMounts(entry);
+    armMounts(from);
     // Fastify announces each instance it creates, and only to whoever is listening by then: from the start, before
     // the application loads (`fastify.ts`). An application without Fastify pays the subscription and nothing else.
     // A request made with `inject()` is not Node's, and Node announces nothing of it: Fastify's hooks open and
@@ -548,7 +551,7 @@ export class Agent {
     // Hono's routers are given their routes at the first match and keep them, so their files are loaded and wrapped
     // now, before it (`hono.ts`, ADR 0236). A request made with `app.request()` goes through the same two doors.
     this.stopHono = attachHono({
-      from: entry,
+      from,
       log: this.log,
       internalError: (err) => this.internalError(err),
       unannounced,
@@ -604,7 +607,7 @@ export class Agent {
           fingerprints: this.fingerprints,
           errors: this.errors,
           depth: this.config.pgDepth,
-          from: entry,
+          from,
         });
         // postgres.js is Postgres too, and the same switch: the observer is «on» when either driver is there.
         const postgresJs = armPostgresJs({
@@ -612,7 +615,7 @@ export class Agent {
           internalError,
           fingerprints: this.fingerprints,
           errors: this.errors,
-          from: entry,
+          from,
           early: this.config.checkRoutes !== undefined,
         });
         // The only observer that resolves a module, so the only one that can be asked for and not attach.
@@ -632,7 +635,7 @@ export class Agent {
       if (this.mysqlModule !== undefined) {
         observers.mysql = patchMysql(this.mysqlModule, "unknown", mysqlDeps) ? "on" : "unavailable";
       } else {
-        const armed = armMysql({ ...mysqlDeps, from: entry });
+        const armed = armMysql({ ...mysqlDeps, from });
         said(observers, "mysql", armed.state);
         this.mysqlAttach = armed.attach;
       }
@@ -674,7 +677,7 @@ export class Agent {
     // MongoDB through its driver, and so through Mongoose (ADR 0237).
     if (on.has("mongodb")) {
       const mongoDeps = { log: this.log, internalError, errors: this.errors };
-      const armed = armMongo({ ...mongoDeps, from: entry });
+      const armed = armMongo({ ...mongoDeps, from });
       said(observers, "mongodb", armed.state);
       this.mongoAttach = armed.attach;
       sandbox.push({
@@ -685,7 +688,7 @@ export class Agent {
     // SQLite in the process, through better-sqlite3, libsql or sqlite3 (ADR 0239).
     if (on.has("sqlite")) {
       const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
-      const armed = armSqlite({ ...sqliteDeps, from: entry });
+      const armed = armSqlite({ ...sqliteDeps, from });
       said(observers, "sqlite", armed.state);
       this.sqliteAttach = armed.attach;
       sandbox.push(
@@ -706,7 +709,7 @@ export class Agent {
         errors: this.errors,
       };
       // Under `check` its runtime is wrapped as it loads, for a client Vitest runs itself (ADR 0243).
-      const armed = armPrisma({ ...prismaDeps, from: entry, early: this.config.checkRoutes !== undefined });
+      const armed = armPrisma({ ...prismaDeps, from, early: this.config.checkRoutes !== undefined });
       said(observers, "prisma", armed.state);
       this.prismaAttach = armed.attach;
       sandbox.push({

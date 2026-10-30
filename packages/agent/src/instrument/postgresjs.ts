@@ -3,11 +3,11 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { currentContext, recordCallIn, recordErrorIn, recordOperationIn } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, basesOf, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
-import type { Armed } from "./arm.ts";
+import { type Armed, armedTogether } from "./arm.ts";
 
 /**
  * Postgres through postgres.js (`postgres`, the driver of Drizzle's `postgres-js` and of most Supabase backends),
@@ -159,26 +159,49 @@ function observe(query: QueryLike, deps: InstrumentPostgresJsDeps): void {
  *   losing it would hide a regression from both runs alike.
  */
 export function armPostgresJs(
-  deps: InstrumentPostgresJsDeps & { from?: string | undefined; early?: boolean | undefined },
+  deps: InstrumentPostgresJsDeps & { from?: From | undefined; early?: boolean | undefined },
 ): Armed {
-  const { log } = deps;
-  const require = createRequire(deps.from ?? applicationEntry());
-  let root: string;
-  let version = "unknown";
+  // Each copy a base resolves, once: under `check` the entry and the project may resolve one copy or two.
+  const copies = new Map<string, Copy>();
+  for (const base of basesOf(deps.from ?? applicationEntry())) {
+    const copy = copyOf(base, deps.log);
+    if (copy !== undefined && !copies.has(copy.root)) copies.set(copy.root, copy);
+  }
+  if (copies.size === 0) {
+    deps.log.debug("postgres is not resolvable from the application's root; not instrumenting");
+    return { state: "unavailable", attach: () => true };
+  }
+  return armedTogether([...copies.values()].map((copy) => armCopy(copy, deps)));
+}
+
+/** A copy of postgres.js: its directory, the version it says, and the `require` that found it. */
+interface Copy {
+  root: string;
+  version: string;
+  require: NodeRequire;
+}
+
+/** The postgres.js `from` resolves, or nothing. Resolves and reads its `package.json`; loads nothing of it. */
+function copyOf(from: string, log: Logger): Copy | undefined {
+  const require = createRequire(from);
   try {
     // `default` is the condition `require` meets in its exports, and it names `cjs/src/index.js`.
-    root = path.resolve(path.dirname(require.resolve("postgres")), "..", "..");
+    const root = path.resolve(path.dirname(require.resolve("postgres")), "..", "..");
     const pkg = require(path.join(root, "package.json")) as { name?: unknown; version?: unknown };
     if (pkg.name !== "postgres") {
       log.debug("postgres resolved to a package of another name; not instrumenting");
-      return { state: "unavailable", attach: () => true };
+      return undefined;
     }
-    if (typeof pkg.version === "string") version = pkg.version;
+    return { root, version: typeof pkg.version === "string" ? pkg.version : "unknown", require };
   } catch {
-    log.debug("postgres is not resolvable from the application's root; not instrumenting");
-    return { state: "unavailable", attach: () => true };
+    return undefined;
   }
+}
 
+function armCopy(
+  { root, version, require }: Copy,
+  deps: InstrumentPostgresJsDeps & { early?: boolean | undefined },
+): Armed {
   const cjs = path.join(root, "cjs", "src", "query.js");
   const esm = pathToFileURL(path.join(root, "src", "query.js")).href;
   let cjsDone = false;

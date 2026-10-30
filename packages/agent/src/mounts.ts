@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { applicationEntry } from "./entry.ts";
+import { applicationEntry, basesOf, type From } from "./entry.ts";
 
 /**
  * The mount path a layer was registered with, kept from the moment of registration until the process ends.
@@ -140,18 +140,23 @@ export function armDispatchRecording(proto: unknown): boolean {
  * application as it was.
  *
  * Express is resolved from `from`, the application's entry as Node runs it: the start passes the one it
- * resolved with the process's own flags, and absent it is `applicationEntry()`, Node's default — the realpath,
- * not the symlinked binary the process may have been started through (DT-34).
+ * resolved with the process's own flags, and under `check` the project beside it (`resolutionBases`); absent it is
+ * `applicationEntry()`, Node's default — the realpath, not the symlinked binary the process may have been started
+ * through (DT-34).
  *
  * Best effort: no express, or an express that is not resolvable from the application's root, leaves the
  * `:param` fallback in place, which is the safe side (invariant 5). It cannot throw, and `start()` relies on
  * that (invariant 2).
  */
-export function armMounts(from?: string): void {
-  try {
-    armExpress(createRequire(from ?? applicationEntry())("express"));
-  } catch {
-    // The application does not use express, or it is not resolvable from here.
+export function armMounts(from?: From): void {
+  // Each base's: under `check`, the project's express when the runner resolves none, or another (`resolutionBases`).
+  // Arming one module twice is arming it once.
+  for (const base of basesOf(from ?? applicationEntry())) {
+    try {
+      armExpress(createRequire(base)("express"));
+    } catch {
+      // The application does not use express, or it is not resolvable from here.
+    }
   }
 }
 

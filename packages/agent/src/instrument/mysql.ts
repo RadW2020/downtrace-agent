@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { currentContext, recordCallIn, recordErrorIn, recordOperationIn, recordWaitIn, runIn } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
@@ -124,7 +124,7 @@ export function patchMysql(module: unknown, version: string, deps: InstrumentMys
  * which brings its own, load nothing, and patch from the start of the first request at which the application has
  * loaded it (ADR 0209).
  */
-export function armMysql(deps: InstrumentMysqlDeps & { from?: string | undefined }): Armed {
+export function armMysql(deps: InstrumentMysqlDeps & { from?: From | undefined }): Armed {
   return armDriver<unknown>({
     driver: "mysql2",
     from: deps.from ?? applicationEntry(),

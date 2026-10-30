@@ -1106,7 +1106,11 @@ the link points to, as it is for Node, and the link itself when the process runs
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
 itself, which differs only for a `main` that is a symlink out of it or that has a `node_modules` of its own
-between it and the directory. A `pg` that cannot be resolved from there is reported as `unavailable` in the
+between it and the directory. Under `downtrace check`, whose processes have your test runner as their entry, they
+are resolved from the directory the tests run in as well, and every copy either finds is observed: a runner your
+package manager keeps where nothing of your project resolves — pnpm's global virtual store, a workspace without
+hoisting — would otherwise leave your database unseen and your mounted Express routes and Hono routes unnamed. A `pg`
+that cannot be resolved from there is reported as `unavailable` in the
 batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
 would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found. `downtrace check` reads

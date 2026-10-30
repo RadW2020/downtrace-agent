@@ -1,11 +1,11 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { currentContext, type RequestContext, recordCallIn, recordErrorIn, recordOperationIn } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
-import { type Armed, armDriver } from "./arm.ts";
+import { type Armed, armDriver, armedTogether } from "./arm.ts";
 import { patchSqlite3 } from "./sqlite3.ts";
 
 /**
@@ -216,7 +216,7 @@ export function addonStatementOf(resolved: string, cache: NodeJS.Require["cache"
  * they pin — load nothing, and patch from the start of the first request at which the application has loaded one
  * (ADR 0209). All three ship only CommonJS, so an `import` puts them in the module cache too.
  */
-export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefined }): Armed {
+export function armSqlite(deps: InstrumentSqliteDeps & { from?: From | undefined }): Armed {
   const from = deps.from ?? applicationEntry();
   // `@mikro-orm/sqlite` is on better-sqlite3 from 7, and on node-sqlite3 before.
   const better = armDriver<unknown>({
@@ -251,13 +251,5 @@ export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefin
       patchSqlite3(module, version, deps);
     },
   });
-  const drivers = [better, libsql, sqlite3];
-  return {
-    state: drivers.some((driver) => driver.state === "on") ? "on" : "unavailable",
-    attach: () => {
-      // Every one, every time: one settled is no reason to stop asking the others.
-      const done = drivers.map((driver) => driver.attach());
-      return done.every(Boolean);
-    },
-  };
+  return armedTogether([better, libsql, sqlite3]);
 }

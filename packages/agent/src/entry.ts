@@ -118,3 +118,30 @@ export function applicationEntry(options: EntryOptions = {}): string {
   }
   return entry;
 }
+
+/**
+ * Where the application's modules resolve from: one path, or several asked in turn and all of them kept — the
+ * application's entry and, under `downtrace check`, its project (`resolutionBases`).
+ */
+export type From = string | readonly string[];
+
+/** The paths `from` names, in its order. */
+export function basesOf(from: From): readonly string[] {
+  return typeof from === "string" ? [from] : from;
+}
+
+/**
+ * The paths the application's modules resolve from: its entry, and under `downtrace check` the directory of the
+ * project the tests are of, which `check` names. A suite's main module is its runner, and the runner resolves the
+ * application's modules only where the package manager put it among them: pnpm's global virtual store keeps it outside
+ * the project, and a workspace without hoisting in the root's store, apart from the package's own drivers — and then
+ * nothing of the application resolved, and its database and its mounts went unseen (Ghost). The project resolves what
+ * the application's own files do. The entry stays, and first: a test that starts the application in a process of its
+ * own, from another package of the workspace, has that application as its entry.
+ */
+export function resolutionBases(entry: string, project: string | undefined): From {
+  if (project === undefined) return entry;
+  // A directory, so that `createRequire` starts inside it (`applicationEntry`).
+  const inside = project.endsWith(path.sep) ? project : `${project}${path.sep}`;
+  return inside === entry ? entry : [entry, inside];
+}

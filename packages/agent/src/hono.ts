@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isPromise } from "node:util/types";
 import { apart, currentContext } from "./context.ts";
+import { basesOf, type From } from "./entry.ts";
 import type { Unannounced } from "./fastify.ts";
 import type { Logger } from "./log.ts";
 
@@ -229,8 +230,8 @@ export function honoRouterModule(name: string, from: string): boolean {
 }
 
 export interface AttachHonoDeps {
-  /** Where the application's own modules resolve from: its entry. */
-  from: string;
+  /** Where the application's own modules resolve from: its entry, and under `check` its project (`resolutionBases`). */
+  from: From;
   log: Logger;
   internalError: (err: unknown) => void;
   unannounced?: Unannounced | undefined;
@@ -244,9 +245,14 @@ export interface AttachHonoDeps {
 export function attachHono(deps: AttachHonoDeps): () => void {
   const mine: Listener = { internalError: deps.internalError, unannounced: deps.unannounced };
   listening = mine;
-  const root = honoRoot(deps.from);
-  if (root !== undefined) {
-    const require = createRequire(deps.from);
+  // Each copy a base resolves, once: one Hono found by two ways is one set of routers.
+  const roots = new Set<string>();
+  for (const base of basesOf(deps.from)) {
+    const root = honoRoot(base);
+    if (root !== undefined) roots.add(root);
+  }
+  for (const root of roots) {
+    const require = createRequire(join(root, "package.json"));
     for (const file of ROUTER_FILES) {
       try {
         patchHonoRouters(require(join(root, "dist", "cjs", file)));

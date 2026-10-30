@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -285,6 +285,44 @@ describe("postgres.js's start-up half", () => {
       const code = await new Promise<number>((resolve) => child.on("exit", resolve));
       expect(code, stdout).toBe(0);
       expect(stdout.trim().split("\n")).toEqual(["unavailable", "true"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the project's postgres under check, where the runner's entry resolves none", async () => {
+    // A runner kept where nothing of the project resolves, as pnpm's global virtual store keeps it, and the project
+    // beside it (`resolutionBases`).
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), "downtrace-armpostgresjs-bases-")));
+    try {
+      const project = path.join(dir, "project");
+      const installed = path.resolve(path.dirname(createRequire(import.meta.url).resolve("postgres")), "..", "..");
+      await mkdir(path.join(project, "node_modules"), { recursive: true });
+      await symlink(installed, path.join(project, "node_modules", "postgres"), "dir");
+      const src = fileURLToPath(new URL("../src/instrument/postgresjs.ts", import.meta.url));
+      const script = `
+        import { armPostgresJs } from ${JSON.stringify(src)};
+        const deps = {
+          log: { warn: () => {}, debug: () => {} },
+          internalError: (err) => { console.error(String(err)); process.exit(2); },
+        };
+        console.log(armPostgresJs({ ...deps, from: process.argv[1] }).state);
+        console.log(armPostgresJs({ ...deps, from: [process.argv[1], process.argv[2]] }).state);
+      `;
+      const runner = path.join(dir, "store", "vitest", "vitest.mjs");
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, runner, `${project}/`], {
+        env: { ...process.env, NODE_PATH: "" },
+      });
+      let stdout = "";
+      child.stdout.on("data", (c: Buffer) => {
+        stdout += c.toString();
+      });
+      const code = await new Promise<number>((resolve) => child.on("exit", resolve));
+      expect(code, stdout).toBe(0);
+      expect(stdout.trim().split("\n"), "the runner alone, then the runner and the project").toEqual([
+        "unavailable",
+        "on",
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -2,7 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isAsyncFunction } from "node:util/types";
 import { currentContext, recordCallIn, recordErrorIn, recordOperationIn } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import { type Fingerprint, hash64 } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
@@ -187,7 +187,7 @@ export function connectionModuleOf(resolved: string): string {
  * which bring their own (DT-92), load nothing, and patch from the start of the first request at which the application
  * has loaded it (ADR 0209). The driver ships only CommonJS, so an `import` of it puts it in the module cache too.
  */
-export function armMongo(deps: InstrumentMongoDeps & { from?: string | undefined }): Armed {
+export function armMongo(deps: InstrumentMongoDeps & { from?: From | undefined }): Armed {
   return armDriver<unknown>({
     driver: "mongodb",
     from: deps.from ?? applicationEntry(),

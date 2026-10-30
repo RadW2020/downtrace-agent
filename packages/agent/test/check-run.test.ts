@@ -15,6 +15,7 @@ const run = {
   registerUrl: REGISTER,
   inspectFile: "/tmp/dt/base.jsonl",
   routesFile: "/tmp/dt/base.routes.jsonl",
+  project: "/tmp/dt/base/app",
   side: "base",
 } as const;
 
@@ -34,6 +35,7 @@ describe("the environment of a run", () => {
     const given = Object.keys(env).filter((name) => name.startsWith("DOWNTRACE_"));
     expect(given.sort()).toEqual(
       [
+        "DOWNTRACE_CHECK_PROJECT",
         "DOWNTRACE_CHECK_ROUTES",
         "DOWNTRACE_ENV",
         "DOWNTRACE_INSPECT",
@@ -50,6 +52,8 @@ describe("the environment of a run", () => {
     const env = runEnv({}, run);
     expect(env.DOWNTRACE_INSPECT).toBe("/tmp/dt/base.jsonl");
     expect(env.DOWNTRACE_CHECK_ROUTES).toBe("/tmp/dt/base.routes.jsonl");
+    // Where the tests run, which is where the application's own modules resolve from (`resolutionBases`).
+    expect(env.DOWNTRACE_CHECK_PROJECT).toBe("/tmp/dt/base/app");
     expect(env.DOWNTRACE_INTERVAL_MS).toBe("1000");
     expect(env.DOWNTRACE_PROFILE_MS).toBe("1000");
   });

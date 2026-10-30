@@ -1048,6 +1048,76 @@ describe("a suite whose application keeps its data in SQLite, through better-sql
   });
 });
 
+/**
+ * A runner installed where nothing of the project resolves. pnpm's global virtual store keeps every package outside
+ * the project, the runner included; a workspace with `hoist: false` keeps the runner in the root's store and the
+ * package's drivers in the package's own `node_modules`. The process's main module is the runner, and the drivers
+ * resolved from it are none. Found in Ghost (pnpm 12, `enableGlobalVirtualStore`): its `mysql2` loaded in a process
+ * whose mysql observer had found nothing to arm. The runner here is a script in a directory of its own that imports
+ * the application from where the command runs; and `NODE_PATH`, which pnpm fills with its store for this suite, is
+ * empty, as it is for an application.
+ */
+const RUNNER = `
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+await import(pathToFileURL(join(process.cwd(), process.argv[2])).href);
+`;
+
+/** The application, its users under a router mounted at \`/users\`: the template is the mount's and the route's. */
+const MOUNTED_APP = BETTER_SQLITE3_APP.replace(
+  'app.get("/users/:id", (req, res) => {',
+  'const users = express.Router();\napp.use("/users", users);\nusers.get("/:id", (req, res) => {',
+);
+
+describe("a suite whose runner is installed outside the project", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    const elsewhere = await room();
+    await writeFile(join(elsewhere, "runner.mjs"), RUNNER);
+    const made = await project({
+      "app.mjs": MOUNTED_APP,
+      "lookups.txt": "1",
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: `node ${join(elsewhere, "runner.mjs")} app.mjs` } }),
+    });
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(EXPRESS_DIR, join(made.dir, "node_modules", "express"), "dir");
+    await symlink(BETTER_SQLITE3_DIR, join(made.dir, "node_modules", "better-sqlite3"), "dir");
+    await made.write("lookups.txt", "4");
+    checked = await check(made, ["--base", "HEAD"], { NODE_PATH: "" });
+  });
+
+  it("resolves the drivers and the mounts from the project, on both sides, and sees the lookups multiplied", () => {
+    expect(checked.report.base?.observers.sqlite).toBe("on");
+    expect(checked.report.change?.observers.sqlite).toBe("on");
+    // The users' template is the mount's and the route's: without the project's express, `GET /:param/:id`.
+    expectLookupsMultiplied(checked);
+  });
+});
+
+describe("a Hono suite whose runner is installed outside the project", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    const elsewhere = await room();
+    await writeFile(join(elsewhere, "runner.mjs"), RUNNER);
+    const made = await project({
+      "app.mjs": HONO_APP,
+      "suite.mjs": HONO_SUITE,
+      "calls.txt": "1",
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: `node ${join(elsewhere, "runner.mjs")} suite.mjs` } }),
+    });
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(HONO_DIR, join(made.dir, "node_modules", "hono"), "dir");
+    await made.write("calls.txt", "5");
+    checked = await check(made, ["--base", "HEAD"], { NODE_PATH: "" });
+  });
+
+  it("wraps the project's Hono routers before their first match, and names the routes", () => {
+    expectHonoJudged(checked);
+  });
+});
+
 describe("an application whose data goes through Knex on sqlite3, the callback driver", () => {
   let checked: Checked;
   beforeAll(async () => {

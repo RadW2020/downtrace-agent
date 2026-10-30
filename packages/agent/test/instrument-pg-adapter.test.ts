@@ -236,3 +236,69 @@ describe("armDriver, beside the packages that bring their own copy", () => {
     expect(a.patched.map((p) => p.version)).toEqual(["8.11.5"]);
   });
 });
+
+/**
+ * Under `check` the driver is resolved from the project as well as from the entry, which is then the suite's runner
+ * (`resolutionBases`): pnpm's global virtual store keeps the runner where nothing of the project resolves. Every copy
+ * either finds is armed, and a module found from both is one patch.
+ */
+describe("armDriver from the runner's entry and the project", () => {
+  const armedFrom = (from: readonly string[]) => {
+    const patched: string[] = [];
+    const result = armDriver<unknown>({
+      driver: "pg",
+      from,
+      beside: ["@prisma/adapter-pg"],
+      log: deps.log,
+      internalError: deps.internalError,
+      patch: (_module, version) => {
+        patched.push(version);
+      },
+    });
+    return { ...result, patched };
+  };
+  const projectOf = (t: Tree): string => `${t.dir}/`;
+
+  it("finds the project's driver when the runner's entry resolves none", async () => {
+    const runner = await tree({});
+    const t = await tree({ app: "8.11.5" });
+    const a = armedFrom([runner.from, projectOf(t)]);
+    expect(a.state).toBe("on");
+    appPg(t);
+    expect(a.attach()).toBe(true);
+    expect(a.patched).toEqual(["8.11.5"]);
+  });
+
+  it("finds the copy a package of the project brings, from the project", async () => {
+    const runner = await tree({});
+    const t = await tree({ adapter: "pnpm" });
+    const a = armedFrom([runner.from, projectOf(t)]);
+    expect(a.state).toBe("on");
+    t.appRequire("@prisma/adapter-pg");
+    expect(a.attach()).toBe(true);
+    expect(a.patched).toEqual(["8.99.0"]);
+  });
+
+  it("patches a module both resolve once, and one copy each resolves each", async () => {
+    const t = await tree({ app: "8.11.5" });
+    const same = armedFrom([t.from, projectOf(t)]);
+    appPg(t);
+    expect(same.attach()).toBe(true);
+    expect(same.patched, "one module, found two ways").toEqual(["8.11.5"]);
+
+    const runner = await tree({ app: "8.20.0" });
+    const other = await tree({ app: "8.23.1" });
+    const two = armedFrom([runner.from, projectOf(other)]);
+    appPg(runner);
+    expect(two.attach(), "the project's copy is still to come").toBe(false);
+    appPg(other);
+    expect(two.attach()).toBe(true);
+    expect(two.patched).toEqual(["8.20.0", "8.23.1"]);
+  });
+
+  it("says unavailable when neither resolves a driver", async () => {
+    const runner = await tree({});
+    const t = await tree({});
+    expect(armedFrom([runner.from, projectOf(t)]).state).toBe("unavailable");
+  });
+});

@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { basesOf, type From } from "../entry.ts";
 import type { Logger } from "../log.ts";
 
 /**
@@ -22,8 +23,11 @@ export interface Armed {
 export interface ArmDeps<Driver> {
   /** The package the application is asked for, by the name it requires it with: `pg`, `mysql2`. */
   driver: string;
-  /** Resolution base: the application's entry as Node runs it, resolved once by the start (DT-34). */
-  from: string;
+  /**
+   * Resolution base: the application's entry as Node runs it, resolved once by the start (DT-34), and under `check`
+   * the project's directory beside it (`resolutionBases`). Every copy found from either is armed.
+   */
+  from: From;
   /**
    * Packages that bring a copy of the driver of their own, by the name the application requires them with. The copy
    * such a package loads is the one its queries go through, and it is not always the application's: a package
@@ -71,25 +75,27 @@ export interface ArmDeps<Driver> {
 export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
   const { driver, log } = deps;
   const copies: Copy[] = [];
-  const own = copyOf(deps.from, driver, log);
-  if (own) {
-    copies.push(own);
-  } else {
-    log.debug(`${driver} is not resolvable from the application's root; not instrumenting`);
+  const keep = (copy: Copy): void => {
+    // The same module found by two ways is one patch and one count, and a layout that hoists them is that.
+    if (!copies.some((other) => other.resolved === copy.resolved)) copies.push(copy);
+  };
+  const bases = basesOf(deps.from);
+  for (const base of bases) {
+    const own = copyOf(base, driver, log);
+    if (own) keep(own);
   }
+  if (copies.length === 0) log.debug(`${driver} is not resolvable from the application's root; not instrumenting`);
   for (const name of deps.beside ?? []) {
-    let from: string;
-    try {
-      from = createRequire(deps.from).resolve(name);
-    } catch {
-      continue; // most applications do not have it, and that is not worth a line
-    }
-    const copy = copyOf(from, driver, log);
-    if (!copy) {
-      log.debug(`${name} is installed and its ${driver} is not resolvable from it; not instrumenting that copy`);
-    } else if (!copies.some((other) => other.resolved === copy.resolved)) {
-      // The same module found by two ways is one patch and one count, and a layout that hoists them is that.
-      copies.push(copy);
+    for (const base of bases) {
+      let from: string;
+      try {
+        from = createRequire(base).resolve(name);
+      } catch {
+        continue; // most applications do not have it, and that is not worth a line
+      }
+      const copy = copyOf(from, driver, log);
+      if (copy) keep(copy);
+      else log.debug(`${name} is installed and its ${driver} is not resolvable from it; not instrumenting that copy`);
     }
   }
   if (copies.length === 0) return { state: "unavailable", attach: () => true };
@@ -117,6 +123,17 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
     return copies.length === 0;
   };
   return { state: "on", attach };
+}
+
+/**
+ * Several armed observers as one: «on» when any is, and settled when every one is. Each is asked at every attach
+ * until then: one settled is no reason to stop asking the others.
+ */
+export function armedTogether(armed: readonly Armed[]): Armed {
+  return {
+    state: armed.some((one) => one.state === "on") ? "on" : "unavailable",
+    attach: () => armed.map((one) => one.attach()).every(Boolean),
+  };
 }
 
 /** One copy of the driver: where it is, what version it says it is, and the `require` that finds it. */

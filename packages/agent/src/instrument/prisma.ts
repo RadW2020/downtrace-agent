@@ -8,7 +8,7 @@ import {
   recordErrorIn,
   recordOperationIn,
 } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, basesOf, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import { type Fingerprint, type FingerprintCache, hash64 } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
@@ -313,18 +313,26 @@ function wrapRuntimeLoads(version: string, deps: InstrumentPrismaDeps): void {
  * not seen.
  */
 export function armPrisma(
-  deps: InstrumentPrismaDeps & { from?: string | undefined; early?: boolean | undefined },
+  deps: InstrumentPrismaDeps & { from?: From | undefined; early?: boolean | undefined },
 ): Armed {
-  const from = deps.from ?? applicationEntry();
-  const require = createRequire(from);
-  let version: string;
-  try {
-    const read = require("@prisma/client/package.json") as { version?: unknown };
-    version = typeof read.version === "string" ? read.version : "unknown";
-  } catch {
+  // The first base that resolves it: what is patched is found in the module cache whole, wherever the client is, and
+  // the resolution only says there is one, and its version.
+  let found: { require: NodeRequire; version: string } | undefined;
+  for (const base of basesOf(deps.from ?? applicationEntry())) {
+    const require = createRequire(base);
+    try {
+      const read = require("@prisma/client/package.json") as { version?: unknown };
+      found = { require, version: typeof read.version === "string" ? read.version : "unknown" };
+      break;
+    } catch {
+      // Not from this base; the next may.
+    }
+  }
+  if (found === undefined) {
     deps.log.debug("@prisma/client is not resolvable from the application's root; not instrumenting Prisma");
     return { state: "unavailable", attach: () => true };
   }
+  const { require, version } = found;
   if (deps.early === true) wrapRuntimeLoads(version, deps);
   let requests = 0;
   let next = 1;

@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { preservesSymlinksMain } from "./entry.ts";
 import { patternsOf } from "./exclude.ts";
 import { Sheddable, type SheddableLevel } from "./overhead.ts";
@@ -40,6 +41,12 @@ export interface AgentConfig {
    * batches, and this is how the comparison can still name it (ESC-18). Absent, the walk is never made.
    */
   checkRoutes: string | undefined;
+  /**
+   * The directory of the project `downtrace check` runs the tests of: `DOWNTRACE_CHECK_PROJECT`, which only `check`
+   * sets. The application's modules resolve from it as well as from the entry, which under a suite is the runner
+   * (`resolutionBases`). Absent, or not an absolute path, they resolve from the entry alone.
+   */
+  checkProject: string | undefined;
   /**
    * Whether the normalised query text travels with the profile. `DOWNTRACE_QUERY_TEXT=off` suppresses it and
    * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
@@ -147,6 +154,7 @@ export function configFromEnv(
   const rawUrl = env.DOWNTRACE_URL?.trim() ?? "";
   const inspect = env.DOWNTRACE_INSPECT?.trim();
   const checkRoutes = env.DOWNTRACE_CHECK_ROUTES?.trim();
+  const checkProject = env.DOWNTRACE_CHECK_PROJECT?.trim();
   // Inspecting without a cloud is the path that matters: install, set one variable, run the application, read the
   // file — before handing anything to anyone. Half a cloud is still a mistake worth naming, inspection or not.
   const inspectOnly = inspect !== undefined && inspect !== "" && token === "" && rawUrl === "";
@@ -198,6 +206,7 @@ export function configFromEnv(
       excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
       inspect: inspect === "" ? undefined : inspect,
       checkRoutes: checkRoutes === "" ? undefined : checkRoutes,
+      checkProject: checkProject !== undefined && isAbsolute(checkProject) ? checkProject : undefined,
     },
     warnings,
   };

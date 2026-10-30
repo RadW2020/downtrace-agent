@@ -11,7 +11,7 @@ import {
   recordWait,
   recordWaitIn,
 } from "../context.ts";
-import { applicationEntry } from "../entry.ts";
+import { applicationEntry, basesOf, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
@@ -61,9 +61,10 @@ export interface InstrumentPgDeps {
   errors?: ErrorFingerprintCache | undefined;
   /**
    * Resolution base: the start passes the application's entry as Node runs it, resolved once with the
-   * process's own flags. Absent, it is `applicationEntry()`, the entry as Node runs it by default (DT-34).
+   * process's own flags, and under `check` the project beside it (`resolutionBases`). Absent, it is
+   * `applicationEntry()`, the entry as Node runs it by default (DT-34).
    */
-  from?: string | undefined;
+  from?: From | undefined;
   /** Injected in tests instead of resolving the real module. */
   moduleImpl?: unknown;
   /**
@@ -93,7 +94,8 @@ export function instrumentPg(deps: InstrumentPgDeps): string | undefined {
     if (deps.moduleImpl !== undefined) {
       pg = deps.moduleImpl as PgModule;
     } else {
-      const require = createRequire(deps.from ?? applicationEntry());
+      // The first base, the entry: this path loads at once, and is the tests' and the old start's.
+      const require = createRequire(basesOf(deps.from ?? applicationEntry())[0] ?? applicationEntry());
       pg = require("pg") as PgModule;
       const pkg = require("pg/package.json") as { version?: unknown };
       if (typeof pkg.version === "string") version = pkg.version;
