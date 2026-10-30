@@ -153,6 +153,8 @@ export interface UnlinkedBase {
   inWorkingTree: boolean;
   /** The same, in the base's checkout, after its `prepare`. */
   inBase: boolean;
+  /** The file the configuration was read from, as the person reaches it from where `check` ran. */
+  configFile: string;
 }
 
 /**
@@ -163,7 +165,7 @@ export function adviceForUnlinkedBase(base: UnlinkedBase): string | undefined {
   if (!base.prepare || base.link !== undefined || base.inBase || !base.inWorkingTree) return undefined;
   return (
     'The base has no node_modules and the working tree has one: with "prepare" given, check links nothing into the ' +
-    'base. If prepare does not install the dependencies, add "link": true to "check" in downtrace.json, and the ' +
-    "working tree's are linked into the base before prepare runs."
+    `base. If prepare does not install the dependencies, add "link": true to "check" in ${base.configFile}, and ` +
+    "the working tree's are linked into the base before prepare runs."
   );
 }

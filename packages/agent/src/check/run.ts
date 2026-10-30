@@ -4,6 +4,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { parsePackageJson } from "../init/detect.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
+import { CONFIG_FILE } from "./config.ts";
 import { adviceForNoProfile, adviceForUnlinkedBase, noProfile } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
 import {
@@ -70,6 +71,8 @@ export interface CheckOptions {
    * when there is no `prepare`, and are not when there is one, whose business the base's dependencies then are.
    */
   link: boolean | undefined;
+  /** The file the configuration was read from, as the person reaches it from `cwd`: where advice says to write. */
+  configFile: string | undefined;
   /** Routes the project declares, so that one no test calls can be named. */
   routes: readonly string[];
   timeoutMs: number;
@@ -293,9 +296,10 @@ export function runEnv(
  * under comparison, the same on both sides, and without it the base's tests of a project that reads one fail
  * before a request is made (the stranger campaign: fastify/demo, `node: .env: not found`). One the base has
  * — tracked, so the base's own — is left as the checkout wrote it.
+ *
+ * Each link goes into `links` as it is made, so that one that failed leaves the ones before it to be taken away.
  */
-async function linkDependencies(top: string, base: string): Promise<string[]> {
-  const links: string[] = [];
+export async function linkDependencies(top: string, base: string, links: string[]): Promise<void> {
   let level = [""];
   for (let depth = 0; depth <= LINK_DEPTH && level.length > 0; depth += 1) {
     const next: string[] = [];
@@ -327,7 +331,6 @@ async function linkDependencies(top: string, base: string): Promise<string[]> {
     }
     level = next;
   }
-  return links;
 }
 
 /**
@@ -553,10 +556,11 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
       link: options.link,
       inWorkingTree: await dependenciesFrom(cwd, top),
       inBase: await dependenciesFrom(baseProject, baseDir),
+      configFile: options.configFile ?? CONFIG_FILE,
     });
   if (link) {
     try {
-      made.links.push(...(await linkDependencies(top, baseDir)));
+      await linkDependencies(top, baseDir, made.links);
     } catch (err) {
       throw new CheckFailure(
         "setup-failed",

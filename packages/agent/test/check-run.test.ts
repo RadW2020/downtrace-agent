@@ -1,6 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runCommand, runEnv } from "../src/check/run.ts";
+import { linkDependencies, runCommand, runEnv } from "../src/check/run.ts";
 
 /**
  * What a run of the tests is given (LOC-01): an environment in which the instrumentation can only write a file, and
@@ -141,4 +143,30 @@ describe("running a command", () => {
       runCommand({ command: "true", cwd: "/no/such/directory/anywhere", env, timeoutMs: 20_000, signal: undefined }),
     ).rejects.toThrow();
   });
+});
+
+describe("linking the working tree's dependencies into the base", () => {
+  // Root ignores a directory's permissions, so the failure below cannot be made for it.
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps every link it made before one failed, so that they are taken away first",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "dt-link-"));
+      try {
+        const top = join(dir, "top");
+        const base = join(dir, "base");
+        await mkdir(join(top, "node_modules"), { recursive: true });
+        await mkdir(join(top, "api", "node_modules"), { recursive: true });
+        await mkdir(join(base, "api"), { recursive: true });
+        // The second link cannot be made: the base's directory for it is not writable.
+        await chmod(join(base, "api"), 0o555);
+        const links: string[] = [];
+        await expect(linkDependencies(top, base, links)).rejects.toThrow(/EACCES|EPERM/);
+        expect(links).toEqual([join(base, "node_modules")]);
+        expect((await lstat(join(base, "node_modules"))).isSymbolicLink()).toBe(true);
+      } finally {
+        await chmod(join(dir, "base", "api"), 0o755).catch(() => undefined);
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

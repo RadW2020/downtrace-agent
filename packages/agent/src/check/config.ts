@@ -26,7 +26,8 @@ import { dirname, join } from "node:path";
  * are linked into the base when there is no `prepare`, and are not when there is one, which installs the base's own.
  * `"link": true` links them before a `prepare` that needs them and does not install (a project that compiles what
  * git ignores, as a `postinstall` does), and `"link": false` links nothing, `prepare` or not: the key says what is
- * done, whatever the other one says.
+ * done, whatever the other one says. `"link": true` with a `prepare` that installs is refused (`installIn`): the
+ * install would write through the links into the working tree's node_modules.
  */
 
 export const CONFIG_FILE = "downtrace.json";
@@ -59,6 +60,56 @@ export const EMPTY_CONFIG: CheckConfig = {
 
 /** The keys of `check`, in the order the README documents them. */
 export const CONFIG_KEYS = ["command", "routes", "prepare", "link", "timeout"] as const;
+
+/** The package managers whose installs `installIn` sees. */
+export const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const;
+/**
+ * What, after a package manager and its options, writes into node_modules: the names, of any of them, of an
+ * install, an update, a removal, a link and a build of what is installed. `yarn` alone installs too.
+ */
+export const INSTALLING_VERBS = [
+  "install",
+  "i",
+  "ci",
+  "clean-install",
+  "install-test",
+  "it",
+  "install-ci-test",
+  "cit",
+  "add",
+  "update",
+  "up",
+  "upgrade",
+  "remove",
+  "rm",
+  "uninstall",
+  "un",
+  "link",
+  "ln",
+  "unlink",
+  "rebuild",
+  "rb",
+  "dedupe",
+  "prune",
+  "import",
+] as const;
+
+const WORD_START = "(?:^|[\\s;&|()])";
+const WORD_END = "(?=$|[\\s;&|()])";
+/** An option, and the value it may take: `--filter api`, `--prefix ../..`, `-r`. */
+const OPTION = "\\s+-[^\\s;&|()]*(?:\\s+[^\\s;&|()-][^\\s;&|()]*)?";
+const INSTALL = new RegExp(
+  `${WORD_START}((?:${PACKAGE_MANAGERS.join("|")})(?:${OPTION})*\\s+(?:${INSTALLING_VERBS.join("|")})${WORD_END}` +
+    `|yarn(?:\\s+-[^\\s;&|()]*)*\\s*(?=$|[;&|)]))`,
+);
+
+/**
+ * The install a command line runs itself, as written (`pnpm --filter api install`), or undefined. One in a script
+ * it runs (`npm run setup`) is not seen.
+ */
+export function installIn(command: string): string | undefined {
+  return INSTALL.exec(command)?.[1]?.trim();
+}
 
 /** `["npm", "test", "--", "a b"]` as one line a shell reads back the same way. */
 export function shellJoin(args: readonly string[]): string {
@@ -112,6 +163,14 @@ export function parseConfig(text: string, source: string): ConfigResult {
     return fail('"check.prepare" must be a command line');
   }
   if (check.link !== undefined && typeof check.link !== "boolean") return fail('"check.link" must be true or false');
+  const install = check.link === true && typeof check.prepare === "string" ? installIn(check.prepare) : undefined;
+  if (install !== undefined) {
+    return fail(
+      `"check.link" is true and "check.prepare" installs (${install}): the install would write through the links ` +
+        `into the working tree's node_modules. Leave "link" out, and prepare installs the base's own dependencies; ` +
+        "or keep it, and take the install out of prepare.",
+    );
+  }
 
   const routes: string[] = [];
   if (check.routes !== undefined) {

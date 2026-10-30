@@ -1305,6 +1305,27 @@ describe("the base of the project", () => {
     expect(checked.report.failure?.advice).toContain('"link": true');
   });
 
+  it("names the file given with --config in that advice, which is where the key goes", async () => {
+    const made = await dependentProject({});
+    await made.write("ci/check.json", JSON.stringify({ check: { command: "node app.mjs", prepare: "true" } }));
+    const checked = await check(made, ["--base", "HEAD", "--config", "ci/check.json"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "command-failed", side: "base" });
+    expect(checked.report.failure?.advice).toContain('to "check" in ci/check.json');
+    expect(checked.report.failure?.advice).not.toContain("downtrace.json");
+  });
+
+  it("refuses link with a prepare that installs before it checks anything out", async () => {
+    const made = await dependentProject({ link: true, prepare: "pnpm install --offline && pnpm build" });
+    const before = await snapshot(made);
+    const checked = await check(made, ["--base", "HEAD"]);
+    expect(checked.code).toBe(2);
+    expect(checked.report.failure).toMatchObject({ code: "bad-config", side: null });
+    expect(checked.report.failure?.message).toContain("(pnpm install)");
+    expect(await snapshot(made)).toEqual(before);
+    expect(await worktrees(made)).toEqual([made.dir]);
+  });
+
   it("takes the links away when the prepare fails after them, and follows none of them", async () => {
     const made = await compiledCssProject({ link: true, prepare: "test -L node_modules && echo linked && exit 3" });
     const before = await snapshot(made);

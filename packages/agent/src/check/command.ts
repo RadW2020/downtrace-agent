@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { runInit } from "../init/command.ts";
 import { parsePackageJson } from "../init/detect.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
-import { type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
+import { type CheckConfig, type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
 import { type FeedbackContext, feedbackFor } from "./feedback.ts";
 import { renderJson, renderText } from "./render.ts";
 import { type CheckReport, exitCodeOf, failed } from "./report.ts";
@@ -24,15 +24,22 @@ export interface CliDeps {
   signal: AbortSignal | undefined;
 }
 
+/** What was read of the configuration, and from which file, as the person reaches it from where `check` ran. */
+type Loaded = { ok: true; config: CheckConfig; file: string | undefined } | { ok: false; reason: string };
+
 /** The configuration: the file asked for, or the nearest one up to the top of the repository, or none. */
-async function loadConfig(cwd: string, asked: string | undefined, env: NodeJS.ProcessEnv): Promise<ConfigResult> {
+async function loadConfig(cwd: string, asked: string | undefined, env: NodeJS.ProcessEnv): Promise<Loaded> {
+  const from = (parsed: ConfigResult, path: string): Loaded =>
+    parsed.ok ? { ...parsed, file: relative(cwd, path) } : parsed;
   try {
     if (asked !== undefined) {
       const path = resolve(cwd, asked);
-      return parseConfig(await readFile(path, "utf8"), path);
+      return from(parseConfig(await readFile(path, "utf8"), path), path);
     }
     const found = await findConfig(cwd, (await repositoryTop(cwd, env)) ?? cwd);
-    return found === undefined ? { ok: true, config: EMPTY_CONFIG } : parseConfig(found.text, found.path);
+    return found === undefined
+      ? { ok: true, config: EMPTY_CONFIG, file: undefined }
+      : from(parseConfig(found.text, found.path), found.path);
   } catch (err) {
     return {
       ok: false,
@@ -112,6 +119,7 @@ export async function runCli(deps: CliDeps): Promise<number> {
     command,
     prepare: configured.prepare,
     link: configured.link,
+    configFile: loaded.file,
     routes: configured.routes,
     timeoutMs: timeoutSeconds * 1000,
     env: deps.env,

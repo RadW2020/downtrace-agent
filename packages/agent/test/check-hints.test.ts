@@ -193,7 +193,13 @@ describe("what is said of a base that failed with no dependencies, because prepa
   // The stranger campaign: hackathon-starter compiles its CSS in postinstall, into a file git ignores, so its base
   // needs `prepare: "npm run scss"`; with prepare given nothing was linked, and the prepare failed on `sass: not
   // found`. What it needed was the working tree's node_modules linked first, and the report did not say so.
-  const unlinked: UnlinkedBase = { prepare: true, link: undefined, inWorkingTree: true, inBase: false };
+  const unlinked: UnlinkedBase = {
+    prepare: true,
+    link: undefined,
+    inWorkingTree: true,
+    inBase: false,
+    configFile: "downtrace.json",
+  };
 
   it("names the key, and the condition it is safe on: a prepare that does not install", () => {
     const advice = adviceForUnlinkedBase(unlinked) ?? "";
@@ -201,6 +207,13 @@ describe("what is said of a base that failed with no dependencies, because prepa
     expect(advice).toContain("downtrace.json");
     expect(advice).toContain("If prepare does not install");
     expect(advice).toContain("before prepare runs");
+  });
+
+  it("names the file the configuration was read from, which is where the key goes", () => {
+    // `--config ci/check.json`: a downtrace.json written beside it would not be read.
+    const advice = adviceForUnlinkedBase({ ...unlinked, configFile: "ci/check.json" }) ?? "";
+    expect(advice).toContain('to "check" in ci/check.json');
+    expect(advice).not.toContain("downtrace.json");
   });
 
   it.each<[string, Partial<UnlinkedBase>]>([

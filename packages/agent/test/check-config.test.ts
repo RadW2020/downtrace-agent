@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { CONFIG_FILE, declaredRoute, findConfig, parseConfig, shellJoin } from "../src/check/config.ts";
+import {
+  CONFIG_FILE,
+  declaredRoute,
+  findConfig,
+  INSTALLING_VERBS,
+  installIn,
+  PACKAGE_MANAGERS,
+  parseConfig,
+  shellJoin,
+} from "../src/check/config.ts";
 
 /**
  * `downtrace.json`: the one place a project says how its tests are run, which `downtrace init` writes and
@@ -100,6 +109,88 @@ describe("reading the configuration", () => {
     if (parsed.ok) return;
     expect(parsed.reason).toContain("downtrace.json: ");
     expect(parsed.reason).toContain(reason);
+  });
+});
+
+describe("link with a prepare that installs", () => {
+  // `"link": true` links the working tree's node_modules into the base before prepare runs. An install in that
+  // prepare writes through the links: pnpm installs the base's lockfile into the working tree's node_modules, and
+  // the person's project is left with the dependencies of a commit they are not on.
+  const refused = (prepare: string): string => {
+    const parsed = parseConfig(JSON.stringify({ check: { prepare, link: true } }), "ci/check.json");
+    expect(parsed.ok, prepare).toBe(false);
+    return parsed.ok ? "" : parsed.reason;
+  };
+
+  it.each([
+    "npm ci",
+    "npm install",
+    "npm i --no-audit",
+    "pnpm install --frozen-lockfile",
+    "pnpm i",
+    "pnpm --filter api install",
+    "pnpm -r install",
+    "npm --prefix ../.. ci",
+    "yarn",
+    "yarn --frozen-lockfile",
+    "yarn install --immutable",
+    "bun install",
+    "pnpm add left-pad",
+    "npm rebuild",
+    "pnpm run scss && pnpm install",
+    "CI=1 pnpm install",
+    "corepack pnpm install",
+    "cd ../.. && yarn && yarn build",
+    "(npm ci)",
+    "pnpm install;pnpm build",
+  ])("refuses %s, where it was written, and says what to do instead", (prepare) => {
+    const reason = refused(prepare);
+    expect(reason).toContain("ci/check.json: ");
+    expect(reason).toContain('"check.link" is true and "check.prepare" installs');
+    expect(reason).toContain("into the working tree's node_modules");
+    expect(reason).toContain('Leave "link" out');
+  });
+
+  it("names the install it saw, out of a longer prepare", () => {
+    expect(refused("pnpm run scss && pnpm --filter api install --offline && pnpm build")).toContain(
+      "(pnpm --filter api install)",
+    );
+    expect(refused("cd ../.. && yarn && yarn build")).toContain("(yarn)");
+  });
+
+  it("refuses every verb that installs, with every package manager", () => {
+    for (const manager of PACKAGE_MANAGERS) {
+      for (const verb of INSTALLING_VERBS) {
+        expect(installIn(`${manager} ${verb}`), `${manager} ${verb}`).toBe(`${manager} ${verb}`);
+      }
+    }
+  });
+
+  it.each([
+    "npm run scss",
+    "pnpm run build",
+    "pnpm --filter api build",
+    "yarn build",
+    "yarn --silent build",
+    "npm run install:hooks",
+    "pnpm run install",
+    "pnpm exec prisma generate",
+    "node scripts/install.js",
+    "npm run i18n",
+    "make install",
+    "pnpm build && cp -r dist ../",
+  ])("takes %s, which installs nothing it can see", (prepare) => {
+    expect(installIn(prepare)).toBeUndefined();
+    expect(parseConfig(JSON.stringify({ check: { prepare, link: true } }), "x").ok).toBe(true);
+  });
+
+  it("takes an install in prepare when link is false or unsaid: nothing is linked, and it installs the base's own", () => {
+    for (const link of [false, undefined]) {
+      expect(parseConfig(JSON.stringify({ check: { prepare: "pnpm install", link } }), "x")).toMatchObject({
+        ok: true,
+        config: { prepare: "pnpm install", link },
+      });
+    }
   });
 });
 
