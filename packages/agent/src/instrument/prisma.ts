@@ -55,8 +55,18 @@ export const PRISMA_PROVIDERS = {
 type PrismaDependency = (typeof PRISMA_PROVIDERS)[keyof typeof PRISMA_PROVIDERS];
 type SqlDependency = Exclude<PrismaDependency, "mongodb">;
 
-/** The files of `@prisma/client`'s runtime a generated client requires: 3.15's to 6's engines, and the data proxy's. */
-const RUNTIMES = ["library.js", "binary.js", "index.js", "edge.js", "data-proxy.js"] as const;
+/**
+ * A runtime of Prisma's, by where it is: `@prisma/client`'s, which a client generated into `node_modules` requires, or
+ * the copy Prisma 6 puts beside a client generated into the project, which requires that one — 3.15's to 6's engines,
+ * and the data proxy's. What it exports says it is one.
+ */
+const RUNTIME = /[\\/]runtime[\\/](?:library|binary|index|edge|data-proxy)\.js$/;
+
+/**
+ * The last request at which the module cache is looked at for a client. Until one is found it is looked at in the
+ * requests that are powers of two, so an application that declares Prisma and never loads it pays for eleven looks.
+ */
+export const LAST_LOOK = 1024;
 
 /** An action Prisma names an operation with, `findMany`, and a model a schema declares, `Post`. */
 const ACTION = /^[a-z][A-Za-z]*$/;
@@ -212,59 +222,60 @@ export function patchPrisma(client: unknown, version: string, deps: InstrumentPr
 }
 
 /**
+ * Patches the class every generated client in the module cache exports: the modules that required a runtime of
+ * Prisma's. Returns how many there were.
+ */
+function patchCached(cache: NodeJS.Require["cache"], version: string, deps: InstrumentPrismaDeps): number {
+  const runtimes = new Set<unknown>();
+  for (const [file, module] of Object.entries(cache)) {
+    if (module === undefined || !RUNTIME.test(file)) continue;
+    const exported = module.exports as { getPrismaClient?: unknown } | null | undefined;
+    if (typeof exported?.getPrismaClient === "function") runtimes.add(module);
+  }
+  if (runtimes.size === 0) return 0;
+  let clients = 0;
+  for (const module of Object.values(cache)) {
+    // What the ES module loader puts in the cache has no `children`: an application's own `.mjs`, for one.
+    const children = (module as { children?: unknown } | undefined)?.children;
+    if (!Array.isArray(children) || !children.some((child) => runtimes.has(child))) continue;
+    try {
+      const exported = (module?.exports as { PrismaClient?: unknown } | null | undefined)?.PrismaClient;
+      if (patchPrisma(exported, version, deps)) clients += 1;
+    } catch (err) {
+      deps.internalError(err);
+    }
+  }
+  return clients;
+}
+
+/**
  * The start-up half, as the drivers' (ADR 0209): resolve `@prisma/client` from the application's root, load nothing,
- * and patch from the start of the first request at which the application has loaded a client. What is resolved is the
- * runtime every generated client requires, since a client generated into the project's own directory never loads
- * `@prisma/client` itself; the clients are the modules of the cache that required it, and the class each exports is
- * patched. A client loaded after that request — a second schema, imported lazily — is not seen.
+ * and patch from the start of a request at which the application has loaded a client. Where that client's runtime is
+ * cannot be resolved — a client generated into the project requires a copy of its own, wherever the project put it —
+ * so the cache is looked at whole, and so not at every request: at the first, the second, the fourth, up to
+ * `LAST_LOOK`, and no more once a client is found. A client loaded after that — a second schema, imported lazily — is
+ * not seen.
  */
 export function armPrisma(deps: InstrumentPrismaDeps & { from?: string | undefined }): Armed {
   const from = deps.from ?? applicationEntry();
   const require = createRequire(from);
-  // Resolved, so by their real paths, which are the module cache's: the package may be a link to the store.
-  const runtimes: string[] = [];
-  for (const file of RUNTIMES) {
-    try {
-      runtimes.push(require.resolve(`@prisma/client/runtime/${file}`));
-    } catch {
-      // Each version has some of them: 3 and 4 their `index.js`, 4 its data proxy's, 5 and 6 neither.
-    }
-  }
-  if (runtimes.length === 0) {
+  let version: string;
+  try {
+    const read = require("@prisma/client/package.json") as { version?: unknown };
+    version = typeof read.version === "string" ? read.version : "unknown";
+  } catch {
     deps.log.debug("@prisma/client is not resolvable from the application's root; not instrumenting Prisma");
     return { state: "unavailable", attach: () => true };
   }
-  let version = "unknown";
-  try {
-    const read = require("@prisma/client/package.json") as { version?: unknown };
-    if (typeof read.version === "string") version = read.version;
-  } catch {
-    deps.log.debug("@prisma/client resolved but its version could not be read; it stays unknown");
-  }
+  let requests = 0;
+  let next = 1;
   const attach = (): boolean => {
-    const loaded = new Set<NodeJS.Module>();
-    for (const file of runtimes) {
-      const module = require.cache[file];
-      if (module !== undefined) loaded.add(module);
-    }
-    // Until a client is loaded there is nothing to patch, and nothing is lost by waiting: an operation cannot run
-    // before its client is loaded. The check is a few reads of the module cache, once per request until then.
-    if (loaded.size === 0) return false;
-    let clients = 0;
-    for (const module of Object.values(require.cache)) {
-      // What the ES module loader puts in the cache has no `children`: an application's own `.mjs`, for one.
-      const children = (module as { children?: unknown } | undefined)?.children;
-      if (!Array.isArray(children) || !children.some((child) => loaded.has(child))) continue;
-      try {
-        const exported = (module?.exports as { PrismaClient?: unknown } | null | undefined)?.PrismaClient;
-        if (patchPrisma(exported, version, deps)) clients += 1;
-      } catch (err) {
-        deps.internalError(err);
-      }
-    }
-    if (clients === 0) {
-      deps.log.debug("Prisma's runtime is loaded and no client it generated is in the module cache; not instrumenting");
-    }
+    requests += 1;
+    if (requests < next) return false;
+    next *= 2;
+    if (patchCached(require.cache, version, deps) > 0) return true;
+    if (requests < LAST_LOOK) return false;
+    deps.log.debug(`no Prisma client was in the module cache by request ${LAST_LOOK}; not instrumenting Prisma`);
     return true;
   };
   return { state: "on", attach };

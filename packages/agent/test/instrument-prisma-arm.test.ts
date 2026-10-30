@@ -1,12 +1,12 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import Module, { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { apart, enterRequest, type RequestContext } from "../src/context.ts";
-import { armPrisma } from "../src/instrument/prisma.ts";
+import { armPrisma, LAST_LOOK } from "../src/instrument/prisma.ts";
 import type { Logger } from "../src/log.ts";
-import { CLIENT_REQUEST, generatePrisma } from "./support/prisma-client.ts";
+import { CLIENT_REQUEST, generatePrisma, type PrismaLayout } from "./support/prisma-client.ts";
 
 /**
  * Where the observer finds a generated client (ADR 0241): resolved from the application's root at start-up, and patched
@@ -47,30 +47,28 @@ const operationsOf = (ctx: RequestContext) =>
   [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "query").map((o) => [o.text, o.count]);
 
 describe("arming Prisma from the application's root", () => {
+  // The module cache is the process's, and a client loaded by one test is in it for every test after: the one about
+  // what is not loaded yet goes first.
   const made: string[] = [];
   afterAll(async () => {
     for (const dir of made) await rm(dir, { recursive: true, force: true });
   });
 
-  it("finds the client generated in node_modules once the application has loaded it, and not before", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "dt-prisma-arm-"));
+  /** A project with a client generated into it and not loaded, and the arm of an application there. */
+  async function generated(layout: PrismaLayout) {
+    // By its real path, which is the module cache's: the temporary directory may be a link (macOS's is).
+    const dir = await realpath(await mkdtemp(join(tmpdir(), `dt-prisma-arm-${layout}-`)));
     made.push(dir);
-    await generatePrisma(dir, "default", join(dir, "app.db"));
+    await generatePrisma(dir, layout, join(dir, "app.db"));
     await writeFile(join(dir, "app.js"), "");
     const armed = armPrisma({ ...deps, from: join(dir, "app.js") });
     expect(armed.state).toBe("on");
-    // Not loaded yet: nothing to patch, and the attach asks again at the next request.
-    expect(armed.attach()).toBe(false);
     // biome-ignore lint/suspicious/noExplicitAny: the generated client's types are the project's, not the test's.
-    const { PrismaClient } = createRequire(join(dir, "app.js"))(CLIENT_REQUEST.default) as any;
-    // What the ES module loader puts in the cache beside them, an application's `.mjs`, has no `children`.
-    const esm = join(dir, "app.mjs");
-    require.cache[esm] = { id: esm, exports: {} } as NodeJS.Module;
-    try {
-      expect(armed.attach()).toBe(true);
-    } finally {
-      delete require.cache[esm];
-    }
+    const load = () => createRequire(join(dir, "app.js"))(CLIENT_REQUEST[layout]) as any;
+    return { dir, armed, load };
+  }
+
+  async function counted(PrismaClient: new () => { user: { count(): Promise<number> }; $disconnect(): Promise<void> }) {
     const prisma = new PrismaClient();
     try {
       const ctx = await inRequest(async () => {
@@ -80,6 +78,45 @@ describe("arming Prisma from the application's root", () => {
     } finally {
       await prisma.$disconnect();
     }
+  }
+
+  it("looks in the module cache at the requests that are powers of two, finds a client loaded late, and stops", async () => {
+    const { armed, load } = await generated("output");
+    // Nothing loaded anywhere: looked at eleven times in the first 1024 requests, and no more.
+    const never = armPrisma({ ...deps, from: join(made[0] as string, "app.js") });
+    const settled = Array.from({ length: LAST_LOOK }, () => never.attach());
+    expect(settled.slice(0, -1).every((done) => !done)).toBe(true);
+    expect(settled.at(-1)).toBe(true);
+
+    expect([armed.attach(), armed.attach()]).toEqual([false, false]);
+    // Loaded lazily, after the second request: the third does not look, and the fourth finds it.
+    const { PrismaClient } = load();
+    expect([armed.attach(), armed.attach()]).toEqual([false, true]);
+    await counted(PrismaClient);
+  }, 60_000);
+
+  it("finds the client generated in node_modules, which requires @prisma/client's runtime", async () => {
+    const { armed, load } = await generated("default");
+    const { PrismaClient } = load();
+    // What the ES module loader puts in the cache beside them, an application's `.mjs`, has no `children`.
+    const esm = join(made.at(-1) as string, "app.mjs");
+    require.cache[esm] = { id: esm, exports: {} } as NodeJS.Module;
+    try {
+      expect(armed.attach()).toBe(true);
+    } finally {
+      delete require.cache[esm];
+    }
+    await counted(PrismaClient);
+  }, 60_000);
+
+  it("finds a client generated into the project, whose runtime is a copy of its own beside it", async () => {
+    // Prisma 6 copies its runtime into the output directory, and the client requires that copy, never
+    // `@prisma/client`'s: what the module cache has is `generated/prisma/runtime/library.js`.
+    const { dir, armed, load } = await generated("output");
+    const { PrismaClient } = load();
+    expect(Object.keys(require.cache)).toContain(join(dir, "generated", "prisma", "runtime", "library.js"));
+    expect(armed.attach()).toBe(true);
+    await counted(PrismaClient);
   }, 60_000);
 
   it("is unavailable where @prisma/client does not resolve, and has nothing to attach", async () => {

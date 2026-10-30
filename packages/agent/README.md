@@ -647,10 +647,12 @@ through one method of its class, and the instrumentation wraps it (switch `prism
   it; the `findUnique`s Prisma batches in one tick are each one, as you wrote them; every operation of a
   `$transaction`, of an interactive one, and of a client `$extends` made is counted; a middleware that answers without
   the engine is not. A loop that runs a `findMany` per item is the N+1 `check` is for, and it is seen.
-- **Where the client is found.** In the module cache, from the first request, resolved and not loaded at start-up as
-  for `pg`: the client generated into `node_modules/.prisma/client`, which every Prisma 3 to 5 project has, and one
-  generated into a directory of your own (`output = "../generated/prisma"`, what Prisma 6 asks for), as long as it is
-  loaded as CommonJS. Under Jest, the copy of a module whose name has `prisma` in it — `@prisma/client`,
+- **Where the client is found.** In the module cache, nothing loaded at start-up, as for `pg`: the client generated
+  into `node_modules/.prisma/client`, which every Prisma 3 to 5 project has, and one generated into a directory of your
+  own (`output = "../generated/prisma"`, what Prisma 6 asks for), with the copy of Prisma's runtime Prisma puts beside
+  it, as long as it is loaded as CommonJS. Since that directory is yours to name, the whole cache is looked at, at the
+  1st, 2nd, 4th… request up to the 1024th, and not again once a client is found: a client your application loads
+  after that is not seen. Under Jest, the copy of a module whose name has `prisma` in it — `@prisma/client`,
   `../generated/prisma`. Not seen: a client the `prisma-client` generator wrote as ES modules, one a bundler inlined,
   and one a test runner loads outside Node's module cache — Vitest, a client generated into your project's directory;
   one in `node_modules/.prisma/client` it leaves to Node, and that one is seen.

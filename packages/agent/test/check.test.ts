@@ -681,10 +681,11 @@ describe("a Mongoose suite Jest runs, as a Mongoose boilerplate is tested", () =
  * base generates its own in `prepare` with the working tree's dependencies linked — the generated directory is what
  * git ignores. The database is a SQLite file both runs use, seeded by each.
  */
-const PRISMA_APP = `
+/** The application, importing its client from where it was generated. */
+const prismaApp = (client: string): string => `
 import { readFileSync } from "node:fs";
 import express from "express";
-import prismaClient from "@prisma/client";
+import prismaClient from "${client}";
 
 const { PrismaClient } = prismaClient;
 const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
@@ -775,11 +776,9 @@ describe("an application whose data goes through Prisma's engine, with its clien
   beforeAll(async () => {
     checked = await prismaProject(
       "default",
-      { "app.mjs": PRISMA_APP },
+      { "app.mjs": prismaApp("@prisma/client") },
       { command: "node app.mjs" },
-      {
-        express: EXPRESS_DIR,
-      },
+      { express: EXPRESS_DIR },
     );
   });
 
@@ -793,6 +792,28 @@ describe("an application whose data goes through Prisma's engine, with its clien
   it("says the prisma observer was on, on both sides", () => {
     expect(checked.report.base?.observers.prisma).toBe("on");
     expect(checked.report.change?.observers.prisma).toBe("on");
+  });
+});
+
+describe("an application Node runs, whose Prisma client is generated into the project with a runtime of its own", () => {
+  // Prisma 6 copies its runtime beside a client generated into the project, and the client requires that copy.
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await prismaProject(
+      "output",
+      { "app.mjs": prismaApp("./generated/prisma/index.js") },
+      {
+        command: "node app.mjs",
+        prepare: "node node_modules/prisma/build/index.js generate --schema prisma/schema.prisma",
+        link: true,
+      },
+      { express: EXPRESS_DIR, prisma: PRISMA_DIR },
+    );
+  });
+
+  it("sees the lookups multiplied, and exits 1", () => {
+    expect(checked.report.failure, JSON.stringify(checked.report.failure)).toBeNull();
+    expectLookupsMultiplied(checked);
   });
 });
 
