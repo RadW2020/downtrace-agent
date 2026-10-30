@@ -48,6 +48,7 @@
     "hono": "^4.13.14",
     "jest": "^30.5.2",
     "jest29": "npm:jest@^29.7.0",
+    "knex": "^3.3.0",
     "koa": "^3.2.1",
     "libsql": "^0.5.29",
     "mongodb": "^7.7.0",
@@ -59,7 +60,9 @@
     "postgres": "^3.4.9",
     "prisma": "^6.19.3",
     "redis": "^6.3.0",
-    "redis5": "npm:redis@^5.12.1"
+    "redis5": "npm:redis@^5.12.1",
+    "sqlite3": "^6.0.1",
+    "sqlite3-5": "npm:sqlite3@^5.1.7"
   },
   "license": "MIT",
   "repository": {

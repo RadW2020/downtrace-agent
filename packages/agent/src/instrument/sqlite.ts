@@ -6,6 +6,7 @@ import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
 import { type Armed, armDriver } from "./arm.ts";
+import { patchSqlite3 } from "./sqlite3.ts";
 
 /**
  * SQLite in the process (ADR 0239): the statements a request runs through `better-sqlite3`, or through `libsql`, the
@@ -237,13 +238,23 @@ export function armSqlite(deps: InstrumentSqliteDeps & { from?: string | undefin
       patchSqlite(module, version, deps);
     },
   });
+  // node-sqlite3, the callback driver Knex and Sequelize open SQLite with: both ask the application to install it.
+  const sqlite3 = armDriver<unknown>({
+    driver: "sqlite3",
+    from,
+    log: deps.log,
+    internalError: deps.internalError,
+    patch: (module, version) => {
+      patchSqlite3(module, version, deps);
+    },
+  });
+  const drivers = [better, libsql, sqlite3];
   return {
-    state: better.state === "on" || libsql.state === "on" ? "on" : "unavailable",
+    state: drivers.some((driver) => driver.state === "on") ? "on" : "unavailable",
     attach: () => {
-      // Both, every time: one settled is no reason to stop asking the other.
-      const betterDone = better.attach();
-      const libsqlDone = libsql.attach();
-      return betterDone && libsqlDone;
+      // Every one, every time: one settled is no reason to stop asking the others.
+      const done = drivers.map((driver) => driver.attach());
+      return done.every(Boolean);
     },
   };
 }

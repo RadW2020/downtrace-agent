@@ -32,7 +32,7 @@ export const FRAMEWORK_PACKAGES = [
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
  * postgres.js (`postgres`), MySQL through `mysql2`, SQLite through `better-sqlite3` (and Prisma's adapter for it) and
- * `libsql` (and `@libsql/client`, which opens a file with it), MongoDB through `mongodb` (and Mongoose, which sends
+ * `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends
  * every command through it), Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis`
  * (node-redis, from 5.12). A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
@@ -48,6 +48,7 @@ export const OBSERVED_PACKAGES = [
   "@prisma/adapter-better-sqlite3",
   "libsql",
   "@libsql/client",
+  "sqlite3",
   "mongodb",
   "mongoose",
   "@prisma/client",
@@ -60,7 +61,7 @@ export const OBSERVED_PACKAGES = [
  * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
  * route whose work went through it.
  */
-export const UNOBSERVED_PACKAGES = ["mysql", "sqlite3", "mssql", "oracledb", "kafkajs", "amqplib"] as const;
+export const UNOBSERVED_PACKAGES = ["mysql", "mssql", "oracledb", "kafkajs", "amqplib"] as const;
 
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the

@@ -178,7 +178,7 @@ export function adviceForUnlinkedBase(base: UnlinkedBase): string | undefined {
 export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   pg: ["pg", "@prisma/adapter-pg", "slonik", "postgres"],
   mysql: ["mysql2"],
-  sqlite: ["better-sqlite3", "@prisma/adapter-better-sqlite3", "libsql", "@libsql/client"],
+  sqlite: ["better-sqlite3", "@prisma/adapter-better-sqlite3", "libsql", "@libsql/client", "sqlite3"],
   mongodb: ["mongodb", "mongoose"],
   prisma: ["@prisma/client"],
   redis: ["ioredis", "redis"],

@@ -79,12 +79,12 @@ describe("when check offers a link", () => {
 
   it("offers it when routes saw nothing in a project that depends on a driver Downtrace does not observe", () => {
     const report = reportWith([route("GET /products"), route("GET /tenants/:tenant/invoices", ["nothing-observed"])]);
-    const feedback = feedbackFor(report, context({ dependencies: new Set(["express", "sqlite3"]) }));
+    const feedback = feedbackFor(report, context({ dependencies: new Set(["express", "mssql"]) }));
     expect(feedback?.why).toBe(
-      "1 route was called and nothing was observed inside its requests, and the project depends on sqlite3, " +
+      "1 route was called and nothing was observed inside its requests, and the project depends on mssql, " +
         "which Downtrace does not observe",
     );
-    expect(issueOf(feedback?.url ?? "").title).toBe("check: sqlite3 not observed");
+    expect(issueOf(feedback?.url ?? "").title).toBe("check: mssql not observed");
   });
 
   it.each([

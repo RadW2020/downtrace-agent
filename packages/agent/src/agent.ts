@@ -44,6 +44,7 @@ import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
 import { armPrisma, patchPrisma } from "./instrument/prisma.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { armSqlite, patchSqlite } from "./instrument/sqlite.ts";
+import { patchSqlite3 } from "./instrument/sqlite3.ts";
 import { attachJest, requiredFrom, type SandboxPatch } from "./jest.ts";
 import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -681,16 +682,19 @@ export class Agent {
         patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
       });
     }
-    // SQLite in the process, through better-sqlite3 or libsql (ADR 0239).
+    // SQLite in the process, through better-sqlite3, libsql or sqlite3 (ADR 0239).
     if (on.has("sqlite")) {
       const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
       const armed = armSqlite({ ...sqliteDeps, from: entry });
       said(observers, "sqlite", armed.state);
       this.sqliteAttach = armed.attach;
-      sandbox.push({
-        matches: (name) => name === "better-sqlite3" || name === "libsql",
-        patch: (database) => patchSqlite(database, "unknown", sqliteDeps),
-      });
+      sandbox.push(
+        {
+          matches: (name) => name === "better-sqlite3" || name === "libsql",
+          patch: (database) => patchSqlite(database, "unknown", sqliteDeps),
+        },
+        { matches: (name) => name === "sqlite3", patch: (sqlite3) => patchSqlite3(sqlite3, "unknown", sqliteDeps) },
+      );
     }
     // Prisma 4 to 6 through its engine, whose operations are queries of the dependency its datasource is (ADR 0241). A
     // raw query is named by the cache of its dialect, there when that dialect's switch is on, as it is by default.

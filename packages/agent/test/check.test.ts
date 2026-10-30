@@ -39,6 +39,9 @@ const MONGO_WIRE = new URL("./support/mongo-wire.mjs", import.meta.url);
 /** SQLite's two drivers: better-sqlite3, and `@libsql/client`, whose exports name no `package.json` either. */
 const BETTER_SQLITE3_DIR = dirname(createRequire(import.meta.url).resolve("better-sqlite3/package.json"));
 const LIBSQL_CLIENT_DIR = dirname(dirname(createRequire(import.meta.url).resolve("@libsql/client")));
+/** node-sqlite3, and Knex, which opens SQLite with it and finds the same copy through its peer dependency. */
+const SQLITE3_DIR = dirname(createRequire(import.meta.url).resolve("sqlite3/package.json"));
+const KNEX_DIR = dirname(createRequire(import.meta.url).resolve("knex/package.json"));
 /** Vitest's, for a suite it runs. */
 const VITEST_DIR = dirname(createRequire(import.meta.url).resolve("vitest/package.json"));
 /** Hono's, the same way: `require` resolves `dist/cjs/index.js`. */
@@ -981,6 +984,36 @@ test("users", async () => {
 });
 `;
 
+const KNEX_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import knexFactory from "knex";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const knex = knexFactory({ client: "sqlite3", connection: { filename: ":memory:" }, useNullAsDefault: true });
+await knex.schema.createTable("users", (table) => {
+  table.increments("id");
+  table.string("email");
+});
+await knex("users").insert({ email: "ana@example.com" });
+const app = express();
+app.get("/users/:id", async (req, res) => {
+  for (let i = 0; i < lookups; i += 1) await knex("users").where({ id: Number(req.params.id) }).first();
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/users/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await knex.destroy();
+`;
+
 async function sqliteProject(files: Record<string, string>, command: string, link: Record<string, string>) {
   const made = await createProject({
     ...files,
@@ -1012,6 +1045,25 @@ describe("a suite whose application keeps its data in SQLite, through better-sql
   it("says the sqlite observer was on, on both sides", () => {
     expect(checked.report.base?.observers.sqlite).toBe("on");
     expect(checked.report.change?.observers.sqlite).toBe("on");
+  });
+});
+
+describe("an application whose data goes through Knex on sqlite3, the callback driver", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await sqliteProject({ "app.mjs": KNEX_APP }, "node app.mjs", {
+      express: EXPRESS_DIR,
+      knex: KNEX_DIR,
+      sqlite3: SQLITE3_DIR,
+    });
+  });
+
+  it("sees the lookups multiplied, in the SQL Knex wrote, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    expect(route(checked.report, "GET /users/:id").operations[0]?.label).toBe(
+      "select * from `users` where `id` = ? limit ?",
+    );
+    expect(checked.report.base?.observers.sqlite).toBe("on");
   });
 });
 
