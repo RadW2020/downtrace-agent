@@ -173,6 +173,58 @@ describe("a project it can configure", () => {
     },
   );
 
+  /**
+   * Prisma's `prisma-client` generator — what `prisma init` writes in 6.19 — makes a client that imports Prisma's runtime
+   * as an ES module, which the instrumentation cannot reach (ADR 0243): on its own engine, before 7, it is not observed.
+   * `init` reads the schema where Prisma looks for it, and says so.
+   */
+  const generator = (provider: string, extra = "") =>
+    `generator client {\n  provider = "${provider}"\n  output   = "../generated/prisma"\n${extra}}\n\n` +
+    `datasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}\n`;
+
+  it.each<[string, Record<string, string>, Record<string, string>, string[]]>([
+    [
+      "prisma-client on its own engine, Prisma 6",
+      { "@prisma/client": "^6.19.0" },
+      { "prisma/schema.prisma": generator("prisma-client") },
+      ["@prisma/client"],
+    ],
+    [
+      "prisma-client, in a schema at the root",
+      { "@prisma/client": "^6.19.0" },
+      { "schema.prisma": generator("prisma-client") },
+      ["@prisma/client"],
+    ],
+    [
+      "prisma-client-js, Prisma 6",
+      { "@prisma/client": "^6.19.0" },
+      { "prisma/schema.prisma": generator("prisma-client-js") },
+      [],
+    ],
+    [
+      "prisma-client with engineType client and Postgres's adapter",
+      { "@prisma/client": "^6.19.0", "@prisma/adapter-pg": "^6.19.0" },
+      { "prisma/schema.prisma": generator("prisma-client", '  engineType = "client"\n') },
+      [],
+    ],
+    [
+      "prisma-client on Prisma 7, which has no engine and queries through its adapter",
+      { "@prisma/client": "^7.0.0", "@prisma/adapter-pg": "^7.0.0" },
+      { "prisma/schema.prisma": generator("prisma-client") },
+      [],
+    ],
+    ["no schema where Prisma looks for one", { "@prisma/client": "^6.19.0" }, {}, []],
+  ])("reads the generator of the schema: %s", async (_what, deps, files, unobserved) => {
+    const dir = await project({
+      ".git/": "",
+      "package.json": json({ dependencies: { express: "^5", ...deps }, scripts: { test: "vitest run" } }),
+      ...files,
+    });
+    const { report } = await init(dir);
+    expect(report.detected?.unobserved).toEqual(unobserved);
+    expect(report.detected?.observed.includes("@prisma/client")).toBe(unobserved.length === 0);
+  });
+
   it("says what it found and what it wrote, in words", async () => {
     const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
     const { code, text } = await initText(dir);

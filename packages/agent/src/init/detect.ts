@@ -380,17 +380,47 @@ async function nextBuild(dir: string): Promise<NextBuild | undefined> {
   };
 }
 
+/** Where Prisma looks for its schema when nothing says otherwise. */
+const PRISMA_SCHEMAS = ["prisma/schema.prisma", "schema.prisma"] as const;
+
+/**
+ * Whether the project's Prisma client is one the instrumentation cannot reach: the `prisma-client` generator's, before
+ * 7, on Prisma's own engine — what `prisma init` writes in 6.19. It imports Prisma's runtime as an ES module, and
+ * nothing outside that module holds the class (ADR 0243). On 7, and with `engineType = "client"`, the client queries
+ * through a driver adapter, which is observed through its driver or named among the unobserved. A range that names no
+ * major, or a schema that is not where Prisma looks by default, says nothing.
+ */
+async function prismaClientUnreachable(dir: string, ranges: ReadonlyMap<string, string>): Promise<boolean> {
+  const major = /(\d+)/.exec(ranges.get("@prisma/client") ?? "");
+  if (major === null || Number(major[1]) >= 7) return false;
+  for (const path of PRISMA_SCHEMAS) {
+    const text = await readIfThere(join(dir, path));
+    if (text === undefined) continue;
+    const code = text.replace(/\/\/.*$/gm, "");
+    return [...code.matchAll(/\bgenerator\s+\w+\s*\{([^}]*)\}/g)].some(
+      ([, body = ""]) => /\bprovider\s*=\s*"prisma-client"/.test(body) && !/\bengineType\s*=\s*"client"/.test(body),
+    );
+  }
+  return false;
+}
+
 /** Looks at the project in `dir`, whose `package.json` has already been read. */
 export async function detect(dir: string, pkg: PackageJson): Promise<Detection> {
   const top = await repositoryTop(dir);
   const manager = packageManagerOf(pkg.packageManager, await lockfileManager(dir, top));
   const testScript = testScriptOf(pkg.scripts);
   const frameworks = FRAMEWORK_PACKAGES.filter((name) => pkg.dependencies.has(name));
+  let observed = observedOf(pkg.dependencies, pkg.ranges);
+  const unobserved = unobservedOf(pkg.dependencies, pkg.ranges);
+  if (observed.includes("@prisma/client") && (await prismaClientUnreachable(dir, pkg.ranges))) {
+    observed = observed.filter((name) => name !== "@prisma/client");
+    unobserved.push("@prisma/client");
+  }
   return {
     manager,
     frameworks,
-    observed: observedOf(pkg.dependencies, pkg.ranges),
-    unobserved: unobservedOf(pkg.dependencies, pkg.ranges),
+    observed,
+    unobserved,
     testScript,
     testCommand: testScript === undefined ? undefined : commandFor(manager, testScript),
     installed: pkg.dependencies.has(AGENT_PACKAGE),
