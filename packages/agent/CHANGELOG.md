@@ -1,5 +1,14 @@
 # @downtrace/agent
 
+## 0.15.1
+
+### Patch Changes
+
+- f47964d: The instrumentation observes the driver each MikroORM package for a database brings — `pg`, `mysql2`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb` — from where that package is, as it does Prisma's adapter's and Mongoose's: with pnpm, or with npm and a driver of the application's at another version than MikroORM's pin, that copy was not the application's and nothing was seen. `downtrace init` names those packages as observed, and `@mikro-orm/mongodb` before 6, on a driver before 6, as not observed.
+- d9490ab: Under `downtrace check` the instrumentation resolves the application's drivers, Express (for its mounts), Hono and Prisma from the directory the tests run in as well as from the process's entry, which under a suite is the test runner. A runner the package manager keeps where nothing of the project resolves — pnpm's global virtual store (`enableGlobalVirtualStore`), a workspace without hoisting — left every observer without a driver, so the database was absent from each route, mounted Express routes were named `/:param/…`, and Hono's routes went unnamed. `check` passes the directory as `DOWNTRACE_CHECK_PROJECT`.
+- 1722573: When the base's tests fail asking for a file the base lacks and the working tree has — the `lib/` or `dist/` a build leaves, which git ignores and a fresh checkout does not have — `downtrace check` says so in the failure's advice, with the `prepare` that builds it: the project's `build` script as its package manager runs it, and `"link": true`. With a `prepare` given that did not make it, it says that instead. It reads the module Node (CommonJS and ESM), Vitest and Jest say they could not find. Until now the advice said only to make the tests pass on the base.
+- 802c155: A route on a router inside an Express app that is itself mounted keeps both mounts in its template, on Express 4 and 5: `app.use("/1", api)` with `api.use(router)`, as Parse Server mounts its routes, is `/1/classes/:className`, and `app.use("/orgs/:org", sub)` with `sub.use("/teams/:team", router)` is `/orgs/:org/teams/:team/users/:id`. Every mount there came out as `:param`. And an app mounted at two paths no longer names a request through the first after the second, which Express records alone and which counted the request on a route it did not take: that mount is `:param`.
+
 ## 0.15.0
 
 ### Minor Changes
