@@ -68,7 +68,11 @@ export interface RunTally {
   profileWindows: number;
   requests: number;
   routes: Map<string, RouteTally>;
-  /** What the instrumentation said it observed, by driver: `on`, `off`, `unavailable`, or several joined by `/`. */
+  /**
+   * What the instrumentation said it observed, by driver: `on`, `off`, `unavailable`, or several joined by `/`. Said by
+   * the processes that answered a request, when any did: a test runner's own process loads the instrumentation and no
+   * application, and what it could not resolve is nothing the run lost.
+   */
   observers: Record<string, string>;
 }
 
@@ -230,6 +234,8 @@ interface Owned {
   /** The instants its windows started at, to count one written twice once. */
   windows: Map<number, { start: number; end: number }>;
   intervals: Map<number, RawInterval>;
+  /** What its instrumentation said it observed, by driver: every state it said. */
+  observers: Map<string, Set<string>>;
 }
 
 /**
@@ -248,7 +254,6 @@ interface Owned {
 export class RunReader {
   private readonly problems = { count: 0 };
   private readonly processes = new Map<string, Owned>();
-  private readonly observed = new Map<string, Set<string>>();
   private readonly routes = new Map<string, RouteTally>();
   private batches = 0;
 
@@ -269,16 +274,16 @@ export class RunReader {
     this.batches += 1;
     let owner = this.processes.get(instance.id);
     if (owner === undefined) {
-      owner = { windows: new Map(), intervals: new Map() };
+      owner = { windows: new Map(), intervals: new Map(), observers: new Map() };
       this.processes.set(instance.id, owner);
     }
     const agent = isRecord(value.agent) ? value.agent : undefined;
     const observers = isRecord(agent?.observers) ? agent.observers : {};
     for (const [driver, state] of Object.entries(observers)) {
       if (typeof state !== "string") continue;
-      const states = this.observed.get(driver) ?? new Set<string>();
+      const states = owner.observers.get(driver) ?? new Set<string>();
       states.add(state);
-      this.observed.set(driver, states);
+      owner.observers.set(driver, states);
     }
     if (isRecord(value.profile)) {
       const window = readWindow(value.profile, this.problems);
@@ -344,11 +349,28 @@ export class RunReader {
       profileWindows,
       requests,
       routes: this.routes,
-      observers: Object.fromEntries(
-        [...this.observed].map(([driver, states]) => [driver, [...states].sort().join("/")]),
-      ),
+      observers: observersOf([...this.processes.values()]),
     };
   }
+}
+
+/**
+ * What the processes that answered a request said they observed, merged by driver; what every process said when none
+ * answered one, so that a run in which nothing answered still says why its observers could not see.
+ */
+function observersOf(processes: readonly Owned[]): Record<string, string> {
+  const answered = processes.filter((owned) =>
+    [...owned.intervals.values()].some((interval) => interval.endpoints.some((endpoint) => endpoint.count > 0)),
+  );
+  const merged = new Map<string, Set<string>>();
+  for (const owned of answered.length > 0 ? answered : processes) {
+    for (const [driver, states] of owned.observers) {
+      const into = merged.get(driver) ?? new Set<string>();
+      for (const state of states) into.add(state);
+      merged.set(driver, into);
+    }
+  }
+  return Object.fromEntries([...merged].map(([driver, states]) => [driver, [...states].sort().join("/")]));
 }
 
 /** The lines of an inspection file, as text. */

@@ -122,6 +122,24 @@ describe("reading the file of a run", () => {
     );
     expect(run.observers).toEqual({ pg: "on/unavailable", http: "on" });
   });
+
+  // The stranger campaign (Outline, under yarn and Vitest's threads): the runner's own process loads the
+  // instrumentation and no application, so its driver is unresolvable — and every route carried its queries all the
+  // same. What a process that answered nothing could not observe is nothing the run lost.
+  it("says what the processes that answered requests observed, and not what one that answered none could not", () => {
+    const answered = [interval(1000, 1000, [endpoint("GET", "/p", 4, { requestsWithCalls: 4 })])];
+    const runner = batch("runner", { observers: { pg: "unavailable", http: "on" } });
+    const app = batch("app", { intervals: answered, observers: { pg: "on", http: "on" } });
+    expect(readRun(fileOf(runner, app)).observers).toEqual({ pg: "on", http: "on" });
+    expect(readRun(fileOf(app, runner)).observers, "whichever wrote first").toEqual({ pg: "on", http: "on" });
+  });
+
+  it("still says when two processes that answered requests disagree", () => {
+    const answered = [interval(1000, 1000, [endpoint("GET", "/p", 4, { requestsWithCalls: 4 })])];
+    const one = batch("one", { intervals: answered, observers: { pg: "on" } });
+    const other = batch("other", { intervals: answered, observers: { pg: "unavailable" } });
+    expect(readRun(fileOf(one, other)).observers).toEqual({ pg: "on/unavailable" });
+  });
 });
 
 describe("which requests a profile can speak for", () => {
