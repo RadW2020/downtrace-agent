@@ -39,6 +39,8 @@ const MONGO_WIRE = new URL("./support/mongo-wire.mjs", import.meta.url);
 /** SQLite's two drivers: better-sqlite3, and `@libsql/client`, whose exports name no `package.json` either. */
 const BETTER_SQLITE3_DIR = dirname(createRequire(import.meta.url).resolve("better-sqlite3/package.json"));
 const LIBSQL_CLIENT_DIR = dirname(dirname(createRequire(import.meta.url).resolve("@libsql/client")));
+/** Vitest's, for a suite it runs. */
+const VITEST_DIR = dirname(createRequire(import.meta.url).resolve("vitest/package.json"));
 /** Hono's, the same way: `require` resolves `dist/cjs/index.js`. */
 const HONO_DIR = dirname(dirname(dirname(createRequire(import.meta.url).resolve("hono"))));
 
@@ -808,6 +810,72 @@ describe("an application Node runs, whose Prisma client is generated into the pr
         link: true,
       },
       { express: EXPRESS_DIR, prisma: PRISMA_DIR },
+    );
+  });
+
+  it("sees the lookups multiplied, and exits 1", () => {
+    expect(checked.report.failure, JSON.stringify(checked.report.failure)).toBeNull();
+    expectLookupsMultiplied(checked);
+  });
+});
+
+const PRISMA_VITEST_SUITE = `
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import express from "express";
+import { afterAll, beforeAll, expect, test } from "vitest";
+import prismaClient from "./generated/prisma/index.js";
+
+const { PrismaClient } = prismaClient;
+const prisma = new PrismaClient();
+let ana;
+beforeAll(async () => {
+  await prisma.post.deleteMany();
+  await prisma.user.deleteMany();
+  ana = await prisma.user.create({ data: { email: "ana@example.com", posts: { create: [{ title: "hello" }] } } });
+});
+afterAll(() => prisma.$disconnect());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await prisma.post.findMany({ where: { authorId: ana.id } });
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+describe("a suite Vitest runs, whose Prisma client is generated into the project, which Vitest loads itself", () => {
+  // Vitest runs a module of the project's directory itself, so the client never enters Node's module cache; only the
+  // runtime beside it does, which `check` wraps as it loads (ADR 0243).
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await prismaProject(
+      "output",
+      {
+        "users.test.mjs": PRISMA_VITEST_SUITE,
+        "package.json": JSON.stringify({ name: "prisma-vitest", private: true }),
+      },
+      {
+        command: "node node_modules/vitest/vitest.mjs run",
+        prepare: "node node_modules/prisma/build/index.js generate --schema prisma/schema.prisma",
+        link: true,
+      },
+      { vitest: VITEST_DIR, express: EXPRESS_DIR, prisma: PRISMA_DIR },
     );
   });
 

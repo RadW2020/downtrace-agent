@@ -701,7 +701,8 @@ export class Agent {
         fingerprints: { postgres: this.fingerprints, mysql: this.mysqlFingerprints, sqlite: this.sqliteFingerprints },
         errors: this.errors,
       };
-      const armed = armPrisma({ ...prismaDeps, from: entry });
+      // Under `check` its runtime is wrapped as it loads, for a client Vitest runs itself (ADR 0243).
+      const armed = armPrisma({ ...prismaDeps, from: entry, early: this.config.checkRoutes !== undefined });
       said(observers, "prisma", armed.state);
       this.prismaAttach = armed.attach;
       sandbox.push({

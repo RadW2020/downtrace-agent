@@ -616,7 +616,8 @@ Measured version by version, with this instrumentation loaded through `--import`
 |---|---|---|
 | 7.x, with `@prisma/adapter-pg` or `@prisma/adapter-better-sqlite3` | through `pg` or `better-sqlite3`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`) |
 | 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with either adapter | through the driver, as 7 does | **Yes**, the same |
-| 3.15 to 6.x on its default engine, with no adapter: what Prisma does before 7 unless told otherwise | from Prisma's query engine, which speaks to the database itself | **Yes**, as Prisma's operations (`prisma`), measured on 3.15.2, 4.0.0, 4.16.2, 5.22.0 and 6.19.3 |
+| 3.15 to 6.x on its default engine, with no adapter, from the `prisma-client-js` generator: what Prisma does before 7 unless told otherwise | from Prisma's query engine, which speaks to the database itself | **Yes**, as Prisma's operations (`prisma`), measured on 3.15.2, 4.0.0, 4.16.2, 5.22.0 and 6.19.3 |
+| 6.x on its default engine from the `prisma-client` generator, what `prisma init` writes in 6.19 | the same, from a client that imports Prisma's runtime as an ES module | **No**: see below |
 | 5.x, and 6.x on its default engine, with an adapter | from the query engine, which calls the adapter, and so its driver, from a thread of its own | **No** |
 | Any version with another adapter (Neon, MariaDB, …) | through that adapter's own driver | **No**: it was not looked at |
 
@@ -653,9 +654,11 @@ through one method of its class, and the instrumentation wraps it (switch `prism
   it, as long as it is loaded as CommonJS. Since that directory is yours to name, the whole cache is looked at, at the
   1st, 2nd, 4th… request up to the 1024th, and not again once a client is found: a client your application loads
   after that is not seen. Under Jest, the copy of a module whose name has `prisma` in it — `@prisma/client`,
-  `../generated/prisma`. Not seen: a client the `prisma-client` generator wrote as ES modules, one a bundler inlined,
-  and one a test runner loads outside Node's module cache — Vitest, a client generated into your project's directory;
-  one in `node_modules/.prisma/client` it leaves to Node, and that one is seen.
+  `../generated/prisma`. Under `downtrace check`, also as Prisma's runtime is loaded: what reaches a client a test
+  runner loads outside Node's module cache, as Vitest does one generated into your project's directory, whose runtime
+  Node still loads. Not seen: a client the `prisma-client` generator wrote — what `prisma init` writes in 6.19 —, which
+  imports Prisma's runtime as an ES module nothing can reach into (on Prisma 7 it goes through a driver adapter, and is
+  seen through the driver); one a bundler inlined; and, outside `check`, one a runner loads itself.
 - **Not counted twice.** A client given a driver adapter is left alone: its SQL is the driver's to count.
 - **SQL Server** is not observed: the protocol has no dependency for it.
 - `observers` in the batch says `prisma: on` when `@prisma/client` resolves from your application, and nothing when it

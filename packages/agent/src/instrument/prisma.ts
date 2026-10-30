@@ -1,4 +1,4 @@
-import { createRequire } from "node:module";
+import Module, { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
 import {
   currentContext,
@@ -33,9 +33,10 @@ import type { Armed } from "./arm.ts";
  * - **A client with a driver adapter.** Its SQL goes through the driver, whose own observer counts it, as Prisma 7's
  *   does: counting it here too would count it twice. It is left alone.
  * - **SQL Server.** The protocol has no dependency for it.
- * - **A client that is not in the module cache:** one Prisma 6's `prisma-client` generator wrote as ES modules, one a
- *   bundle inlined, one Vitest loads from the project's directory, which leaves only the runtime to Node. The class is
- *   reached from the module cache, and nothing else holds it.
+ * - **A client whose class nothing outside its runtime holds:** one Prisma 6's `prisma-client` generator wrote, which
+ *   imports the runtime's ES module, and one a bundle inlined with its runtime. The class is reached from the module
+ *   cache, and under `check` from the runtime as Node loads it (ADR 0243): one Vitest runs from the project's directory
+ *   is seen there, and only there.
  */
 
 const MARK = Symbol.for("downtrace.prisma.instrumented");
@@ -248,6 +249,61 @@ function patchCached(cache: NodeJS.Require["cache"], version: string, deps: Inst
   return clients;
 }
 
+const WRAPPED = Symbol.for("downtrace.prisma.runtime");
+
+/** Node's loader, as far as it is wrapped here. */
+interface Loader {
+  _load: (request: string, parent: unknown, isMain: boolean) => unknown;
+  _resolveFilename: (request: string, parent: unknown, isMain: boolean) => string;
+  [WRAPPED]?: boolean;
+}
+
+/**
+ * Under `check` (ADR 0243): wraps Node's loader so that a runtime of Prisma's, as it is loaded, is handed over with a
+ * `getPrismaClient` that patches the class it makes. That reaches a client the module cache never holds — one Vitest
+ * runs from the project's own directory, whose runtime is still loaded by Node. What is handed over is every export
+ * of the runtime, read from it; the cache holds the same, so a second `require` gets it too.
+ */
+function wrapRuntimeLoads(version: string, deps: InstrumentPrismaDeps): void {
+  const loader = Module as unknown as Loader;
+  if (loader[WRAPPED] === true) return;
+  loader[WRAPPED] = true;
+  const load = loader._load;
+  const handed = new WeakSet<object>();
+  loader._load = function (this: unknown, request: string, parent: unknown, isMain: boolean): unknown {
+    const loaded = load.call(this, request, parent, isMain);
+    // A runtime is what exports `getPrismaClient`: one property read for every other module.
+    const getPrismaClient = (loaded as { getPrismaClient?: unknown } | null | undefined)?.getPrismaClient;
+    if (typeof getPrismaClient !== "function" || handed.has(loaded as object)) return loaded;
+    try {
+      const filename = loader._resolveFilename(request, parent, isMain);
+      if (!RUNTIME.test(filename)) return loaded;
+      const runtime = loaded as Record<string, unknown>;
+      const wrapper: Record<string, unknown> = {};
+      for (const key of Object.keys(runtime)) {
+        if (key !== "getPrismaClient")
+          Object.defineProperty(wrapper, key, { get: () => runtime[key], enumerable: true });
+      }
+      wrapper.getPrismaClient = function (this: unknown, ...args: unknown[]): unknown {
+        const client = (getPrismaClient as (...args: unknown[]) => unknown).apply(this, args);
+        try {
+          patchPrisma(client, version, deps);
+        } catch (err) {
+          deps.internalError(err);
+        }
+        return client;
+      };
+      handed.add(wrapper);
+      const cached = createRequire(filename).cache[filename];
+      if (cached !== undefined) cached.exports = wrapper;
+      return wrapper;
+    } catch (err) {
+      deps.internalError(err);
+      return loaded;
+    }
+  };
+}
+
 /**
  * The start-up half, as the drivers' (ADR 0209): resolve `@prisma/client` from the application's root, load nothing,
  * and patch from the start of a request at which the application has loaded a client. Where that client's runtime is
@@ -256,7 +312,9 @@ function patchCached(cache: NodeJS.Require["cache"], version: string, deps: Inst
  * `LAST_LOOK`, and no more once a client is found. A client loaded after that — a second schema, imported lazily — is
  * not seen.
  */
-export function armPrisma(deps: InstrumentPrismaDeps & { from?: string | undefined }): Armed {
+export function armPrisma(
+  deps: InstrumentPrismaDeps & { from?: string | undefined; early?: boolean | undefined },
+): Armed {
   const from = deps.from ?? applicationEntry();
   const require = createRequire(from);
   let version: string;
@@ -267,6 +325,7 @@ export function armPrisma(deps: InstrumentPrismaDeps & { from?: string | undefin
     deps.log.debug("@prisma/client is not resolvable from the application's root; not instrumenting Prisma");
     return { state: "unavailable", attach: () => true };
   }
+  if (deps.early === true) wrapRuntimeLoads(version, deps);
   let requests = 0;
   let next = 1;
   const attach = (): boolean => {
