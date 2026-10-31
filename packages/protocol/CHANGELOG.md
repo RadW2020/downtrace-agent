@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.13.0
+
+### Minor Changes
+
+- 6b062f1: Protocol 0.13.0: a dependency may be of kind `mssql`, a SQL Server database named by its host and port, whose statements are operations of kind `query` normalised as T-SQL reads them; and `observers` has a `mssql` switch.
+
 ## 0.12.0
 
 ### Minor Changes

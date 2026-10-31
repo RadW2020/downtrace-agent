@@ -1,5 +1,17 @@
 # @downtrace/agent
 
+## 0.17.0
+
+### Minor Changes
+
+- 6b062f1: The instrumentation observes SQL Server through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma 7's `@prisma/adapter-mssql`: the statements of each request, their time and their errors, as the dependency `mssql` named by its host and port, under a new `mssql` switch. Statements are read as T-SQL — brackets and double quotes are names, `@p0` and `@0` placeholders — and a statement `mssql` prepared is named by its text and not by `sp_execute`; the `SELECT 1;` with which `mssql`'s pool validates a connection is not counted. `downtrace init` names `tedious`, `mssql` and `@prisma/adapter-mssql` as observed. A `$1` placeholder now takes what is glued to it, in every dialect.
+- 6f381da: The instrumentation observes MySQL through `mysql` (mysqljs) too, the driver TypeORM loads first when it is installed and Knex's `mysql` client uses: the queries of each request, their time and their errors, and the wait on its pool, as the dependency `mysql`, through the observer of `mysql2`, whose API it is — and under Jest. `downtrace init` names `mysql` as observed.
+
+### Patch Changes
+
+- Updated dependencies [6b062f1]
+  - @downtrace/protocol@0.13.0
+
 ## 0.16.0
 
 ### Minor Changes
