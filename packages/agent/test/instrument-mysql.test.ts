@@ -952,15 +952,28 @@ describe("armMysql, the deferred attach", () => {
     for (const app of apps.splice(0)) await app.cleanup();
   });
 
-  async function stubApp(indexJs: string) {
+  /**
+   * A driver laid out as `mysql2` is: its classes in `lib/`, an entry that exports them, and a `promise.js` that
+   * requires them and not the entry, as 3.24 does.
+   */
+  async function stubApp(connectionJs: string) {
     const dir = await mkdtemp(join(tmpdir(), "downtrace-armmysql-"));
     const driver = join(dir, "node_modules", "mysql2");
-    await mkdir(driver, { recursive: true });
+    await mkdir(join(driver, "lib"), { recursive: true });
     await writeFile(
       join(driver, "package.json"),
       JSON.stringify({ name: "mysql2", version: "3.99.0", main: "index.js" }),
     );
-    await writeFile(join(driver, "index.js"), indexJs);
+    await writeFile(join(driver, "lib", "connection.js"), connectionJs);
+    await writeFile(join(driver, "lib", "pool.js"), POOL);
+    await writeFile(
+      join(driver, "index.js"),
+      'module.exports = { Connection: require("./lib/connection.js"), Pool: require("./lib/pool.js") };',
+    );
+    await writeFile(
+      join(driver, "promise.js"),
+      'const Pool = require("./lib/pool.js"); exports.createPool = () => new Pool();',
+    );
     const from = join(dir, "app.js");
     apps.push({ cleanup: () => rm(dir, { recursive: true, force: true }) });
     return { from, appRequire: createRequire(from) };
@@ -968,8 +981,12 @@ describe("armMysql, the deferred attach", () => {
 
   const DRIVER = `
     class Connection { query() { return {}; } execute() { return {}; } }
+    module.exports = Connection;
+  `;
+  const POOL = `
+    const Connection = require("./connection.js");
     class Pool { getConnection(cb) { setTimeout(() => cb(null, new Connection()), 1); } }
-    module.exports = { Connection, Pool };
+    module.exports = Pool;
   `;
   const MARK = Symbol.for("downtrace.mysql.instrumented");
 
@@ -995,6 +1012,17 @@ describe("armMysql, the deferred attach", () => {
       lines.filter((l) => l.includes("instrumented mysql2 3.99.0")),
       "with the version of its package.json",
     ).toHaveLength(1);
+  });
+
+  it("patches when the application loaded only mysql2/promise, which never loads the driver's entry", async () => {
+    const app = await stubApp(DRIVER);
+    const armed = armMysql({ ...deps, from: app.from });
+    expect(armed.attach()).toBe(false);
+    app.appRequire("mysql2/promise");
+    expect(app.appRequire.cache[app.appRequire.resolve("mysql2")], "the entry stays unloaded").toBeUndefined();
+    expect(armed.attach()).toBe(true);
+    const proto = app.appRequire("mysql2/lib/connection.js").prototype as Record<PropertyKey, unknown>;
+    expect(proto[MARK]).toBe(true);
   });
 
   it("settles without patching when the resolved module is not the driver", async () => {

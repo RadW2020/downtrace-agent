@@ -701,12 +701,26 @@ export class Agent {
       );
     }
     if (on.has("mysql") && this.mysqlModule === undefined) {
-      sandbox.push({
-        // `mysql2/promise` is the callback core with promises on top, and requires it as `./index.js`.
-        matches: (name, from) =>
-          name === "mysql2" || (name === "./index.js" && requiredFrom(from, "mysql2", "promise.js")),
-        patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
-      });
+      sandbox.push(
+        {
+          // `mysql2/promise` is the callback core with promises on top, and up to 3.23 requires it as `./index.js`.
+          matches: (name, from) =>
+            name === "mysql2" || (name === "./index.js" && requiredFrom(from, "mysql2", "promise.js")),
+          patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
+        },
+        {
+          // From 3.24 it requires the driver's classes instead: the connection, and the pool.
+          matches: (name, from) =>
+            name === "./connection.js" &&
+            (requiredFrom(from, "mysql2", "lib", "create_connection.js") ||
+              requiredFrom(from, "mysql2", "lib", "pool_connection.js")),
+          patch: (Connection) => patchMysql({ Connection }, "unknown", mysqlDeps),
+        },
+        {
+          matches: (name, from) => name === "./pool.js" && requiredFrom(from, "mysql2", "lib", "create_pool.js"),
+          patch: (Pool) => patchMysqlPool(Pool, mysqlDeps),
+        },
+      );
       // mysqljs loads each class the first time it is used: its connection, from its entry or its pool, and its pool.
       const fromMysqljs = (from: string, ...file: string[]) => requiredFrom(from, "mysql", ...file);
       sandbox.push(

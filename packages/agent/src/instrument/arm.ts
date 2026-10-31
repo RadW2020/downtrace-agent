@@ -1,6 +1,6 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
-import path from "node:path";
+import path, { dirname, join } from "node:path";
 import { basesOf, type From } from "../entry.ts";
 import type { Logger } from "../log.ts";
 
@@ -38,6 +38,12 @@ export interface ArmDeps<Driver> {
    * of its own is armed beside the application's, from where that package resolves it (DT-92).
    */
   beside?: readonly string[] | undefined;
+  /**
+   * The module of the driver whose presence in the module cache says the application loaded it, by its path from the
+   * directory of the driver's entry; the entry itself when unsaid. `mysql2/promise` loads the driver's classes and
+   * not its entry. It is that module `patch` is given, and the entry is not loaded for it.
+   */
+  trigger?: string | undefined;
   log: Logger;
   /**
    * Where a failure of the attach goes: the agent's count of internal errors (invariant 2, ADR 0161). Never
@@ -105,16 +111,18 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
   const attach = (): boolean => {
     for (let i = 0; i < copies.length; ) {
       const copy = copies[i] as Copy;
+      const loaded = deps.trigger === undefined ? copy.resolved : join(dirname(copy.resolved), deps.trigger);
       // Until the application loads the driver there is nothing to patch, and nothing is lost by waiting:
       // a query cannot run before the driver is loaded, and a query outside a request is not counted
       // (`context.ts`). The check is one property read on the module cache, once per request until then.
-      if (copy.require.cache[copy.resolved] === undefined) {
+      if (copy.require.cache[loaded] === undefined) {
         i += 1;
         continue;
       }
       copies.splice(i, 1);
       try {
-        deps.patch(copy.require(driver) as Driver, copy.version, copy.require, copy.resolved);
+        const module = copy.require(deps.trigger === undefined ? driver : loaded) as Driver;
+        deps.patch(module, copy.version, copy.require, copy.resolved);
       } catch (err) {
         // A failure of the attach is a failure of the instrumentation's own: counted like any other
         // (invariant 2, ADR 0161), and never handed to the request that asked for it. The copy leaves the list

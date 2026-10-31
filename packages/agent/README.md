@@ -510,6 +510,9 @@ When your application uses `mysql2`, the instrumentation does the same for MySQL
 for a connection from a `mysql2` pool, apart from the query that followed it. TypeORM, Sequelize and knex — which
 is what Strapi uses — reach MySQL through `mysql2`, so they are observed through it; nothing is asked of them. So does
 MikroORM, whose `@mikro-orm/mysql` brings a `mysql2` of its own: that one is observed too, from where the package is.
+So is an application that imports `mysql2/promise` alone, as Drizzle's guide writes it: from 3.24 that entry requires
+the driver's classes and not `mysql2`'s own, and the instrumentation patches them from the connection's module, which
+both entries load.
 The target is the host and the port of the server (the socket path, for a socket), never the user, the password
 or the database. Prepared statements (`execute`) count like queries.
 

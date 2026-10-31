@@ -1826,6 +1826,113 @@ describe.each(["forks", "threads"])("a suite Vitest runs in its %s pool", (pool)
   });
 });
 
+/**
+ * `mysql2/promise` from 3.24 requires the driver's classes and not `mysql2`'s own entry, and an application that only
+ * imports it — Drizzle's guide writes it so, and most hand-written ones — was not observed at all: the attach waited
+ * for the entry. From an application that imports it, and from a suite Jest runs.
+ */
+const MYSQL2_PROMISE_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import mysql from "mysql2/promise";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const pool = mysql.createPool({ host: "127.0.0.1", port: Number(process.env.MYSQL_PORT), user: "app", connectionLimit: 2 });
+const app = express();
+app.get("/users/:id", async (req, res) => {
+  for (let i = 0; i < lookups; i += 1) await pool.query("select id, email from users where id = ?", [Number(req.params.id)]);
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = "http://127.0.0.1:" + server.address().port;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(base + "/users/" + (i + 1));
+  if (res.status !== 200) throw new Error("status " + res.status);
+}
+server.close();
+await pool.end();
+`;
+
+const MYSQL2_PROMISE_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const mysql = require("mysql2/promise");
+
+const pool = mysql.createPool({ host: "127.0.0.1", port: Number(process.env.MYSQL_PORT), user: "app", connectionLimit: 2 });
+afterAll(() => pool.end());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await pool.query("select id, email from users where id = ?", [Number(req.params.id)]);
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+describe("a suite whose application imports mysql2/promise alone", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await serverProject(
+      { "app.mjs": MYSQL2_PROMISE_APP },
+      "node app.mjs",
+      { express: EXPRESS_DIR, mysql2: MYSQL2_DIR },
+      { MYSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups multiplied, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    expect(route(checked.report, "GET /users/:id").operations[0]?.label).toBe(
+      "select id, email from users where id = ?",
+    );
+  });
+});
+
+describe("a suite Jest runs, whose application requires mysql2/promise alone", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await serverProject(
+      {
+        "users.test.js": MYSQL2_PROMISE_SUITE,
+        "package.json": JSON.stringify({ name: "mysql2-promise-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, mysql2: MYSQL2_DIR },
+      { MYSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups the tests' own copy of the driver ran, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("a suite whose queries go through postgres.js, imported as ESM", () => {
   // The driver of Drizzle's `postgres-js` and of most Supabase backends. Its ESM copy never enters the module
   // cache, and its first request is a test's: both runs would lose it alike (ADR 0235).

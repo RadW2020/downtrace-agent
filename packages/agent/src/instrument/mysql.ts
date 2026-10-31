@@ -1,4 +1,4 @@
-import path from "node:path";
+import path, { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { currentContext, recordCallIn, recordErrorIn, recordOperationIn, recordWaitIn, runIn } from "../context.ts";
 import { applicationEntry, type From } from "../entry.ts";
@@ -130,10 +130,14 @@ export function armMysql(deps: InstrumentMysqlDeps & { from?: From | undefined }
     driver: "mysql2",
     from: deps.from ?? applicationEntry(),
     beside: ["@mikro-orm/mysql"],
+    // Its connection, which both of its entries load: `mysql2/promise` requires the driver's classes and not
+    // `mysql2`'s own entry (3.24), and an application that only imports it is common — Drizzle's guide writes it.
+    trigger: "lib/connection.js",
     log: deps.log,
     internalError: deps.internalError,
-    patch: (module, version) => {
-      patchMysql(module, version, deps);
+    patch: (Connection, version, require, resolved) => {
+      const Pool = require(join(dirname(resolved), "lib", "pool.js"));
+      patchMysql({ Connection, Pool }, version, deps);
     },
   });
 }
