@@ -1,5 +1,15 @@
 # @downtrace/agent
 
+## 0.16.0
+
+### Minor Changes
+
+- 9d381ec: The instrumentation observes MySQL and MariaDB through `mariadb`, the driver Prisma's adapter for them (`@prisma/adapter-mariadb`, which Prisma 7 needs) and Sequelize's `mariadb` dialect query through: the queries of each request, their time and their errors, and the wait for a connection from its pool, as the dependency `mysql`, from 3.0.1 — 3.5's ES modules imported as postgres.js's are, and up to 3.4 under Jest too. What `require` loads from 3.5.3 on, a bundle that exports none of the driver's classes, is not observed, and the debug log says so. `downtrace init` names `mariadb` and `@prisma/adapter-mariadb` as observed, and `mariadb` before 3 as not.
+
+### Patch Changes
+
+- fe0049a: Prisma's adapter for MySQL and MariaDB is observed from CommonJS too — a NestJS application on Prisma 7.10, whose `require("mariadb")` loads the driver's 3.5.4 bundle, out of the observer's reach: every query Prisma sends is counted at the adapter, as the adapter loads (Node's `module.require` channel, from Node 22) and under Jest, with its time and its failure, as the dependency `mysql` with no target. Up to 3.4, or imported, the driver's observer counts them, and the adapter is left alone.
+
 ## 0.15.1
 
 ### Patch Changes
