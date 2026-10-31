@@ -62,6 +62,25 @@ describe("IntervalAggregator", () => {
     expect(interval.durationMs).toBe(10_000);
   });
 
+  // Under `check` a process writes each time no request is in flight, so two intervals can close within one
+  // millisecond, and `check` counts an interval written twice once, by the instant it starts at: two that started in
+  // the same rounded millisecond were one to it, and a request was lost.
+  it("starts each interval in a later millisecond than the one before, however soon it closes", () => {
+    let t = 1_000.2;
+    const agg = new IntervalAggregator({ now: () => t });
+    agg.record("GET", "/a", 200, 1);
+    t = 1_000.4;
+    const first = must(agg.rotate(), "first");
+    agg.record("GET", "/a", 200, 1);
+    t = 1_000.7;
+    const second = must(agg.rotate(), "second");
+    agg.record("GET", "/a", 200, 1);
+    t = 1_000.9;
+    const third = must(agg.rotate(), "third");
+    expect([first.start, second.start, third.start]).toEqual([1_000, 1_001, 1_002]);
+    expect([first.durationMs, second.durationMs, third.durationMs]).toEqual([1, 1, 1]);
+  });
+
   it("returns null and resets when nothing was recorded", () => {
     const agg = new IntervalAggregator({ now: still });
     expect(agg.rotate()).toBeNull();

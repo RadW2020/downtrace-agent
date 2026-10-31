@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import diagnostics_channel from "node:diagnostics_channel";
+import type http from "node:http";
 import { createRequire } from "node:module";
 import { hostname } from "node:os";
 import {
@@ -67,6 +68,7 @@ import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
 import { ReferenceRegister } from "./reference.ts";
 import { clientError, sanitizeContext } from "./report.ts";
+import { onResponseEnd } from "./response-end.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
 import { type Ending, Sender } from "./transport.ts";
@@ -305,6 +307,10 @@ export class Agent {
   private stopPrismaMariadb: (() => void) | undefined;
   /** Stops listening for `mssql`, whose pool's validation is patched as it loads (ADR 0245). */
   private stopMssql: (() => void) | undefined;
+  /** Stops recording a response as it is ended, under `check` (ADR 0248). */
+  private stopResponseEnd: (() => void) | undefined;
+  /** The requests recorded as their response was ended, whose `finish` is then not recorded again (ADR 0248). */
+  private readonly endedEarly = new WeakSet<object>();
   /** Stops listening for the loads after which a driver the application loaded is patched (ADR 0246). */
   private stopLoads: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
@@ -891,6 +897,11 @@ export class Agent {
     process.on("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.subscribe(REQUEST_START, this.onStart);
     diagnostics_channel.subscribe(RESPONSE_FINISH, this.onFinish);
+    // Under `check`, where a process writes what it holds each time no request is in flight, a response is recorded as
+    // it is ended, before its bytes leave: a runner may kill the server as soon as the last answer is in (ADR 0248).
+    if (this.declared !== undefined && this.sender.writesOnly) {
+      this.stopResponseEnd = onResponseEnd((response) => this.guard(() => this.responseEnding(response)));
+    }
     this.timer = setInterval(() => void this.flushNow(), this.config.intervalMs);
     this.timer.unref();
     process.once("beforeExit", this.onBeforeExit);
@@ -925,6 +936,8 @@ export class Agent {
     process.removeListener("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
+    this.stopResponseEnd?.();
+    this.stopResponseEnd = undefined;
     if (this.timer) clearInterval(this.timer);
     if (this.loopTimer) clearInterval(this.loopTimer);
     this.loopTimer = undefined;
@@ -1397,8 +1410,23 @@ export class Agent {
     }
   }
 
+  /** A response being ended under `check`: its request is recorded now, and not at its `finish` (ADR 0248). */
+  private responseEnding(response: http.ServerResponse): void {
+    const request = response.req as object | undefined;
+    // Only a request this instrumentation saw start, and once: `end` can be called again on an ended response.
+    if (request === undefined || !this.starts.has(request) || this.endedEarly.has(request)) return;
+    this.endedEarly.add(request);
+    this.recordFinished({ request, response } as FinishMessage);
+  }
+
   private responseFinished(message: unknown): void {
-    const { request, response } = message as FinishMessage;
+    const { request } = message as FinishMessage;
+    if (!request || this.endedEarly.has(request)) return;
+    this.recordFinished(message as FinishMessage);
+  }
+
+  private recordFinished(message: FinishMessage): void {
+    const { request, response } = message;
     if (!request) return;
     const startedAt = this.starts.get(request);
     this.starts.delete(request);

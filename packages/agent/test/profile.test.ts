@@ -125,6 +125,21 @@ describe("ProfileAggregator", () => {
     expect(profile.drain()?.durationMs).toBe(1);
   });
 
+  // Under `check` a process writes each time no request is in flight, so two windows can close within one millisecond,
+  // and `check` counts a window written twice once, by the instant it starts at: two that started in the same rounded
+  // millisecond were one to it, and the second's operations were lost.
+  it("starts each window in a later millisecond than the one before, however soon it is drained", () => {
+    const time = clock(1_000.2);
+    const profile = new ProfileAggregator({ now: time.now });
+    const starts: Array<number | undefined> = [];
+    for (let i = 0; i < 3; i += 1) {
+      profile.record("GET", "/a", [work("q1")]);
+      time.advance(0.25);
+      starts.push(profile.drain()?.start);
+    }
+    expect(starts).toEqual([1_000, 1_001, 1_002]);
+  });
+
   // Rounded on the way out and not on the way in, as the capture's start is (ADR 0145): the window's own start
   // keeps its fraction, or a window that began at .9 of a millisecond would close almost a millisecond early.
   it("decides whether its window is up with the instant it really started at", () => {

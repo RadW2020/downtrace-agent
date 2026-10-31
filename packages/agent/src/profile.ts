@@ -1,5 +1,5 @@
 import { AGGREGATES_SCHEMA_V0, type Operation, type Profile, type ProfileEndpoint } from "@downtrace/protocol";
-import { DEFAULT_MAX_ROUTES } from "./aggregator.ts";
+import { DEFAULT_MAX_ROUTES, nextStart } from "./aggregator.ts";
 import { type OperationWork, operationKey } from "./context.ts";
 import { type Method, OTHER_ROUTE } from "./routes.ts";
 
@@ -162,7 +162,8 @@ export class ProfileAggregator {
     const start = this.windowStart;
     this.endpoints = new Map();
     this.distinctRoutes = 0;
-    this.windowStart = now;
+    // Never in the millisecond this one started in, as an interval's (`nextStart`).
+    this.windowStart = nextStart(start, now);
     if (accumulated.size === 0) return null;
     return {
       // Rounded here, where the window becomes what the batch carries, and nowhere before: the contract's

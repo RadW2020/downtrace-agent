@@ -196,7 +196,7 @@ export class IntervalAggregator implements Recorder {
     const endpoints = this.endpoints;
     this.endpoints = new Map();
     this.distinctRoutes = 0;
-    this.start = now;
+    this.start = nextStart(start, now);
     if (endpoints.size === 0) return null;
     const out: Endpoint[] = [];
     for (const acc of endpoints.values()) {
@@ -273,4 +273,14 @@ function addWork(dep: DependencyAcc, w: DependencyWork): void {
   if (w.maxMs > dep.max) dep.max = w.maxMs;
   dep.errors += w.errors;
   dep.wait += w.waitMs;
+}
+
+/**
+ * Where the interval after one that started at `start` and closes at `now` starts: at `now`, and never in the
+ * millisecond the closing one started in. An interval is written with its start rounded down, and `check` counts an
+ * interval written twice once, by that start; under `check` a process writes each time no request is in flight, and
+ * two intervals that closed within one millisecond were one to it. The next starts at most a millisecond late.
+ */
+export function nextStart(start: number, now: number): number {
+  return Math.max(now, Math.floor(start) + 1);
 }
