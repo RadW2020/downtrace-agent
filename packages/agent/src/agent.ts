@@ -307,6 +307,11 @@ export class Agent {
   private stopPrismaMariadb: (() => void) | undefined;
   /** Stops listening for `mssql`, whose pool's validation is patched as it loads (ADR 0245). */
   private stopMssql: (() => void) | undefined;
+  /**
+   * The drivers' attach for the moment after a load (ADR 0246), kept from `start()` to the first request, where the
+   * listening starts if that request's attach left anything to patch (ADR 0247); cleared there.
+   */
+  private loadsAttach: (() => boolean) | undefined;
   /** Stops recording a response as it is ended, under `check` (ADR 0248). */
   private stopResponseEnd: (() => void) | undefined;
   /** The requests recorded as their response was ended, whose `finish` is then not recorded again (ADR 0248). */
@@ -844,10 +849,10 @@ export class Agent {
     }
     this.stopJest = attachJest({ patches: sandbox, internalError });
     // A driver the application loads inside a request — a lazy import, a route Next.js loads as it is first asked for —
-    // is patched in the microtask after that load, and that request's queries are counted (ADR 0246). The request's
-    // attach stays for what this cannot do: Node 20, which announces no load, and an ES module, which the cache lacks.
+    // is patched in the microtask after that load, and that request's queries are counted (ADR 0246). From the first
+    // request, and not from here: start-up keeps the moment ADR 0209 measured with a tracker beside it (ADR 0247).
     const loads = armedTogether(atLoad.filter((one) => one.state === "on"));
-    if (loads.state === "on") this.stopLoads = whenLoaded({ attach: () => loads.atLoad?.() ?? true, internalError });
+    if (loads.state === "on") this.loadsAttach = () => loads.atLoad?.() ?? true;
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
       this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors, calls: this.calls });
@@ -955,6 +960,7 @@ export class Agent {
     this.stopPrismaMariadb = undefined;
     this.stopMssql?.();
     this.stopMssql = undefined;
+    this.loadsAttach = undefined;
     this.stopLoads?.();
     this.stopLoads = undefined;
     this.stopRedis?.();
@@ -1389,6 +1395,14 @@ export class Agent {
     if (this.mssqlAttach?.()) this.mssqlAttach = undefined;
     if (this.prismaAttach?.()) this.prismaAttach = undefined;
     if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
+    // What the first request's attach left unpatched — a driver the application has not loaded yet — is patched after
+    // the load that brings it, from here on (ADR 0247). Start-up is over, and whatever loaded the driver at start-up,
+    // an `import` and a `require` both, has been seen by a tracker's hooks before the attach above.
+    if (this.loadsAttach !== undefined) {
+      const attach = this.loadsAttach;
+      this.loadsAttach = undefined;
+      if (!attach()) this.stopLoads = whenLoaded({ attach, internalError: (err) => this.internalError(err) });
+    }
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
     // The fine register goes in with it: an operation is written where it happens, and reaching for a global
     // from there would be state this repository does not keep.

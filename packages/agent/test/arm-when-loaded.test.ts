@@ -170,38 +170,36 @@ describe("whenLoaded", () => {
 });
 
 describe("armDriver's attach", () => {
-  it("takes the driver from the module cache, and not through a `require` a tracker's load hook would take for the application's", async () => {
-    // An application that imports the driver from an ES module loads it without `Module.prototype.require`, which is
-    // where a tracker's hook for CommonJS sits; a `require` of it from the attach would be the first that hook sees,
-    // and the tracker would patch it there and again at its hook for ES modules, on top of this observer's wrapper:
-    // every span twice (ADR 0209, measured again with ADR 0246).
+  it("takes the driver through `require`, so a tracker's hook for CommonJS patches it under this observer's wrapper", async () => {
+    // An application that imports the driver from an ES module loads it without `Module.prototype.require`, where a
+    // tracker's hook for CommonJS sits. If the attach did not `require` it, the first `require` that hook saw would be
+    // one of the application's later on — knex's, TypeORM's — and the tracker would wrap on top of this observer's
+    // wrapper, which it does not recognise: every span twice (ADR 0247). Its hook runs as the `require` returns.
     const drv = await driver();
-    const loaded = drv.require("drv") as { Connection: unknown };
+    drv.require("drv");
+    const order: string[] = [];
     const proto = Module.prototype as unknown as { require: (id: string) => unknown };
     const original = proto.require;
-    const seen: string[] = [];
     proto.require = function (this: unknown, id: string) {
-      seen.push(id);
-      return original.call(this, id);
+      const exports = original.call(this, id);
+      if (id === "drv") order.push("tracker");
+      return exports;
     };
     cleanups.push(() => {
       proto.require = original;
     });
-    const patched: unknown[] = [];
     const armed = armDriver<{ Connection: unknown }>({
       driver: "drv",
       from: path.join(drv.dir, "app.js"),
       log: { warn: () => {}, debug: () => {} },
       internalError: (err) => expect.fail(String(err)),
-      patch: (module) => {
-        patched.push(module.Connection);
+      patch: () => {
+        order.push("patch");
       },
     });
 
-    expect(armed.atLoad?.()).toBe(true);
-    proto.require = original;
-    expect(patched).toEqual([loaded.Connection]);
-    expect(seen.filter((id) => id === "drv" || id.endsWith(path.join("drv", "index.js")))).toEqual([]);
+    expect(armed.attach()).toBe(true);
+    expect(order).toEqual(["tracker", "patch"]);
   });
 });
 

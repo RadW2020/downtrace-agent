@@ -197,11 +197,11 @@ describe.skipIf(!DATABASE_URL)("postgres.js as an application starts it", () => 
     observed(app);
   }, 60_000);
 
-  it("observes the CommonJS copy from its load, as pg's", async () => {
-    // Patched in the microtask after the application loads it, before any request (ADR 0246): the first of the three
-    // `/orders` is counted, and nothing was waited for.
+  it("observes the CommonJS copy from the first request, as pg's", async () => {
+    // Loaded at start-up, and patched at the start of the first request, from the module cache, before its handler
+    // runs (ADR 0247): the first of the three `/orders` is counted, and nothing was waited for.
     const app = await application(CJS, { warm: false });
-    expect(app.said.markedAtFirst).toBe(true);
+    expect(app.said.markedAtFirst).toBe(false);
     observed(app);
   }, 60_000);
 

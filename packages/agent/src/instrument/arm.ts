@@ -81,7 +81,7 @@ export interface ArmDeps<Driver> {
  * cache: by then the application has loaded it (a server that answers a request has finished its start-up), and the
  * wrapper is in place before the request's handler runs. What that moment gives up — a query the application makes
  * in the very request that loads the driver, a lazy import in a handler — the same attach takes back from Node 22, in
- * the microtask after the application loads the driver (`whenLoaded`, ADR 0246).
+ * the microtask after the application loads the driver (`whenLoaded`, ADR 0246), from the first request (ADR 0247).
  *
  * The second driver to be observed (DT-91) is why this is a function of its own: the mechanism is ADR 0209's
  * and it is the same for every driver, so a correction to it is one correction.
@@ -122,19 +122,21 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
       // a query cannot run before the driver is loaded, and a query outside a request is not counted
       // (`context.ts`). The check is two property reads on the module cache, once per request until then. Loaded,
       // and not only there: the ES module loader puts a CommonJS module it imports in the cache as it links the
-      // graph, and runs it later, so an entry can be there and export nothing yet (ADR 0246).
-      const cached = copy.require.cache[loaded];
-      if (cached?.loaded !== true) {
+      // graph, and runs it later, so an entry can be there and export nothing yet, and a `require` of it would run
+      // it ahead of the application (ADR 0246).
+      if (copy.require.cache[loaded]?.loaded !== true) {
         i += 1;
         continue;
       }
       copies.splice(i, 1);
       try {
-        // Off the cache, and not through `require`: an application that imports the driver from an ES module loads it
-        // without `Module.prototype.require`, where a tracker's hook for CommonJS sits, and a `require` here would be
-        // the first that hook sees. The tracker would patch the driver there, and again at its hook for ES modules,
-        // on top of this observer's wrapper: every span twice (ADR 0246).
-        deps.patch(cached.exports as Driver, copy.version, copy.require, copy.resolved);
+        // Through `require`, a cache hit once the module is loaded, and not off the cache: an application that imports
+        // the driver from an ES module loads it without `Module.prototype.require`, where a tracker's hook for
+        // CommonJS sits. This `require` is the first that hook sees, and the tracker patches the driver here, under
+        // this observer's wrapper, and not on top of it at a `require` of the application's later on: every span twice
+        // (ADR 0247).
+        const module = copy.require(deps.trigger === undefined ? driver : loaded) as Driver;
+        deps.patch(module, copy.version, copy.require, copy.resolved);
       } catch (err) {
         // A failure of the attach is a failure of the instrumentation's own: counted like any other
         // (invariant 2, ADR 0161), and never handed to the request that asked for it. The copy leaves the list

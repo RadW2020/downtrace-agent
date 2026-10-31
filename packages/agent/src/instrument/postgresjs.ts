@@ -229,12 +229,11 @@ function armCopy(
   if (deps.early === true) importEsm();
 
   const attachCjs = (): boolean => {
-    // Loaded, and off the cache, as `armDriver` does (ADR 0246).
-    const cached = require.cache[cjs];
-    if (!cjsDone && cached?.loaded === true) {
+    // Loaded, as `armDriver` asks (ADR 0246).
+    if (!cjsDone && require.cache[cjs]?.loaded === true) {
       cjsDone = true;
       try {
-        patchPostgresJs(cached.exports, version, deps);
+        patchPostgresJs(require(cjs), version, deps);
       } catch (err) {
         deps.internalError(err);
       }

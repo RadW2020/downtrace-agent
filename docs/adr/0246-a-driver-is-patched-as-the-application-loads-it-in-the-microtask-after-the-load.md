@@ -1,6 +1,6 @@
 # 0246 — A driver is patched as the application loads it, in the microtask after the load
 
-Estado: aceptado · Fecha: 2026-10-31 · Amplía el ADR 0209, y levanta, desde Node 22, lo que su momento perdía · Alcance: público
+Estado: aceptado; matizado por el ADR 0247: se escucha desde la primera request, y el attach toma el driver con `require` · Fecha: 2026-10-31 · Amplía el ADR 0209, y levanta, desde Node 22, lo que su momento perdía · Alcance: público
 
 ## Context
 

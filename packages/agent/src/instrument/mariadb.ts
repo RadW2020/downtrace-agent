@@ -527,12 +527,11 @@ function armCommonJs({ root, version, require }: Copy, deps: InstrumentMariadbDe
   ];
   const attach = (): boolean => {
     for (const module of modules) {
-      // Loaded, and off the cache, as `armDriver` does (ADR 0246).
-      const cached = require.cache[module.file];
-      if (module.done || cached?.loaded !== true) continue;
+      // Loaded, as `armDriver` asks (ADR 0246).
+      if (module.done || require.cache[module.file]?.loaded !== true) continue;
       module.done = true;
       try {
-        module.patch(cached.exports);
+        module.patch(require(module.file));
       } catch (err) {
         deps.internalError(err);
       }

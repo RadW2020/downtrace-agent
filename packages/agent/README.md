@@ -349,12 +349,14 @@ node --import @downtrace/agent/register --import ./instrument.mjs server.js
 
 **Either order is exact.** Both instrumentations end up wrapping the same `pg` prototype, and this one never
 loads the driver itself: it resolves it from your application's root (with no loader hooks, which is what lets it
-work without you importing anything) and patches the copy your application loaded, once the tracker's hooks are done
-with it — in the microtask after the load, which Node announces from 22, or else at the start of the next request.
-So whichever order the two are loaded in, your application's own load of `pg` is the only one the tracker's hooks
-ever see, and each one observes what it would alone: same requests, calls per request and errors on this side, and
-the tracker's own `pg` spans on its side — one `pg-pool.connect` and one query span per request, with no duplicates.
-A test runs the three configurations — each one alone, and both in each order — against one another.
+work without you importing anything) and patches the copy your application loaded once the tracker's hooks are done
+with it: what your application loads at start-up, at the start of the first request; what it loads later, in a
+request, in the microtask after that load, which Node announces from 22. So whichever order the two are loaded in,
+your application's own load of `pg` is the only one the tracker's hooks ever see, and each one observes what it would
+alone: same requests, calls per request and errors on this side, and the tracker's own `pg` spans on its side — one
+`pg-pool.connect` and one query span per request, with no duplicates. A test runs the three configurations — each one
+alone, and both in each order — against one another, and another one loads `pg` both ways, with an `import` and a
+`require`, before the first request and after it.
 
 **A driver your application loads lazily is counted from the request that loads it** — an `import("pg")` inside a
 handler, or a route Next.js loads the first time it is asked for. What is still not counted, said here rather than
@@ -364,7 +366,9 @@ found:
   statement right after it;
 - on Node 20, which does not announce the load, the queries of that first request, which are counted from the next one;
 - a driver imported as an ES module — postgres.js's ES build, `mariadb` from 3.5 —, which is reached from the first
-  request.
+  request;
+- with a tracker beside it, a request that loads `pg` both ways — a `require` and an `import` of it in that same
+  request — gets two of the tracker's spans for each query from then on.
 
 **That was verified with an ESM application.** A CommonJS application shares the module cache the same
 way, but the tracker's hooks only fire on a real load there, so whether its `pg` spans survive is a matter
