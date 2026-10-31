@@ -76,7 +76,7 @@ export async function startFakeMysql(handler: (sql: string) => Reply = () => ({}
       characterSet: 8,
       capabilityFlags: 0xffffff,
     });
-    side.on("query", (sql: string) => {
+    const query = (sql: string): void => {
       received.push(sql);
       const reply = handler(sql);
       const answer = (): void => {
@@ -86,6 +86,13 @@ export async function startFakeMysql(handler: (sql: string) => Reply = () => ({}
       };
       if (reply.delayMs) setTimeout(answer, reply.delayMs);
       else answer();
+    };
+    side.on("query", query);
+    // The server half hands a text query that starts with `SET` to the prepared statements' handler, and `mariadb`
+    // opens every connection with `SET NAMES`: it is a query here, as it is to MySQL. A statement to prepare is not.
+    side.on("stmt_prepare", (sql: string) => {
+      if (/^SET\s/i.test(sql)) query(sql);
+      else side.writeError({ code: 1295, message: "This fake server does not prepare statements" });
     });
     side.on("quit", () => side.stream.end());
     side.on("error", () => {});

@@ -36,7 +36,9 @@ import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
+import { armedTogether } from "./instrument/arm.ts";
 import { instrumentHttp } from "./instrument/http.ts";
+import { armMariadb, patchMariadbCallback, patchMariadbConnection, patchMariadbPool } from "./instrument/mariadb.ts";
 import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
@@ -270,7 +272,7 @@ export class Agent {
    * asked for and no module was handed over, and cleared once the attach settles.
    */
   private pgAttach: (() => boolean) | undefined;
-  /** The `mysql2` observer's, the same way (ADR 0209). */
+  /** The `mysql2` observer's and the `mariadb` one's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
   /** MongoDB's, the same way, for the driver and the copy Mongoose brings (ADR 0237). */
   private mongoAttach: (() => boolean) | undefined;
@@ -635,7 +637,12 @@ export class Agent {
       if (this.mysqlModule !== undefined) {
         observers.mysql = patchMysql(this.mysqlModule, "unknown", mysqlDeps) ? "on" : "unavailable";
       } else {
-        const armed = armMysql({ ...mysqlDeps, from });
+        // MySQL and MariaDB through `mariadb` too, the driver of Prisma's adapter for them: the same dependency, and
+        // the same switch. Its ESM copy is imported, from the start under `check`, as postgres.js's is.
+        const armed = armedTogether([
+          armMysql({ ...mysqlDeps, from }),
+          armMariadb({ ...mysqlDeps, from, early: this.config.checkRoutes !== undefined }),
+        ]);
         said(observers, "mysql", armed.state);
         this.mysqlAttach = armed.attach;
       }
@@ -673,6 +680,28 @@ export class Agent {
           name === "mysql2" || (name === "./index.js" && requiredFrom(from, "mysql2", "promise.js")),
         patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
       });
+      // `mariadb` up to 3.4, whose modules are CommonJS: the connection and the pool its entries require, and the
+      // callback API's class. From 3.5 they are ES modules, which Jest's registry does not load.
+      const fromMariadb = (from: string, ...file: string[]) => requiredFrom(from, "mariadb", ...file);
+      sandbox.push(
+        {
+          matches: (name, from) =>
+            name === "./lib/connection" && (fromMariadb(from, "promise.js") || fromMariadb(from, "callback.js")),
+          patch: (connection) => patchMariadbConnection(connection, "unknown", mysqlDeps),
+        },
+        {
+          matches: (name, from) =>
+            name === "./pool" &&
+            (fromMariadb(from, "lib", "pool-promise.js") || fromMariadb(from, "lib", "pool-callback.js")),
+          patch: (pool) => patchMariadbPool(pool, mysqlDeps),
+        },
+        {
+          matches: (name, from) =>
+            (name === "./lib/connection-callback" && fromMariadb(from, "callback.js")) ||
+            (name === "./connection-callback" && fromMariadb(from, "lib", "pool-callback.js")),
+          patch: (callback) => patchMariadbCallback(callback, mysqlDeps),
+        },
+      );
     }
     // MongoDB through its driver, and so through Mongoose (ADR 0237).
     if (on.has("mongodb")) {

@@ -10,7 +10,7 @@ It observes six things, each of which can be switched off with `DOWNTRACE_INSTRU
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, [through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
-| `mysql` | MySQL queries per request through `mysql2`, their time and errors, and how long a request waited for a connection |
+| `mysql` | MySQL and MariaDB queries per request through `mysql2` and `mariadb`, their time and errors, and how long a request waited for a connection |
 | `sqlite` | [SQLite](#sqlite) statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
 | `mongodb` | [MongoDB](#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
 | `prisma` | [Prisma](#prisma)'s operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
@@ -547,6 +547,26 @@ What the instrumentation does with the driver, and what it gives up:
   ([below](#beside-your-error-tracker)): the mechanism is the same — it resolves the driver and loads nothing — but
   nobody has run the pair.
 
+**Through `mariadb`** — the connector MariaDB publishes, which Prisma's adapter for MySQL and MariaDB
+(`@prisma/adapter-mariadb`, the one Prisma 7 needs for them) and Sequelize's `mariadb` dialect query through — it is
+the same: the same dependency, `mysql`, with the same target, the text read as MySQL's, the wait on its pool, and a
+callback that runs in the request that asked. The copy `@prisma/adapter-mariadb` brings is observed from where the
+adapter is. Every way the driver runs a statement goes through its connection's `query`, `prepareExecute` and `batch`,
+and the callback API's own `query`; those are what it wraps, from 3.0.1. Run against MySQL 8.4 and MariaDB 11.4, with
+prepared statements, batches, errors and transactions, on 3.4.7 and 3.5.4, and its queries on 3.0.2, 3.1.2 and 3.3.2.
+
+- **Up to 3.4 the driver is CommonJS, and from 3.5 its modules are ES modules.** 3.5's are imported by their URL, the
+  modules your application's `import` loads, from the first request — from the start under `downtrace check` —, as
+  postgres.js's are: a query that starts before that import resolves is not counted.
+- **What `require("mariadb")` loads from 3.5.3 on is not observed.** That is one bundle, `dist/promise.cjs`, which
+  exports none of the driver's classes: an application compiled to CommonJS — NestJS's, for one — with Prisma 7.10's
+  adapter, which pins 3.5.4, has its queries go there. `DOWNTRACE_DEBUG=1` says so at the first request. Prisma 7.0
+  to 7.9 pin 3.4.5, which is observed however it is loaded.
+- **What the connection runs while it opens** — `SET NAMES`, the session's variables — is not counted: a pool opens a
+  connection inside the request that found none free, and those statements are the driver's.
+- **`queryStream`**, and `execute` and `batch` before 3.4, which return a promise of their own, are not observed. A
+  callback query with no callback is counted when it is issued, with no time and no failure.
+
 ### SQLite
 
 When your application opens a SQLite database through `better-sqlite3`, or through `libsql` — which is what
@@ -620,12 +640,12 @@ Measured version by version, with this instrumentation loaded through `--import`
 
 | Your Prisma | Its queries go | Observed |
 |---|---|---|
-| 7.x, with `@prisma/adapter-pg` or `@prisma/adapter-better-sqlite3` | through `pg` or `better-sqlite3`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`) |
+| 7.x, with `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3` or `@prisma/adapter-mariadb` | through `pg`, `better-sqlite3` or `mariadb`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`, `mysql`); with `@prisma/adapter-mariadb` 7.10 or later in an application compiled to CommonJS, **no** ([MySQL](#mysql)) |
 | 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with either adapter | through the driver, as 7 does | **Yes**, the same |
 | 3.15 to 6.x on its default engine, with no adapter, from the `prisma-client-js` generator: what Prisma does before 7 unless told otherwise | from Prisma's query engine, which speaks to the database itself | **Yes**, as Prisma's operations (`prisma`), measured on 3.15.2, 4.0.0, 4.16.2, 5.22.0 and 6.19.3 |
 | 6.x on its default engine from the `prisma-client` generator, what `prisma init` writes in 6.19 | the same, from a client that imports Prisma's runtime as an ES module | **No**: see below |
 | 5.x, and 6.x on its default engine, with an adapter | from the query engine, which calls the adapter, and so its driver, from a thread of its own | **No** |
-| Any version with another adapter (Neon, MariaDB, …) | through that adapter's own driver | **No**: it was not looked at |
+| Any version with another adapter (Neon, PlanetScale, …) | through that adapter's own driver | **No**: it was not looked at |
 
 **Through the driver**, nothing is asked of you: a Prisma query is a query of the route that ran it, with its time and its
 errors, and its fingerprint in the route's profile, like any `pg` query. The queries of `prisma.$transaction` carry the
@@ -901,7 +921,7 @@ pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool 
 5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
 
 **Under Jest, the instrumentation reaches into Jest's own module registry, on Node 22 and later.** Jest runs a test
-file's modules in a registry and a context of its own: the `pg`, `mysql2`, postgres.js, MongoDB and Express the tests use are
+file's modules in a registry and a context of its own: the `pg`, `mysql2`, `mariadb` (up to 3.4), postgres.js, MongoDB and Express the tests use are
 not the ones in Node's module cache, which is where the instrumentation finds them everywhere else. So when Jest
 loads `jest-runtime`, which Node announces on its `module.require` channel, the instrumentation wraps the
 `requireModule` every `require` of a test file goes through, and patches the copies Jest hands the tests: their
@@ -938,8 +958,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mysql`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg` and `@prisma/adapter-better-sqlite3` (`@prisma/adapter-mariadb`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6 and `redis` before 5.12, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mariadb` (3 and later), `@prisma/adapter-mariadb`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3` and `@prisma/adapter-mariadb` (`@prisma/adapter-neon`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6, `redis` before 5.12 and `mariadb` before 3, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -1062,7 +1082,7 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query` (and, for MySQL, `mysql2`'s `query` and
-  `execute`, and for MongoDB the driver's `Connection.prototype.command`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
+  `execute` and `mariadb`'s `query`, `prepareExecute` and `batch`, and for MongoDB the driver's `Connection.prototype.command`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
   runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - For Express route templates the instrumentation wraps two more methods. The first — `Router.prototype.use`, or the
   `Router` function's own `use` in Express 4, where it is the routers' prototype — keeps the pattern of
@@ -1100,8 +1120,8 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `postgres`, `mysql2`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, the `mongodb` Mongoose brings, from where Mongoose is, and the driver each of MikroORM's packages for a database brings, from where that package is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+`pg`, `postgres`, `mysql2`, `mariadb`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `mariadb` that `@prisma/adapter-mariadb` brings, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, the `mongodb` Mongoose brings, from where Mongoose is, and the driver each of MikroORM's packages for a database brings, from where that package is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`

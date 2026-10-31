@@ -51,6 +51,8 @@
     "knex": "^3.3.0",
     "koa": "^3.2.1",
     "libsql": "^0.5.29",
+    "mariadb": "^3.5.4",
+    "mariadb34": "npm:mariadb@3.4.7",
     "mongodb": "^7.7.0",
     "mongodb6": "npm:mongodb@^6.21.0",
     "mongoose": "^9.11.4",

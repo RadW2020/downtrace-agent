@@ -31,10 +31,11 @@ export const FRAMEWORK_PACKAGES = [
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2`, SQLite through `better-sqlite3` (and Prisma's adapter for it) and
- * `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends
- * every command through it), Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis`
- * (node-redis, from 5.12), and MikroORM through the driver each of its packages for a database brings. A
+ * postgres.js (`postgres`), MySQL through `mysql2` and `mariadb` (and Prisma's adapter for it), SQLite through
+ * `better-sqlite3` (and Prisma's adapter for it) and `libsql` (and `@libsql/client`, which opens a file with it) and
+ * `sqlite3` (Knex's and Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends every command through it),
+ * Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis` (node-redis, from 5.12), and
+ * MikroORM through the driver each of its packages for a database brings. A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -46,6 +47,8 @@ export const OBSERVED_PACKAGES = [
   "@mikro-orm/postgresql",
   "mysql2",
   "@mikro-orm/mysql",
+  "mariadb",
+  "@prisma/adapter-mariadb",
   "better-sqlite3",
   "@prisma/adapter-better-sqlite3",
   "libsql",
@@ -72,7 +75,7 @@ export const UNOBSERVED_PACKAGES = ["mysql", "mssql", "oracledb", "kafkajs", "am
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the
  * instrumentation does not observe: a client given one queries through that driver, and is left to its observer
- * (ADR 0241), so with `@prisma/adapter-mariadb` nothing is seen.
+ * (ADR 0241), so with `@prisma/adapter-neon` nothing is seen.
  */
 export function unobservedOf(
   dependencies: ReadonlySet<string>,
@@ -89,7 +92,7 @@ export function unobservedOf(
 }
 
 /** Prisma's driver adapters whose driver the instrumentation observes: with one, Prisma 7 queries through it. */
-const PRISMA_ADAPTERS = ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3"] as const;
+const PRISMA_ADAPTERS = ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3", "@prisma/adapter-mariadb"] as const;
 
 /** The packages of `OBSERVED_PACKAGES` a project depends on, in a version the instrumentation observes. */
 export function observedOf(
@@ -104,8 +107,9 @@ export function observedOf(
  * before: the MongoDB driver from 6, whose every command goes through one promise (ADR 0237), and so Mongoose from 8,
  * the first on it, and MikroORM's package for it from 6, which brings 6 — before them the driver answers through
  * callbacks, from whichever request gave its pool a connection back —; node-redis from 5.12, the first that publishes its commands on the diagnostics channel the
- * observer reads (`instrument/redis.ts`); and Prisma's client from 3.15, the first read with the method its operations
- * go through (ADR 0241).
+ * observer reads (`instrument/redis.ts`); Prisma's client from 3.15, the first read with the method its operations
+ * go through (ADR 0241); and `mariadb` from 3, whose every query goes through the method its observer wraps from 3.0.1
+ * on (`instrument/mariadb.ts`): a range pinned to 3.0.0, the one release before it, is the one read wrong.
  */
 const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: number]>> = {
   "@prisma/client": [3, 15],
@@ -113,6 +117,7 @@ const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: num
   mongoose: [8, 0],
   "@mikro-orm/mongodb": [6, 0],
   redis: [5, 12],
+  mariadb: [3, 0],
 };
 
 /**

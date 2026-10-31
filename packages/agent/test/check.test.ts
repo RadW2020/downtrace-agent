@@ -6,9 +6,11 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CheckReport } from "../src/check/report.ts";
 import { appFiles, cleanEnv, createProject, downtrace, type Project, snapshot } from "./support/check-project.ts";
+import { rootOf } from "./support/mariadb.ts";
+import { type FakeMysql, startFakeMysql } from "./support/mysql.ts";
 import { generatePrisma, PRISMA_DIR, PRISMA_QUIET, type PrismaLayout, prismaSchema } from "./support/prisma-client.ts";
 
 /**
@@ -1151,6 +1153,137 @@ describe("a suite Jest runs, whose application keeps its data in a file through 
   });
 
   it("sees the lookups the tests' own copy of libsql ran, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * MySQL through `mariadb`, the driver Prisma's adapter for MySQL and MariaDB queries through: 3.5, whose modules are
+ * ESM, imported as an application in ESM imports it (as myfin-api does, with Prisma 7.10); and 3.4, whose modules are
+ * CommonJS, in a suite Jest runs, from Jest's own registry. The server is the one of `support/mysql.ts`, in this
+ * process, and the application finds it by `MARIADB_PORT`.
+ */
+const MARIADB_APP = `
+import { readFileSync } from "node:fs";
+import express from "express";
+import mariadb from "mariadb";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const pool = mariadb.createPool({ host: "127.0.0.1", port: Number(process.env.MARIADB_PORT), user: "app", connectionLimit: 2 });
+const app = express();
+app.get("/users/:id", async (req, res) => {
+  for (let i = 0; i < lookups; i += 1) {
+    await pool.query({ sql: "select * from users where id = ?", rowsAsArray: true }, [Number(req.params.id)]);
+  }
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch(\`\${base}/users/\${i + 1}\`);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await pool.end();
+`;
+
+const MARIADB_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const mariadb = require("mariadb");
+
+const pool = mariadb.createPool({ host: "127.0.0.1", port: Number(process.env.MARIADB_PORT), user: "app", connectionLimit: 2 });
+afterAll(() => pool.end());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await pool.query("select * from users where id = ?", [Number(req.params.id)]);
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+async function mariadbProject(
+  files: Record<string, string>,
+  command: string,
+  link: Record<string, string>,
+  database: FakeMysql,
+): Promise<Checked> {
+  const made = await createProject({
+    ...files,
+    "lookups.txt": "1",
+    ".gitignore": "node_modules\n",
+    "downtrace.json": JSON.stringify({ check: { command } }),
+  });
+  projects.push(made);
+  await mkdir(join(made.dir, "node_modules"), { recursive: true });
+  for (const [name, dir] of Object.entries(link)) await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  await made.write("lookups.txt", "4");
+  return check(made, ["--base", "HEAD"], { MARIADB_PORT: String(database.port) });
+}
+
+describe("a suite whose application queries MySQL through mariadb 3.5, imported as ESM", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await mariadbProject(
+      { "app.mjs": MARIADB_APP },
+      "node app.mjs",
+      {
+        express: EXPRESS_DIR,
+        mariadb: rootOf("mariadb"),
+      },
+      database,
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups multiplied, in the text the application wrote, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    expect(route(checked.report, "GET /users/:id").operations[0]?.label).toBe("select * from users where id = ?");
+    expect(checked.report.base?.observers.mysql).toBe("on");
+  });
+});
+
+describe("a suite Jest runs, whose application queries MySQL through mariadb 3.4", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await mariadbProject(
+      {
+        "users.test.js": MARIADB_SUITE,
+        "package.json": JSON.stringify({ name: "mariadb-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, mariadb: rootOf("mariadb34") },
+      database,
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups the tests' own copy of the driver ran, multiplied", () => {
     expectLookupsMultiplied(checked);
   });
 });

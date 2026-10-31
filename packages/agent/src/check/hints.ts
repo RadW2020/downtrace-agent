@@ -252,13 +252,14 @@ export function adviceForUnbuiltBase(base: UnbuiltBase): string {
 
 /**
  * The observers of a dependency, and the packages that, among the project's dependencies, mean the observer should have
- * found a driver: `pg`'s through Prisma's adapter, slonik and postgres.js too, SQLite's through what brings libsql or
- * better-sqlite3, and each database's MikroORM package. The packages are `OBSERVED_PACKAGES`'s, each under its
- * observer. Every switch of `INSTRUMENTS` but `http` and `runtime`, which need no driver.
+ * found a driver: `pg`'s through Prisma's adapter, slonik and postgres.js too, MySQL's through `mariadb` and Prisma's
+ * adapter for it, SQLite's through what brings libsql or better-sqlite3, and each database's MikroORM package. The
+ * packages are `OBSERVED_PACKAGES`'s, each under its observer. Every switch of `INSTRUMENTS` but `http` and
+ * `runtime`, which need no driver.
  */
 export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   pg: ["pg", "@prisma/adapter-pg", "slonik", "postgres", "@mikro-orm/postgresql"],
-  mysql: ["mysql2", "@mikro-orm/mysql"],
+  mysql: ["mysql2", "@mikro-orm/mysql", "mariadb", "@prisma/adapter-mariadb"],
   sqlite: [
     "better-sqlite3",
     "@prisma/adapter-better-sqlite3",

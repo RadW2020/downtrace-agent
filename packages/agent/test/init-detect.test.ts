@@ -230,6 +230,11 @@ describe("what the project runs", () => {
     ["mongoose", "^8", true],
     ["@mikro-orm/mongodb", "^5.9.8", false],
     ["@mikro-orm/mongodb", "^6.4.0", true],
+    ["mariadb", "^2.5.6", false],
+    ["mariadb", "~3.0.1", true],
+    ["mariadb", "^3.0.1", true],
+    ["mariadb", "3.4.5", true],
+    ["mariadb", "^3.5.4", true],
   ])("reads %s declared as %s as observed: %s", (name, range, observed) => {
     const dependencies = new Set([name]);
     const ranges = new Map([[name, range]]);
