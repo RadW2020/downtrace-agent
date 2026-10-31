@@ -48,6 +48,7 @@ import {
   watchPrismaMariadb,
 } from "./instrument/mariadb.ts";
 import { armMongo, patchMongo } from "./instrument/mongodb.ts";
+import { armTedious, patchMssql, patchTedious, watchMssql } from "./instrument/mssql.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
@@ -230,6 +231,8 @@ export class Agent {
   private readonly mysqlFingerprints: FingerprintCache | undefined;
   /** And SQLite's, which reads a bracket as a name and a backslash as nothing (ADR 0239). */
   private readonly sqliteFingerprints: FingerprintCache | undefined;
+  /** SQL Server's, read as T-SQL (ADR 0245). */
+  private readonly mssqlFingerprints: FingerprintCache | undefined;
   /** Where a thrown thing becomes an identity rather than a tally (gh-338). */
   private readonly errors: ErrorFingerprintCache;
   /**
@@ -286,6 +289,8 @@ export class Agent {
   private mongoAttach: (() => boolean) | undefined;
   /** SQLite's, the same way, for better-sqlite3 and the libsql `@libsql/client` brings (ADR 0239). */
   private sqliteAttach: (() => boolean) | undefined;
+  /** SQL Server's, for `tedious` and `mssql` over it (ADR 0245). */
+  private mssqlAttach: (() => boolean) | undefined;
   /** Prisma's, the same way, for the clients its runtime generated (ADR 0241). */
   private prismaAttach: (() => boolean) | undefined;
   /** postgres.js's, under the `pg` switch: the same moment, and an import for its ESM copy (ADR 0235). */
@@ -296,6 +301,8 @@ export class Agent {
   private stopJest: (() => void) | undefined;
   /** Stops listening for Prisma's adapter for MySQL loaded over `mariadb`'s CommonJS bundle. */
   private stopPrismaMariadb: (() => void) | undefined;
+  /** Stops listening for `mssql`, whose pool's validation is patched as it loads (ADR 0245). */
+  private stopMssql: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
@@ -410,6 +417,7 @@ export class Agent {
     if (config.instrument.has("pg") && config.pgDepth === "full") this.fingerprints = new FingerprintCache();
     if (config.instrument.has("mysql")) this.mysqlFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "mysql");
     if (config.instrument.has("sqlite")) this.sqliteFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "sqlite");
+    if (config.instrument.has("mssql")) this.mssqlFingerprints = new FingerprintCache(DEFAULT_CACHE_SIZE, "mssql");
     this.errors = new ErrorFingerprintCache();
     this.named = config.minimal ? withheldName : undefined;
     this.calls = new CallFingerprints("call", { named: this.named });
@@ -586,6 +594,7 @@ export class Agent {
       pg: "off",
       mysql: "off",
       sqlite: "off",
+      mssql: "off",
       mongodb: "off",
       prisma: "off",
       http: "off",
@@ -732,6 +741,18 @@ export class Agent {
         patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
       });
     }
+    // SQL Server through tedious, and through mssql over it: TypeORM's, Knex's, Sequelize's, Prisma's adapter's (ADR 0245).
+    if (on.has("mssql")) {
+      const mssqlDeps = { log: this.log, internalError, fingerprints: this.mssqlFingerprints, errors: this.errors };
+      const armed = armTedious({ ...mssqlDeps, from });
+      said(observers, "mssql", armed.state);
+      this.mssqlAttach = armed.attach;
+      this.stopMssql = watchMssql({ ...mssqlDeps, from });
+      sandbox.push(
+        { matches: (name) => name === "tedious", patch: (tedious) => patchTedious(tedious, "unknown", mssqlDeps) },
+        { matches: (name) => name === "mssql", patch: (mssql) => patchMssql(mssql, mssqlDeps) },
+      );
+    }
     // SQLite in the process, through better-sqlite3, libsql or sqlite3 (ADR 0239).
     if (on.has("sqlite")) {
       const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
@@ -864,6 +885,8 @@ export class Agent {
     this.stopJest = undefined;
     this.stopPrismaMariadb?.();
     this.stopPrismaMariadb = undefined;
+    this.stopMssql?.();
+    this.stopMssql = undefined;
     this.stopRedis?.();
     this.stopRedis = undefined;
     this.runtime.stop();
@@ -1293,6 +1316,7 @@ export class Agent {
     if (this.mysqlAttach?.()) this.mysqlAttach = undefined;
     if (this.mongoAttach?.()) this.mongoAttach = undefined;
     if (this.sqliteAttach?.()) this.sqliteAttach = undefined;
+    if (this.mssqlAttach?.()) this.mssqlAttach = undefined;
     if (this.prismaAttach?.()) this.prismaAttach = undefined;
     if (this.postgresJsAttach?.()) this.postgresJsAttach = undefined;
     // Node publishes this inside the request's async context, so what the handler does lands in this store.
@@ -1487,7 +1511,7 @@ async function settledWithin(these: Promise<unknown>[], deadline: AbortSignal): 
  */
 function said(
   observers: Observers,
-  name: "mysql" | "sqlite" | "mongodb" | "prisma",
+  name: "mysql" | "sqlite" | "mssql" | "mongodb" | "prisma",
   state: "on" | "unavailable",
 ): void {
   if (state === "on") observers[name] = "on";

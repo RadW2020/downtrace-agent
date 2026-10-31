@@ -31,11 +31,12 @@ export const FRAMEWORK_PACKAGES = [
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2` and `mariadb` (and Prisma's adapter for it), SQLite through
- * `better-sqlite3` (and Prisma's adapter for it) and `libsql` (and `@libsql/client`, which opens a file with it) and
- * `sqlite3` (Knex's and Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends every command through it),
- * Prisma from 3.15 through its client (ADR 0241), Redis through `ioredis` and `redis` (node-redis, from 5.12), and
- * MikroORM through the driver each of its packages for a database brings. A
+ * postgres.js (`postgres`), MySQL through `mysql2` and `mariadb` (and Prisma's adapter for it), SQL Server through
+ * `tedious` (and `mssql` and Prisma's adapter, which query through it), SQLite through `better-sqlite3` (and Prisma's
+ * adapter for it) and `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and
+ * Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends every command through it), Prisma from 3.15
+ * through its client (ADR 0241), Redis through `ioredis` and `redis` (node-redis, from 5.12), and MikroORM through the
+ * driver each of its packages for a database brings. A
  * `pg` slonik brings nested under itself, where a package manager keeps it out of the application's root, is not
  * the one the instrumentation finds; one at the root, as npm hoists it, is.
  */
@@ -49,6 +50,9 @@ export const OBSERVED_PACKAGES = [
   "@mikro-orm/mysql",
   "mariadb",
   "@prisma/adapter-mariadb",
+  "tedious",
+  "mssql",
+  "@prisma/adapter-mssql",
   "better-sqlite3",
   "@prisma/adapter-better-sqlite3",
   "libsql",
@@ -70,7 +74,7 @@ export const OBSERVED_PACKAGES = [
  * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
  * route whose work went through it.
  */
-export const UNOBSERVED_PACKAGES = ["mysql", "mssql", "oracledb", "kafkajs", "amqplib"] as const;
+export const UNOBSERVED_PACKAGES = ["mysql", "oracledb", "kafkajs", "amqplib"] as const;
 
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the
@@ -92,7 +96,12 @@ export function unobservedOf(
 }
 
 /** Prisma's driver adapters whose driver the instrumentation observes: with one, Prisma 7 queries through it. */
-const PRISMA_ADAPTERS = ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3", "@prisma/adapter-mariadb"] as const;
+const PRISMA_ADAPTERS = [
+  "@prisma/adapter-pg",
+  "@prisma/adapter-better-sqlite3",
+  "@prisma/adapter-mariadb",
+  "@prisma/adapter-mssql",
+] as const;
 
 /** The packages of `OBSERVED_PACKAGES` a project depends on, in a version the instrumentation observes. */
 export function observedOf(

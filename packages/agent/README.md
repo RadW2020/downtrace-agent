@@ -11,6 +11,7 @@ It observes six things, each of which can be switched off with `DOWNTRACE_INSTRU
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
 | `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, [through `pg`](#prisma); and [postgres.js](#postgresjs)'s, with no wait and no server |
 | `mysql` | MySQL and MariaDB queries per request through `mysql2` and `mariadb`, their time and errors, and how long a request waited for a connection |
+| `mssql` | [SQL Server](#sql-server) statements per request through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma's adapter, by server, their time and errors |
 | `sqlite` | [SQLite](#sqlite) statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
 | `mongodb` | [MongoDB](#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
 | `prisma` | [Prisma](#prisma)'s operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
@@ -572,6 +573,40 @@ prepared statements, batches, errors and transactions, on 3.4.7 and 3.5.4, and i
 - **`queryStream`**, and `execute` and `batch` before 3.4, which return a promise of their own, are not observed. A
   callback query with no callback is counted when it is issued, with no time and no failure.
 
+### SQL Server
+
+When your application reaches SQL Server, the instrumentation does the same, as a dependency of its own (`mssql`):
+the statements each request sends, how long they took and how many failed. Every way there goes through one driver,
+`tedious`: `mssql` wraps it, and TypeORM, Knex and Prisma 7's `@prisma/adapter-mssql` go through `mssql`; Sequelize's
+`mssql` dialect calls `tedious` itself. Nothing is asked of any of them. The target is the server and its port (or
+its instance), never the user, the password or the database. Run against `tedious` 20 and `mssql` 12, against a
+server of the tests' own and against Azure SQL Edge, with parameterised queries, prepared statements, a stored
+procedure, a server's error and a transaction; `tedious` 16 to 19 have the same method.
+
+**The text is read as T-SQL.** A single quote opens a value, and a backslash escapes nothing in it; a bracket opens a
+name — `[dbo].[users]`, `[Order Items]` —, and `]]` inside one is a bracket of the name. A double quote opens a name
+too, as TypeORM writes them (`"User"."email"`): `tedious` turns `QUOTED_IDENTIFIER` on as it logs in. A name that looks
+like a value — an email, a number — goes as `?`, as in Postgres. `@p0`, `@0`, `@P1` and `@id` are placeholders, so a list of them is one label however long it is
+and whichever ORM numbered it, and `@@ROWCOUNT` stays. `N'…'`, `0x…` and `$5.00` are values. Comments nest. `#orders`
+is a temporary table.
+
+What the instrumentation does with the driver, and what it gives up:
+
+- **It wraps `Connection.prototype.makeRequest`**, which every request `tedious` sends goes through, and the
+  `callback` of the request, which runs in the request that asked: the driver ends a statement on the connection's
+  socket, in the context of whichever request opened it. Arguments, results and errors pass through untouched.
+- **A prepared statement is named by its text.** `mssql` prepares once with the text and executes with a handle; the
+  handle is remembered for its connection, also when it was prepared at start-up.
+- **A stored procedure is named by its name** (`dbo.refresh`); a transaction's begin, commit and rollback, and a bulk
+  load, are calls with no operation.
+- **What is not your route's is not counted:** the options the connection sets as it logs in, and the `SELECT 1;` with
+  which `mssql`'s pool validates a connection before it hands it over. That validation is skipped by patching `mssql`
+  as your application loads it, from Node 22; on Node 20, an `mssql` loaded after the instrumentation started keeps
+  counting it.
+- **The wait for a connection is not measured:** `mssql`'s pool has no request to wrap.
+- **Prisma 4 to 6 on SQL Server** goes through its own engine, and is not observed; Prisma 7, which needs
+  `@prisma/adapter-mssql`, is.
+
 ### SQLite
 
 When your application opens a SQLite database through `better-sqlite3`, or through `libsql` — which is what
@@ -926,7 +961,7 @@ pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool 
 5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
 
 **Under Jest, the instrumentation reaches into Jest's own module registry, on Node 22 and later.** Jest runs a test
-file's modules in a registry and a context of its own: the `pg`, `mysql2`, `mariadb` (up to 3.4), postgres.js, MongoDB and Express the tests use are
+file's modules in a registry and a context of its own: the `pg`, `mysql2`, `mariadb` (up to 3.4), `tedious`, `mssql`, postgres.js, MongoDB and Express the tests use are
 not the ones in Node's module cache, which is where the instrumentation finds them everywhere else. So when Jest
 loads `jest-runtime`, which Node announces on its `module.require` channel, the instrumentation wraps the
 `requireModule` every `require` of a test file goes through, and patches the copies Jest hands the tests: their
@@ -963,8 +998,8 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
 | A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
-| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mariadb` (3 and later), `@prisma/adapter-mariadb`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
-| What it does not | `mysql`, `mssql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3` and `@prisma/adapter-mariadb` (`@prisma/adapter-neon`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6, `redis` before 5.12 and `mariadb` before 3, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
+| What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mariadb` (3 and later), `@prisma/adapter-mariadb`, `tedious`, `mssql`, `@prisma/adapter-mssql`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
+| What it does not | `mysql`, `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3`, `@prisma/adapter-mariadb` and `@prisma/adapter-mssql` (`@prisma/adapter-neon`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6, `redis` before 5.12 and `mariadb` before 3, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
 
 An integration suite comes before the unit one, and an end-to-end one — NestJS's `test:e2e`, which its CLI writes — after it, because `check` judges what each request ran: a run whose database is simulated observes nothing, and its routes are not evaluated. `init` installs nothing, changes neither `package.json` nor your start command, and does not write `routes`: an Express, Fastify or Hono application says which routes it has, and `check` reads them from it while the tests run; for another framework, declaring them is yours (below).
@@ -1071,7 +1106,7 @@ For a person, text with the three columns, each route with its evidence. For a c
 
 **When Downtrace could not see something, the report says so and offers a link; it sends nothing.** A run that left
 no profile, a run in which no route could be evaluated, routes in which nothing was observed in a project that
-depends on a driver the instrumentation does not observe (`sqlite3`, `mssql`…), and an observer that found no driver in
+depends on a driver the instrumentation does not observe (`oracledb`, `mysql`…), and an observer that found no driver in
 a project that depends on one: those are what tells us what Downtrace
 misses in projects we have not seen. The report then has a `feedback`, with `why` and a `url`: a new issue on
 [the public repository](https://github.com/RadW2020/downtrace-agent/issues), filled in with the version, Node, the
@@ -1087,7 +1122,7 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 - HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To count queries per
   request the instrumentation does wrap one method, `pg`'s `Client.prototype.query` (and, for MySQL, `mysql2`'s `query` and
-  `execute` and `mariadb`'s `query`, `prepareExecute` and `batch`, and for MongoDB the driver's `Connection.prototype.command`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
+  `execute` and `mariadb`'s `query`, `prepareExecute` and `batch`, for SQL Server `tedious`'s `makeRequest`, and for MongoDB the driver's `Connection.prototype.command`): it passes arguments, results and errors through untouched, and if the wrapper itself fails your query still
   runs. `DOWNTRACE_INSTRUMENT=none` disables it.
 - For Express route templates the instrumentation wraps two more methods. The first — `Router.prototype.use`, or the
   `Router` function's own `use` in Express 4, where it is the routers' prototype — keeps the pattern of
@@ -1125,8 +1160,8 @@ For CI, the exit status: **0** no route got worse, **1** at least one did, **2**
 
 Node.js 20 or newer (see `engines`); the built package is exercised on Node 20, 22 and 24 in CI.
 
-`pg`, `postgres`, `mysql2`, `mariadb`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
-application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `mariadb` that `@prisma/adapter-mariadb` brings, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, the `mongodb` Mongoose brings, from where Mongoose is, and the driver each of MikroORM's packages for a database brings, from where that package is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
+`pg`, `postgres`, `mysql2`, `mariadb`, `tedious`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
+application loads; and so is the `pg` that `@prisma/adapter-pg` brings, from where that adapter is, the `mariadb` that `@prisma/adapter-mariadb` brings, the `tedious` that `mssql` brings, the `better-sqlite3` that `@prisma/adapter-better-sqlite3` brings, the `libsql` that `@libsql/client` brings, the `mongodb` Mongoose brings, from where Mongoose is, and the driver each of MikroORM's packages for a database brings, from where that package is. Started through a symlinked binary — `npm i -g`, a `/usr/local/bin/<app>` — that is the file
 the link points to, as it is for Node, and the link itself when the process runs with `--preserve-symlinks-main`
 (on the command line or in `NODE_OPTIONS`), as it is for Node too. Started with `node .` or `node <directory>`,
 they resolve from inside that directory, where Node finds your `main`: from the directory, not from the `main`
@@ -1136,7 +1171,7 @@ are resolved from the directory the tests run in as well, and every copy either 
 package manager keeps where nothing of your project resolves — pnpm's global virtual store, a workspace without
 hoisting — would otherwise leave your database unseen and your mounted Express routes and Hono routes unnamed. A `pg`
 that cannot be resolved from there is reported as `unavailable` in the
-batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
+batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `mssql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
 would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found. `downtrace check` reads
 the `package.json` where it runs, and adds a note for each observer, `pg` included, that found no driver your project

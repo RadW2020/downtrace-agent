@@ -19,7 +19,8 @@ export interface CaptureEvidence {
     | "0.9.0"
     | "0.10.0"
     | "0.11.0"
-    | "0.12.0";
+    | "0.12.0"
+    | "0.13.0";
   /**
    * Which process observed this. Several instances of one deployment get the same order on purpose (ADR 0071), so the cloud has to be able to tell two answers apart.
    */

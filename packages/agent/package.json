@@ -57,6 +57,7 @@
     "mongodb": "^7.7.0",
     "mongodb6": "npm:mongodb@^6.21.0",
     "mongoose": "^9.11.4",
+    "mssql": "^12.7.13",
     "mysql2": "^3.24.5",
     "mysql2-legacy": "npm:mysql2@3.11.5",
     "pg": "^8.23.0",
@@ -65,7 +66,8 @@
     "redis": "^6.3.0",
     "redis5": "npm:redis@^5.12.1",
     "sqlite3": "^6.0.1",
-    "sqlite3-5": "npm:sqlite3@^5.1.7"
+    "sqlite3-5": "npm:sqlite3@^5.1.7",
+    "tedious": "^20.3.8"
   },
   "license": "MIT",
   "repository": {

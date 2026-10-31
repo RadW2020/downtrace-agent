@@ -14,7 +14,8 @@ export const ACCEPTED_PROTOCOL_VERSIONS_V0 = [
   "0.10.0",
   "0.11.0",
   "0.12.0",
+  "0.13.0",
 ] as const;
 
 /** The newest published minor: what an up-to-date agent stamps on every batch. */
-export const PROTOCOL_VERSION = "0.12.0";
+export const PROTOCOL_VERSION = "0.13.0";

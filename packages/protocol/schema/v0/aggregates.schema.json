@@ -22,7 +22,8 @@
         "0.9.0",
         "0.10.0",
         "0.11.0",
-        "0.12.0"
+        "0.12.0",
+        "0.13.0"
       ],
       "description": "Protocol version this batch conforms to. Every published minor of v0 stays acceptable."
     },
@@ -423,8 +424,8 @@
       "x-calls-per-request-boundaries": [0, 1, 2, 5, 10, 20, 50],
       "properties": {
         "kind": {
-          "enum": ["postgres", "mysql", "sqlite", "mongodb", "redis", "http"],
-          "description": "What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`). `sqlite` since 0.11.0: a SQLite database in the process, one dependency with an empty `target`, whose statements are operations of kind `query`. Since 0.12.0 a Prisma client's operation is an operation of kind `query` of the dependency its datasource is, with an empty `target`, named by the action and the model (`findMany Post`), or by its SQL for a raw query."
+          "enum": ["postgres", "mysql", "sqlite", "mssql", "mongodb", "redis", "http"],
+          "description": "What kind of dependency this is. `mongodb` since 0.10.0: a MongoDB database, whose commands are operations of kind `query` named by the command and the collection (`find users`). `sqlite` since 0.11.0: a SQLite database in the process, one dependency with an empty `target`, whose statements are operations of kind `query`. Since 0.12.0 a Prisma client's operation is an operation of kind `query` of the dependency its datasource is, with an empty `target`, named by the action and the model (`findMany Post`), or by its SQL for a raw query. `mssql` since 0.13.0: a SQL Server database, named by its host and port, whose statements are operations of kind `query` read as T-SQL."
         },
         "target": {
           "type": "string",
@@ -618,6 +619,10 @@
         "mongodb": {
           "$ref": "#/$defs/ObserverState",
           "description": "Since 0.11.0. Absent from an older sender, which had no word for it."
+        },
+        "mssql": {
+          "$ref": "#/$defs/ObserverState",
+          "description": "Since 0.13.0. Absent from an older sender, which had no word for it. SQL Server, through `tedious`."
         },
         "prisma": {
           "$ref": "#/$defs/ObserverState",

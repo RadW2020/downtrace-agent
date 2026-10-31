@@ -136,7 +136,10 @@ describe("a project it can configure", () => {
     // SQLite through better-sqlite3, libsql (ADR 0239) and sqlite3, Knex's and Sequelize's.
     [{ express: "^5", "better-sqlite3": "^11" }, []],
     [{ express: "^5", knex: "^3", sqlite3: "^5" }, []],
-    [{ express: "^5", mssql: "^11" }, ["mssql"]],
+    // SQL Server through tedious, and through mssql and Prisma's adapter over it (ADR 0245).
+    [{ express: "^5", mssql: "^11" }, []],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mssql": "^7" }, []],
+    [{ express: "^5", oracledb: "^6" }, ["oracledb"]],
     [{ express: "^5", mongoose: "^9" }, []],
     // Mongoose before 8 runs on a driver before 6, which answers through callbacks (ADR 0237).
     [{ express: "^4", mongoose: "^5.7.7" }, ["mongoose"]],

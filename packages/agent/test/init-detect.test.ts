@@ -178,6 +178,15 @@ describe("what the project runs", () => {
     expect(found.repository).toBe(false);
   });
 
+  it("knows SQL Server goes through tedious, whoever holds it", async () => {
+    const found = await detect(
+      await project({}),
+      pkg({ dependencies: { tedious: "^19", mssql: "^12", "@prisma/adapter-mssql": "^7", typeorm: "^0.3" } }),
+    );
+    expect(found.observed).toEqual(["tedious", "mssql", "@prisma/adapter-mssql"]);
+    expect(found.unobserved).toEqual([]);
+  });
+
   it("knows each MikroORM package for a database goes through the driver it brings, and MariaDB's is not one", async () => {
     const found = await detect(
       await project({}),

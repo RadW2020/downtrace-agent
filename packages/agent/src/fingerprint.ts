@@ -34,7 +34,7 @@ export const MAX_TEXT = 1024;
  * different character, and the only way to read a text safely is to read it the way the server that will run it
  * does — which is the database the driver talks to, and not something the text says about itself (DT-91).
  */
-export type Dialect = "postgres" | "mysql" | "sqlite";
+export type Dialect = "postgres" | "mysql" | "sqlite" | "mssql";
 
 /** What a character that opens a quoted span is the start of. */
 export interface Quote {
@@ -80,6 +80,11 @@ export interface DialectRules {
    * (MySQL). What is inside is read as code, strings and all, so a text that has one is not understood.
    */
   executableComments: boolean;
+  /**
+   * `@name` is a parameter, a placeholder as `:name` is everywhere (T-SQL), and `@@name` a function of the server's.
+   * In MySQL it is a user variable, and stays.
+   */
+  atParameters: boolean;
 }
 
 export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
@@ -93,6 +98,7 @@ export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
     hashComments: false,
     dashCommentNeedsBlank: false,
     executableComments: false,
+    atParameters: false,
   },
   mysql: {
     // Without `ANSI_QUOTES`, which is the server's default and not something the text says, a double quote
@@ -108,6 +114,7 @@ export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
     hashComments: true,
     dashCommentNeedsBlank: true,
     executableComments: true,
+    atParameters: false,
   },
   sqlite: {
     // A double quote is a name, as in Postgres, and so are SQLite's two compatibility quotes (ADR 0239). SQLite
@@ -125,6 +132,27 @@ export const DIALECTS: Readonly<Record<Dialect, DialectRules>> = {
     hashComments: false,
     dashCommentNeedsBlank: false,
     executableComments: false,
+    atParameters: false,
+  },
+  mssql: {
+    // T-SQL (ADR 0245). A bracket is a name, as Sequelize, Knex and Prisma write them. A double quote is a name too,
+    // as TypeORM writes them: it is one with QUOTED_IDENTIFIER on, which `tedious` sets as it logs in, and what looks
+    // like a value inside one still goes (ADR 0090). No backslash escapes.
+    quotes: {
+      "'": { opens: "string", backslash: false },
+      '"': { opens: "identifier", backslash: false },
+      "[": { opens: "identifier", backslash: false, closes: "]" },
+    },
+    // A `$` opens nothing in T-SQL; it is the sign of a money literal, `$5.00`. Read as Postgres reads it, what follows
+    // is a value, and its digits do not travel as part of a name.
+    dollarQuoting: true,
+    nestedComments: true,
+    // `#orders` and `##totals` are temporary tables.
+    hashComments: false,
+    dashCommentNeedsBlank: false,
+    executableComments: false,
+    // TypeORM writes `@0`, Prisma `@P1`, mssql and Knex `@p0`: every one a placeholder, and one label for all.
+    atParameters: true,
   },
 };
 
@@ -298,10 +326,12 @@ function scanQuery(sql: string, dialect: Dialect): Scan {
     if (closers.has(c)) unknown = true;
 
     if (c === "$" && rules.dollarQuoting) {
-      // `$1`: a placeholder the application already wrote.
+      // `$1`: a placeholder the application already wrote. What is glued to it goes with it, as with a number:
+      // `$0x7365` is no placeholder any server reads, and the name it would leave behind is the value (T-SQL's money
+      // sign before a binary literal, ADR 0245).
       if (isDigit(sql[i + 1] ?? "")) {
         i++;
-        while (i < n && isDigit(sql[i] as string)) i++;
+        while (i < n && isIdentifierChar(sql[i] as string) && sql[i] !== "$") i++;
         emit("?");
         continue;
       }
@@ -324,6 +354,19 @@ function scanQuery(sql: string, dialect: Dialect): Scan {
 
     // A named placeholder, `:name`. `::` is a cast, not a parameter.
     if (c === ":" && sql[i + 1] !== ":" && /[A-Za-z_]/.test(sql[i + 1] ?? "")) {
+      i += 2;
+      while (i < n && isIdentifierChar(sql[i] as string)) i++;
+      emit("?");
+      continue;
+    }
+    // A T-SQL parameter, `@p0` or `@0`. `@@ROWCOUNT` is the server's, and is left to the rules below.
+    if (
+      c === "@" &&
+      rules.atParameters &&
+      sql[i + 1] !== "@" &&
+      sql[i - 1] !== "@" &&
+      /[A-Za-z0-9_]/.test(sql[i + 1] ?? "")
+    ) {
       i += 2;
       while (i < n && isIdentifierChar(sql[i] as string)) i++;
       emit("?");

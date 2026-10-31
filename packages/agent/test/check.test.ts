@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { CheckReport } from "../src/check/report.ts";
 import { appFiles, cleanEnv, createProject, downtrace, type Project, snapshot } from "./support/check-project.ts";
 import { rootOf } from "./support/mariadb.ts";
+import { type FakeMssql, startFakeMssql } from "./support/mssql.ts";
 import { type FakeMysql, startFakeMysql } from "./support/mysql.ts";
 import { generatePrisma, PRISMA_DIR, PRISMA_QUIET, type PrismaLayout, prismaSchema } from "./support/prisma-client.ts";
 
@@ -1229,6 +1230,16 @@ async function mariadbProject(
   link: Record<string, string>,
   database: FakeMysql,
 ): Promise<Checked> {
+  return serverProject(files, command, link, { MARIADB_PORT: String(database.port) });
+}
+
+/** A project whose application reaches a server of this process, found by the variables of `env`. */
+async function serverProject(
+  files: Record<string, string>,
+  command: string,
+  link: Record<string, string>,
+  env: Record<string, string>,
+): Promise<Checked> {
   const made = await createProject({
     ...files,
     "lookups.txt": "1",
@@ -1241,7 +1252,7 @@ async function mariadbProject(
     await symlink(dir, join(made.dir, "node_modules", name), "dir");
   }
   await made.write("lookups.txt", "4");
-  return check(made, ["--base", "HEAD"], { MARIADB_PORT: String(database.port) });
+  return check(made, ["--base", "HEAD"], env);
 }
 
 describe("a suite whose application queries MySQL through mariadb 3.5, imported as ESM", () => {
@@ -1375,6 +1386,142 @@ describe("a suite Jest runs, whose application holds Prisma's adapter for MySQL 
   afterAll(() => database.close());
 
   it("sees the queries the tests' own copy of the adapter sent, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * SQL Server through `mssql`, the package TypeORM, Knex and Prisma's adapter for SQL Server query through, over
+ * `tedious` (ADR 0245): as an application holds it, and in a suite Jest runs, from Jest's own registry. The server is
+ * the one of `support/mssql.ts`, in this process, found by `MSSQL_PORT`.
+ */
+const MSSQL_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const sql = require("mssql");
+
+let pool;
+beforeAll(async () => {
+  pool = await new sql.ConnectionPool({
+    server: "127.0.0.1",
+    port: Number(process.env.MSSQL_PORT),
+    user: "app",
+    password: "app",
+    options: { encrypt: false },
+  }).connect();
+});
+afterAll(() => pool.close());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) {
+      await pool.request().input("id", sql.Int, Number(req.params.id)).query("SELECT [id], [email] FROM [users] WHERE [id] = @id");
+    }
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+/** The same application, started by its own entry: it connects first, as a service does, and then answers. */
+const MSSQL_APP = `
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const sql = require("mssql");
+
+async function main() {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const pool = await new sql.ConnectionPool({
+    server: "127.0.0.1",
+    port: Number(process.env.MSSQL_PORT),
+    user: "app",
+    password: "app",
+    options: { encrypt: false },
+  }).connect();
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) {
+      await pool.request().input("id", sql.Int, Number(req.params.id)).query("SELECT [id], [email] FROM [users] WHERE [id] = @id");
+    }
+    res.send("user");
+  });
+  app.post("/users", (req, res) => res.send("made"));
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  const base = "http://127.0.0.1:" + server.address().port;
+  for (let i = 0; i < 3; i += 1) {
+    const res = await fetch(base + "/users/" + (i + 1));
+    if (res.status !== 200) throw new Error("status " + res.status);
+  }
+  server.close();
+  await pool.close();
+}
+main();
+`;
+
+const MSSQL_DIR = dirname(dirname(createRequire(import.meta.url).resolve("mssql")));
+const TEDIOUS_DIR = dirname(dirname(createRequire(import.meta.url).resolve("tedious")));
+
+describe("a suite whose application queries SQL Server through mssql", () => {
+  let checked: Checked;
+  let database: FakeMssql;
+  beforeAll(async () => {
+    database = await startFakeMssql();
+    checked = await serverProject(
+      { "app.cjs": MSSQL_APP },
+      "node app.cjs",
+      { express: EXPRESS_DIR, mssql: MSSQL_DIR, tedious: TEDIOUS_DIR },
+      { MSSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups multiplied, read as T-SQL, and the pool's own validation is not one of them", () => {
+    expectLookupsMultiplied(checked);
+    const users = route(checked.report, "GET /users/:id");
+    expect(users.operations.filter((operation) => operation.kind === "query").map((o) => o.label)).toEqual([
+      "SELECT [id], [email] FROM [users] WHERE [id] = ?",
+    ]);
+    expect(checked.report.base?.observers.mssql).toBe("on");
+  });
+});
+
+describe("a suite Jest runs, whose application queries SQL Server through mssql", () => {
+  let checked: Checked;
+  let database: FakeMssql;
+  beforeAll(async () => {
+    database = await startFakeMssql();
+    checked = await serverProject(
+      {
+        "users.test.js": MSSQL_SUITE,
+        "package.json": JSON.stringify({ name: "mssql-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, mssql: MSSQL_DIR, tedious: TEDIOUS_DIR },
+      { MSSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups the tests' own copy of the driver ran, multiplied", () => {
     expectLookupsMultiplied(checked);
   });
 });

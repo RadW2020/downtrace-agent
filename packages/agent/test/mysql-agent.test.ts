@@ -201,6 +201,7 @@ describe("an Express app with a mysql2 pool", () => {
       pg: "off",
       mysql: "on",
       sqlite: "off",
+      mssql: "off",
       mongodb: "off",
       prisma: "off",
       http: "off",

@@ -1,4 +1,3 @@
-import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -16,7 +15,7 @@ import { applicationEntry, basesOf, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
-import { type Armed, armedTogether } from "./arm.ts";
+import { type Armed, armedTogether, whenRequired } from "./arm.ts";
 
 /**
  * MySQL and MariaDB through `mariadb`, the connector MariaDB publishes: the driver Prisma's adapter for both
@@ -357,38 +356,15 @@ export function prismaAdapterOverBundle(from: string): boolean {
  * loaded before the instrumentation started is observed. Returns what stops listening.
  */
 export function watchPrismaMariadb(deps: InstrumentMariadbDeps & { from?: From | undefined }): () => void {
-  for (const base of basesOf(deps.from ?? applicationEntry())) {
-    let file: string;
-    try {
-      file = createRequire(base).resolve(PRISMA_ADAPTER);
-    } catch {
-      continue; // most applications do not have it
-    }
-    const loaded = createRequire(base).cache[file];
-    if (loaded !== undefined && requiresBundle(file)) patchPrismaMariadb(loaded.exports, deps);
-  }
-  const channel = diagnostics_channel.tracingChannel("module.require");
-  const handlers = {
-    start: () => {},
-    end: (message: unknown) => {
-      const { id, parentFilename, result } = message as { id?: unknown; parentFilename?: unknown; result?: unknown };
-      // One comparison for every module the process loads, at load, and nothing in a request.
-      if (id !== PRISMA_ADAPTER || typeof parentFilename !== "string" || !path.isAbsolute(parentFilename)) return;
-      if (!prismaAdapterOverBundle(parentFilename)) return;
-      try {
-        patchPrismaMariadb(result, deps);
-      } catch (err) {
-        deps.internalError(err);
-      }
+  return whenRequired({
+    name: PRISMA_ADAPTER,
+    from: deps.from ?? applicationEntry(),
+    accept: requiresBundle,
+    patch: (exports) => {
+      patchPrismaMariadb(exports, deps);
     },
-    asyncStart: () => {},
-    asyncEnd: () => {},
-    error: () => {},
-  };
-  channel.subscribe(handlers);
-  return () => {
-    channel.unsubscribe(handlers);
-  };
+    internalError: deps.internalError,
+  });
 }
 
 /**

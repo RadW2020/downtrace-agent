@@ -1,4 +1,6 @@
+import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { basesOf, type From } from "../entry.ts";
 import type { Logger } from "../log.ts";
 
@@ -133,6 +135,67 @@ export function armedTogether(armed: readonly Armed[]): Armed {
   return {
     state: armed.some((one) => one.state === "on") ? "on" : "unavailable",
     attach: () => armed.map((one) => one.attach()).every(Boolean),
+  };
+}
+
+/**
+ * Patches a package as the application requires it by its name — which Node announces on its `module.require` channel,
+ * from Node 22 — and at once a copy the application has loaded already, resolved from `from`. For what has to be
+ * patched before the application uses it at start-up, which the first request is too late for: a pool that binds a
+ * method of its class as it is built, an adapter connected in a NestJS module's `onModuleInit`. Nothing is loaded here:
+ * the patch runs on what the application loaded. `accept` is asked with the file the name resolves to, from where it
+ * was required. Returns what stops listening.
+ */
+export function whenRequired(deps: {
+  name: string;
+  from: From;
+  accept?: ((file: string) => boolean) | undefined;
+  patch: (exports: unknown) => void;
+  internalError: (err: unknown) => void;
+}): () => void {
+  const { name, accept, patch, internalError } = deps;
+  const patchCopy = (exports: unknown): void => {
+    try {
+      patch(exports);
+    } catch (err) {
+      internalError(err);
+    }
+  };
+  for (const base of basesOf(deps.from)) {
+    let file: string;
+    try {
+      file = createRequire(base).resolve(name);
+    } catch {
+      continue; // most applications do not have it
+    }
+    const loaded = createRequire(base).cache[file];
+    if (loaded !== undefined && (accept?.(file) ?? true)) patchCopy(loaded.exports);
+  }
+  const channel = diagnostics_channel.tracingChannel("module.require");
+  const handlers = {
+    start: () => {},
+    end: (message: unknown) => {
+      const { id, parentFilename, result } = message as { id?: unknown; parentFilename?: unknown; result?: unknown };
+      // One comparison for every module the process loads, at load, and nothing in a request.
+      if (id !== name || typeof parentFilename !== "string" || !path.isAbsolute(parentFilename)) return;
+      if (accept !== undefined) {
+        let file: string;
+        try {
+          file = createRequire(parentFilename).resolve(name);
+        } catch {
+          return;
+        }
+        if (!accept(file)) return;
+      }
+      patchCopy(result);
+    },
+    asyncStart: () => {},
+    asyncEnd: () => {},
+    error: () => {},
+  };
+  channel.subscribe(handlers);
+  return () => {
+    channel.unsubscribe(handlers);
   };
 }
 
