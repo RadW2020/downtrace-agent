@@ -20,6 +20,13 @@ export interface Armed {
    * `false` while the application has not loaded one of them yet.
    */
   attach: () => boolean;
+  /**
+   * The same patch, asked in the microtask after the application loads modules (`whenLoaded`, ADR 0246), and so in the
+   * request that loads the driver, before its handler goes on to query. It does only what the module cache can say at
+   * that moment: an observer whose attach starts an import, or looks at the whole cache, leaves that to the request.
+   * Unsaid where there is nothing of the kind to do.
+   */
+  atLoad?: (() => boolean) | undefined;
 }
 
 export interface ArmDeps<Driver> {
@@ -71,11 +78,10 @@ export interface ArmDeps<Driver> {
  * the two are loaded in — without taking the load from the application.
  *
  * The patch itself runs in `attach`, from the start of the first request at which the driver is in the module
- * cache: by then the application has loaded it (a server that answers a request has finished its start-up), the
- * `require` is a cache hit that re-executes nothing, and the wrapper is in place before the request's handler
- * runs. What that moment gives up is said in ADR 0209: a query the application makes in the very request that
- * loads the driver for the first time — a lazy import in a handler — is the one this observer does not count;
- * from the next request it counts again.
+ * cache: by then the application has loaded it (a server that answers a request has finished its start-up), and the
+ * wrapper is in place before the request's handler runs. What that moment gives up — a query the application makes
+ * in the very request that loads the driver, a lazy import in a handler — the same attach takes back from Node 22, in
+ * the microtask after the application loads the driver (`whenLoaded`, ADR 0246).
  *
  * The second driver to be observed (DT-91) is why this is a function of its own: the mechanism is ADR 0209's
  * and it is the same for every driver, so a correction to it is one correction.
@@ -114,15 +120,21 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
       const loaded = deps.trigger === undefined ? copy.resolved : join(dirname(copy.resolved), deps.trigger);
       // Until the application loads the driver there is nothing to patch, and nothing is lost by waiting:
       // a query cannot run before the driver is loaded, and a query outside a request is not counted
-      // (`context.ts`). The check is one property read on the module cache, once per request until then.
-      if (copy.require.cache[loaded] === undefined) {
+      // (`context.ts`). The check is two property reads on the module cache, once per request until then. Loaded,
+      // and not only there: the ES module loader puts a CommonJS module it imports in the cache as it links the
+      // graph, and runs it later, so an entry can be there and export nothing yet (ADR 0246).
+      const cached = copy.require.cache[loaded];
+      if (cached?.loaded !== true) {
         i += 1;
         continue;
       }
       copies.splice(i, 1);
       try {
-        const module = copy.require(deps.trigger === undefined ? driver : loaded) as Driver;
-        deps.patch(module, copy.version, copy.require, copy.resolved);
+        // Off the cache, and not through `require`: an application that imports the driver from an ES module loads it
+        // without `Module.prototype.require`, where a tracker's hook for CommonJS sits, and a `require` here would be
+        // the first that hook sees. The tracker would patch the driver there, and again at its hook for ES modules,
+        // on top of this observer's wrapper: every span twice (ADR 0246).
+        deps.patch(cached.exports as Driver, copy.version, copy.require, copy.resolved);
       } catch (err) {
         // A failure of the attach is a failure of the instrumentation's own: counted like any other
         // (invariant 2, ADR 0161), and never handed to the request that asked for it. The copy leaves the list
@@ -132,7 +144,8 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
     }
     return copies.length === 0;
   };
-  return { state: "on", attach };
+  // The copies are one list, so a copy patched at a load is not patched again at a request, nor the reverse.
+  return { state: "on", attach, atLoad: attach };
 }
 
 /**
@@ -143,7 +156,61 @@ export function armedTogether(armed: readonly Armed[]): Armed {
   return {
     state: armed.some((one) => one.state === "on") ? "on" : "unavailable",
     attach: () => armed.map((one) => one.attach()).every(Boolean),
+    atLoad: () => armed.map((one) => one.atLoad?.() ?? true).every(Boolean),
   };
+}
+
+/**
+ * Runs `attach` each time the process has loaded modules through `require` — an `import` of a CommonJS module too —,
+ * which Node announces on its `module.require` channel from 22 (ADR 0246): once the code that loaded them has run to
+ * its end, in a microtask, and so before anything that code waits for. A lazy import in a handler is patched before the
+ * handler's first query, which waits for a connection, or for the import itself.
+ *
+ * Not at the end of the load. A driver loads its classes one module at a time, and `mysql2`'s connection has finished
+ * loading before its pool starts. And a tracker's hook on `require` patches the driver as that `require` returns, after
+ * the end Node announces: its hook recognises its own wrapper, and unwraps it before it wraps again, and a wrapper of
+ * ours in between would hide it — every span twice, which ADR 0209 is there to prevent. In the microtask the driver is
+ * whole, and the tracker's wrapper is under ours, as it is when the first request patches it.
+ *
+ * Until `attach` settles, or the returned function is called. Node 20 announces nothing, and there the first request
+ * after the load is the moment, as ADR 0209 says. What the attach requires does not ask it again, and what it throws
+ * goes to `internalError`.
+ */
+export function whenLoaded(deps: { attach: () => boolean; internalError: (err: unknown) => void }): () => void {
+  const channel = diagnostics_channel.tracingChannel("module.require");
+  // One microtask for a run of loads: a start-up loads thousands of modules in one turn.
+  let queued = false;
+  let attaching = false;
+  let stopped = false;
+  const attach = (): void => {
+    queued = false;
+    if (stopped) return;
+    attaching = true;
+    try {
+      if (deps.attach()) stop();
+    } catch (err) {
+      deps.internalError(err);
+    } finally {
+      attaching = false;
+    }
+  };
+  const handlers = {
+    start: () => {},
+    end: () => {
+      if (queued || attaching) return;
+      queued = true;
+      queueMicrotask(attach);
+    },
+    asyncStart: () => {},
+    asyncEnd: () => {},
+    error: () => {},
+  };
+  const stop = (): void => {
+    stopped = true;
+    channel.unsubscribe(handlers);
+  };
+  channel.subscribe(handlers);
+  return stop;
 }
 
 /**

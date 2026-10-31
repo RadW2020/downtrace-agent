@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { startFakeMysql } from "./support/mysql.ts";
 
 /**
  * MySQL as an application starts it (DT-91): `node --import @downtrace/agent/register`, a `mysql2` the
@@ -82,6 +83,41 @@ await new Promise((r) => app.close(r));
 await new Promise((r) => pool.end(() => r()));
 await database.close();
 console.log(JSON.stringify({ target: database.host + ":" + database.port }));
+`;
+
+/**
+ * The same route, in an application that loads the driver inside the route, the first time it is asked for it: a lazy
+ * import, which is how Next.js loads a route's module, and with it the route's driver, in production as in development.
+ * `load` is what the handler loads it with, a `require` or an `import()`. The server is the test's, given as
+ * `host:port`: the fake one is made of the driver, and would load it before the application does.
+ */
+const LAZY = (load: string): string => `
+import http from "node:http";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+const [host, port] = process.argv[3].split(":");
+let pool;
+
+const app = http.createServer(async (req, res) => {
+  if (pool === undefined) {
+    const mysql = ${load};
+    pool = mysql.createPool({ host, port: Number(port), user: "dt-user-zq", connectionLimit: 1 });
+  }
+  pool.query("SELECT * FROM orders WHERE id = ?", [7], (err) => {
+    if (err) { res.statusCode = 500; res.end("no"); return; }
+    res.end("ok");
+  });
+});
+await new Promise((r) => app.listen(0, "127.0.0.1", r));
+const base = \`http://127.0.0.1:\${app.address().port}\`;
+for (let i = 0; i < 3; i++) await (await fetch(\`\${base}/orders\`)).arrayBuffer();
+const { shutdown } = await import(pathToFileURL(process.argv[2]).href);
+await shutdown();
+app.closeAllConnections();
+await new Promise((r) => app.close(r));
+await new Promise((r) => pool.end(() => r()));
 `;
 
 interface Batch {
@@ -164,6 +200,42 @@ describe("mysql2 as an application starts it", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  // ADR 0246: the driver is patched as the application finishes loading it, and so the request that loads it counts
+  // its own queries. Node announces the load from 22; on 20 the first request's are lost, as ADR 0209 said.
+  it.each([
+    ["a `require`", 'require("mysql2")'],
+    ["an `import()`", '(await import("mysql2")).default'],
+  ])(
+    "counts the queries of the request that loads it with %s",
+    async (_how, load) => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "downtrace-mysql-start-"));
+      try {
+        const driver = path.dirname(createRequire(import.meta.url).resolve("mysql2/package.json"));
+        await mkdir(path.join(dir, "node_modules"), { recursive: true });
+        await symlink(driver, path.join(dir, "node_modules", "mysql2"), "dir");
+        const server = path.join(dir, "server.mjs");
+        await writeFile(server, LAZY(load), "utf8");
+
+        const database = await startFakeMysql();
+        const { code, stderr } = await run(
+          ["--import", register, server, index, `${database.host}:${database.port}`],
+          childEnv({ DOWNTRACE_INSPECT: "stderr" }),
+        ).finally(() => database.close());
+        expect(code, `the child failed\n${stderr}`).toBe(0);
+        const operations = batchesOf(stderr)
+          .find((b) => b.profile)
+          ?.profile?.endpoints.find((e) => e.route === "/orders")?.operations;
+        expect(
+          operations?.map((o) => [o.kind, o.text, o.count]),
+          stderr,
+        ).toEqual([["query", "SELECT * FROM orders WHERE id = ?", 3]]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 
   it("is not observed when the switch leaves it out", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "downtrace-mysql-start-"));

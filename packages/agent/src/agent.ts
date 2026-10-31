@@ -37,7 +37,7 @@ import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./finger
 import { attachHapi } from "./hapi.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
-import { armedTogether } from "./instrument/arm.ts";
+import { type Armed, armedTogether, whenLoaded } from "./instrument/arm.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import {
   armMariadb,
@@ -305,6 +305,8 @@ export class Agent {
   private stopPrismaMariadb: (() => void) | undefined;
   /** Stops listening for `mssql`, whose pool's validation is patched as it loads (ADR 0245). */
   private stopMssql: (() => void) | undefined;
+  /** Stops listening for the loads after which a driver the application loaded is patched (ADR 0246). */
+  private stopLoads: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
@@ -608,6 +610,8 @@ export class Agent {
     // A failure while an observer records is one of the instrumentation's own, and is counted like any other:
     // at the tenth the instrumentation disables itself (invariant 2, ADR 0161).
     const internalError = (err: unknown): void => this.internalError(err);
+    // What each driver's observer can patch once the application has loaded it (ADR 0246).
+    const atLoad: Armed[] = [];
     // The pg observer announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
     if (on.has("pg")) {
@@ -647,6 +651,7 @@ export class Agent {
         observers.pg = armed.state === "on" || postgresJs.state === "on" ? "on" : "unavailable";
         this.pgAttach = armed.attach;
         this.postgresJsAttach = postgresJs.attach;
+        atLoad.push(armed, postgresJs);
       }
     }
     // MySQL through `mysql2`, the same way (DT-91), said in `observers` since protocol 0.11.0 (ADR 0240).
@@ -669,6 +674,7 @@ export class Agent {
         ]);
         said(observers, "mysql", armed.state);
         this.mysqlAttach = armed.attach;
+        atLoad.push(armed);
         // Prisma's adapter over the driver's CommonJS bundle, whose classes are out of reach: at the adapter, as it
         // loads, because a NestJS application connects before its first request.
         this.stopPrismaMariadb = watchPrismaMariadb({ ...mysqlDeps, from });
@@ -770,6 +776,7 @@ export class Agent {
       const armed = armMongo({ ...mongoDeps, from });
       said(observers, "mongodb", armed.state);
       this.mongoAttach = armed.attach;
+      atLoad.push(armed);
       sandbox.push({
         matches: (name, from) => name === "./connection" && requiredFrom(from, "mongodb", "lib", "cmap", "connect.js"),
         patch: (connection) => patchMongo(connection, "unknown", mongoDeps),
@@ -781,6 +788,7 @@ export class Agent {
       const armed = armTedious({ ...mssqlDeps, from });
       said(observers, "mssql", armed.state);
       this.mssqlAttach = armed.attach;
+      atLoad.push(armed);
       this.stopMssql = watchMssql({ ...mssqlDeps, from });
       sandbox.push(
         { matches: (name) => name === "tedious", patch: (tedious) => patchTedious(tedious, "unknown", mssqlDeps) },
@@ -793,6 +801,7 @@ export class Agent {
       const armed = armSqlite({ ...sqliteDeps, from });
       said(observers, "sqlite", armed.state);
       this.sqliteAttach = armed.attach;
+      atLoad.push(armed);
       sandbox.push(
         {
           matches: (name) => name === "better-sqlite3" || name === "libsql",
@@ -823,6 +832,11 @@ export class Agent {
       });
     }
     this.stopJest = attachJest({ patches: sandbox, internalError });
+    // A driver the application loads inside a request — a lazy import, a route Next.js loads as it is first asked for —
+    // is patched in the microtask after that load, and that request's queries are counted (ADR 0246). The request's
+    // attach stays for what this cannot do: Node 20, which announces no load, and an ES module, which the cache lacks.
+    const loads = armedTogether(atLoad.filter((one) => one.state === "on"));
+    if (loads.state === "on") this.stopLoads = whenLoaded({ attach: () => loads.atLoad?.() ?? true, internalError });
     // Outgoing HTTP needs no driver: `fetch` and the node:http client publish on diagnostics_channel.
     if (on.has("http")) {
       this.stopHttp = instrumentHttp({ log: this.log, internalError, errors: this.errors, calls: this.calls });
@@ -923,6 +937,8 @@ export class Agent {
     this.stopPrismaMariadb = undefined;
     this.stopMssql?.();
     this.stopMssql = undefined;
+    this.stopLoads?.();
+    this.stopLoads = undefined;
     this.stopRedis?.();
     this.stopRedis = undefined;
     this.runtime.stop();

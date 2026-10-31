@@ -228,19 +228,25 @@ function armCopy(
   };
   if (deps.early === true) importEsm();
 
-  const attach = (): boolean => {
-    if (esmDone === undefined) importEsm();
-    if (!cjsDone && require.cache[cjs] !== undefined) {
+  const attachCjs = (): boolean => {
+    // Loaded, and off the cache, as `armDriver` does (ADR 0246).
+    const cached = require.cache[cjs];
+    if (!cjsDone && cached?.loaded === true) {
       cjsDone = true;
       try {
-        patchPostgresJs(require(cjs), version, deps);
+        patchPostgresJs(cached.exports, version, deps);
       } catch (err) {
         deps.internalError(err);
       }
     }
+    return cjsDone;
+  };
+  const attach = (): boolean => {
+    if (esmDone === undefined) importEsm();
     // An application that imports the ESM copy never loads the CommonJS one, and pays this property read for as
     // long as it answers requests, as one that never loads `pg` does (ADR 0209).
-    return cjsDone && esmDone === true;
+    return attachCjs() && esmDone === true;
   };
-  return { state: "on", attach };
+  // At a load only the CommonJS copy: the import of the ESM one is the first request's, outside `check` (ADR 0235).
+  return { state: "on", attach, atLoad: attachCjs };
 }

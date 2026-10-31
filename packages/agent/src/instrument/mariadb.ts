@@ -527,17 +527,19 @@ function armCommonJs({ root, version, require }: Copy, deps: InstrumentMariadbDe
   ];
   const attach = (): boolean => {
     for (const module of modules) {
-      if (module.done || require.cache[module.file] === undefined) continue;
+      // Loaded, and off the cache, as `armDriver` does (ADR 0246).
+      const cached = require.cache[module.file];
+      if (module.done || cached?.loaded !== true) continue;
       module.done = true;
       try {
-        module.patch(require(module.file));
+        module.patch(cached.exports);
       } catch (err) {
         deps.internalError(err);
       }
     }
     return modules[0]?.done === true && modules[1]?.done === true;
   };
-  return { state: "on", attach };
+  return { state: "on", attach, atLoad: attach };
 }
 
 function armEsm(

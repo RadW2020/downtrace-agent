@@ -1,6 +1,6 @@
 # 0209 — The agent resolves the driver at start-up, and patches it from the first request
 
-Estado: aceptado · Fecha: 2026-09-28 · Supera la parte del ADR 0009 que cargaba el driver al arrancar · Alcance: público
+Estado: aceptado; lo que su momento pierde —las consultas de la request que carga el driver— lo recupera el ADR 0246 desde Node 22, en la microtarea que sigue a la carga · Fecha: 2026-09-28 · Supera la parte del ADR 0009 que cargaba el driver al arrancar · Alcance: público
 
 ## Context (gh-614)
 
