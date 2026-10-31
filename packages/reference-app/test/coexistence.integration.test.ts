@@ -644,6 +644,152 @@ describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in one pro
   }, 180_000);
 });
 
+/** A CommonJS application beside the tracker: `test/commonjs/server.cjs`, which says why it is not the reference app. */
+const COMMONJS_APP = "test/commonjs/server.cjs";
+const COMMONJS_TRACKER = "./test/commonjs/instrument.cjs";
+/** The one query its one route runs, which is also the description of the tracker's span for it. */
+const COMMONJS_QUERY = "SELECT 1 AS one";
+
+/**
+ * The three ways a CommonJS application gets the two, each loaded as its own documentation asks: the
+ * instrumentation with `--import`, the one way its README gives for any application, and the tracker on the first
+ * line of the application's entry or preloaded with `--require`. The agent has no CommonJS entry to `--require`,
+ * and needs none: `--import` loads it before a CommonJS entry as it does before an ES module one.
+ *
+ * Node runs every `--require` before any `--import`, wherever each is written on the command line, so the flag is
+ * what decides the order: the tracker is first when it is preloaded, and second when the entry requires it.
+ */
+const COMMONJS_LOADS = {
+  "the tracker alone": [],
+  "downtrace first": ["--import", DOWNTRACE],
+  "the tracker first": ["--require", COMMONJS_TRACKER, "--import", DOWNTRACE],
+} as const satisfies Record<string, readonly string[]>;
+
+interface CommonJsObserved {
+  answers: number[];
+  tracker: TrackerView;
+  downtrace: DowntraceView | undefined;
+}
+
+/**
+ * Starts the CommonJS application with what `preload` names, asks for its one route three times, and returns what
+ * each side saw. The tracker is always there: what is being compared is its view, with Downtrace and without.
+ */
+async function observeCommonJs(preload: readonly string[]): Promise<CommonJsObserved> {
+  const dir = await mkdtemp(join(tmpdir(), "downtrace-coexistence-cjs-"));
+  running.push(() => rm(dir, { recursive: true, force: true }));
+  const inspectPath = join(dir, "batches.jsonl");
+  const withDowntrace = preload.includes(DOWNTRACE);
+  const sink = await trackerSink();
+  running.push(sink.close);
+
+  const child = spawn(process.execPath, [...preload, COMMONJS_APP], {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      DATABASE_URL: DATABASE_URL ?? "",
+      // As in `observe`: what the instrumentation would send is written, and nothing of ours leaves the process.
+      DOWNTRACE_INSPECT: withDowntrace ? inspectPath : "",
+      DOWNTRACE_TOKEN: "",
+      DOWNTRACE_URL: "",
+      DOWNTRACE_INTERVAL_MS: "1000",
+      SENTRY_DSN: sink.dsn,
+    },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const stop = async () => {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.on("exit", resolve));
+    }
+  };
+  running.push(stop);
+
+  const port = await new Promise<number>((resolve, reject) => {
+    const giveUp = setTimeout(() => reject(new Error(`the app never listened:\n${stdout}\n${stderr}`)), DEADLINE_MS);
+    const look = () => {
+      const found = /"port":(\d+)/.exec(stdout);
+      if (!found) return;
+      clearTimeout(giveUp);
+      resolve(Number(found[1]));
+    };
+    child.stdout.on("data", look);
+    child.on("exit", (code) => {
+      clearTimeout(giveUp);
+      reject(new Error(`the app exited with ${code} before listening:\n${stdout}\n${stderr}`));
+    });
+  });
+
+  const answers: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`http://127.0.0.1:${port}/products`);
+    await res.arrayBuffer();
+    answers.push(res.status);
+  }
+  const sent = () =>
+    sink.items.filter((item) => item.type === "transaction" && item.payload.transaction === "GET /products").length;
+  await settle(
+    () => `3 transactions for GET /products (it sent ${sent()})`,
+    () => sent() >= 3,
+  );
+  await stop();
+
+  return {
+    answers,
+    tracker: view(sink.items),
+    downtrace: withDowntrace ? await readBatches(inspectPath, {}) : undefined,
+  };
+}
+
+/**
+ * The same guard as the test above, for an application that `require`s its driver.
+ *
+ * In a CommonJS application the tracker's only hook on `pg` is the one for CommonJS, which patches a module as
+ * the `require` that loads it returns, and only on a real load. The instrumentation patches the same prototypes in
+ * the microtask after that load (ADR 0246), so after the tracker's hook in either order, and on the copy the
+ * application loaded, since it requires nothing itself. If it did, or if it patched between the tracker's two
+ * patches of `pg`, the tracker would lose its spans or send them twice, as ADR 0147's table found them.
+ *
+ * Downtrace's own count of the same queries is asserted beside it: a run in which the instrumentation never
+ * patched the driver would leave the tracker's spans exactly as they are alone, and pass for the wrong reason.
+ */
+describe.skipIf(!DATABASE_URL)("@downtrace/agent beside @sentry/node, in a CommonJS application", () => {
+  it("the tracker's own pg spans survive either load order, without duplicates", async () => {
+    const runs = await Promise.all(
+      Object.entries(COMMONJS_LOADS).map(async ([order, preload]) => [order, await observeCommonJs(preload)] as const),
+    );
+
+    for (const [order, run] of runs) {
+      expect(run.answers, order).toEqual([200, 200, 200]);
+      const spans = run.tracker.dbSpans["GET /products"] ?? [];
+      // One connect span and one query span per request, three requests, in every configuration and not one
+      // more: a missing span is the tracker not seeing its driver, a duplicate one is a double wrap.
+      expect(
+        spans.filter((d) => d === "pg-pool.connect"),
+        order,
+      ).toHaveLength(3);
+      expect(
+        spans.filter((d) => d === COMMONJS_QUERY),
+        order,
+      ).toHaveLength(3);
+      if (order === "the tracker alone") continue;
+      // One query in each of the three requests, every one of them counted, and nothing of ours threw.
+      expect(run.downtrace?.postgres["GET /products"], order).toEqual({
+        callsPerRequest: [0, 3, 0, 0, 0, 0, 0, 0],
+        errors: 0,
+      });
+      expect(run.downtrace?.internalErrors, order).toBe(0);
+    }
+  }, 180_000);
+});
+
 /**
  * The exception that kills the process, with both of them watching it.
  *

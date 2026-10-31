@@ -370,10 +370,17 @@ found:
 - with a tracker beside it, a request that loads `pg` both ways — a `require` and an `import` of it in that same
   request — gets two of the tracker's spans for each query from then on.
 
-**That was verified with an ESM application.** A CommonJS application shares the module cache the same
-way, but the tracker's hooks only fire on a real load there, so whether its `pg` spans survive is a matter
-of its own load order; it is not verified, so if your application is CommonJS and you care about your
-tracker's `pg` spans while both are installed, check them.
+**A CommonJS application is verified too**, on Express 5 and `pg`, with the tracker required on the first line
+of the entry or preloaded, as its documentation asks a CommonJS application to load it:
+
+```sh
+node --import @downtrace/agent/register --require ./instrument.js server.js
+```
+
+There the tracker sees `pg` only through its hook on `require`, which patches the driver as the `require` that
+loads it returns, and this instrumentation patches it after that, so its `pg` spans come out as they do alone.
+Node runs a `--require` before any `--import`, so that command loads the tracker first; required from the entry,
+it loads second, and the test runs both.
 
 Everything else composes cleanly, in both orders, and there is a test that compares exact counts —
 requests, calls per request, errors — against each one running alone:

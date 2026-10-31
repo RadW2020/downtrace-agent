@@ -65,7 +65,8 @@ SENTRY_DSN=… node --import @downtrace/agent/register --import ./src/sentry.ts 
 - `src/sentry.ts` is the tracker's entry point and the only thing that calls `Sentry.init`; it reads what `src/config.ts` read from the environment, because that module is the one place that reads it. With no `SENTRY_DSN` it does nothing, so loading it is never what turns the tracker on.
 - `SENTRY_DSN` is also what makes `main.ts` wire the tracker into the app: its Express error middleware beside `expressErrorHandler()`, and its `captureException` beside ours in the provider client's retry, with the same error and the same context. A DSN set with the tracker never loaded aborts start-up rather than quietly running with one instrumentation.
 - `TRACKER_ERROR_HANDLER=before|after` (default `after`) puts the tracker's error middleware on either side of ours. Both record and call `next(err)`, so both see the error and neither answers; the switch exists because that is a claim, and `test/coexistence.integration.test.ts` runs it both ways. Any other value aborts start-up.
-- What that test compares, and what it pins as **not** working — the tracker's `pg` spans, which do not survive our start-up `require("pg")` (gh-614) — is in the test's own header.
+- What that test compares is in the test's own header, and it includes the tracker's `pg` spans, one per query in either load order (gh-614, ADR 0246).
+- `test/commonjs/` is a CommonJS application on Express 5 and `pg` that the same test runs, because this app is an ES module one and only a `require` of the driver shows the tracker's hook for CommonJS. It loads the tracker on its entry's first line or with `--require`, as the tracker's documentation asks a CommonJS application to do.
 
 ## Admin (`ADMIN_ENABLED=1`, the default)
 
