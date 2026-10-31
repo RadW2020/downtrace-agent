@@ -146,6 +146,11 @@ describe("what the project runs", () => {
     expect(found.testCommand).toBe("npm run test:e2e");
   });
 
+  it("names Hapi among the frameworks whose routes are named by their templates", async () => {
+    const found = await detect(await project({}), pkg({ dependencies: { "@hapi/hapi": "^21", pg: "^8" } }));
+    expect(found.frameworks).toEqual(["@hapi/hapi"]);
+  });
+
   it("names the frameworks and the observed dependencies it depends on, and nothing else", async () => {
     const dir = await project({ ".git/": "" });
     const found = await detect(

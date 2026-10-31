@@ -23,6 +23,7 @@ export const FRAMEWORK_PACKAGES = [
   "@strapi/strapi",
   "fastify",
   "hono",
+  "@hapi/hapi",
   "next",
   "@nestjs/platform-express",
   "@nestjs/platform-fastify",

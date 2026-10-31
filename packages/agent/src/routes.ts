@@ -1,6 +1,7 @@
 import { isRegExp } from "node:util/types";
 import type { Endpoint } from "@downtrace/protocol";
 import { fastifyInstanceOf, fastifyMatchedRoute, fastifyRegistered } from "./fastify.ts";
+import { hapiMatchedRoute, hapiUnmatched } from "./hapi.ts";
 import { honoMatchedRoute, honoMiddleware, honoRegistered, honoRouterOf } from "./hono.ts";
 import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
@@ -77,7 +78,12 @@ export interface RouteSource {
  */
 export function routeOf(req: RouteSource): string {
   const template =
-    nextTemplate(req) ?? koaTemplate(req) ?? honoTemplate(req) ?? fastifyTemplate(req) ?? expressTemplate(req);
+    nextTemplate(req) ??
+    koaTemplate(req) ??
+    honoTemplate(req) ??
+    fastifyTemplate(req) ??
+    hapiTemplate(req) ??
+    expressTemplate(req);
   const route = template ?? unnamedRoute(req);
   return route.length > MAX_ROUTE_LENGTH ? route.slice(0, MAX_ROUTE_LENGTH) : route;
 }
@@ -188,7 +194,8 @@ function unnamedRoute(req: RouteSource): string {
     expressAnswered(req) ||
     koaRouterSawRequest(req) ||
     fastifyInstanceOf(req) !== undefined ||
-    honoRouterOf(req) !== undefined
+    honoRouterOf(req) !== undefined ||
+    hapiUnmatched(req)
   )
     return UNMATCHED_ROUTE;
   return heuristicTemplate(typeof req.originalUrl === "string" ? req.originalUrl : (req.url ?? "/"));
@@ -231,6 +238,12 @@ function fastifyTemplate(req: object): string | undefined {
 /** Hono's template: the first route the request matched that is not a middleware, prefixes included (`hono.ts`). */
 function honoTemplate(req: object): string | undefined {
   const matched = honoMatchedRoute(req);
+  return matched === undefined ? undefined : joinTemplate([], matched);
+}
+
+/** Hapi's template: the path of the route it matched, a plugin's prefix included, with Hapi's braces (`hapi.ts`). */
+function hapiTemplate(req: object): string | undefined {
+  const matched = hapiMatchedRoute(req);
   return matched === undefined ? undefined : joinTemplate([], matched);
 }
 

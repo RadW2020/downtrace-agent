@@ -34,6 +34,7 @@ import { Excluded } from "./exclude.ts";
 import { attachFastify, type Unannounced } from "./fastify.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
+import { attachHapi } from "./hapi.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { armedTogether } from "./instrument/arm.ts";
@@ -298,6 +299,7 @@ export class Agent {
   private stopHttp: (() => void) | undefined;
   private stopFastify: (() => void) | undefined;
   private stopHono: (() => void) | undefined;
+  private stopHapi: (() => void) | undefined;
   private stopJest: (() => void) | undefined;
   /** Stops listening for Prisma's adapter for MySQL loaded over `mariadb`'s CommonJS bundle. */
   private stopPrismaMariadb: (() => void) | undefined;
@@ -570,6 +572,8 @@ export class Agent {
     this.stopFastify = attachFastify({ internalError: (err) => this.internalError(err), unannounced });
     // Hono's routers are given their routes at the first match and keep them, so their files are loaded and wrapped
     // now, before it (`hono.ts`, ADR 0236). A request made with `app.request()` goes through the same two doors.
+    // Hapi's request class, as Hapi loads it: a suite that only injects makes no request Node announces (`hapi.ts`).
+    this.stopHapi = attachHapi({ from, internalError: (err) => this.internalError(err), unannounced });
     this.stopHono = attachHono({
       from,
       log: this.log,
@@ -897,6 +901,8 @@ export class Agent {
     this.stopFastify = undefined;
     this.stopHono?.();
     this.stopHono = undefined;
+    this.stopHapi?.();
+    this.stopHapi = undefined;
     this.stopJest?.();
     this.stopJest = undefined;
     this.stopPrismaMariadb?.();

@@ -1004,7 +1004,7 @@ It reads the project in the directory it runs in — its `package.json`, the loc
 | It looks for | Where | What it does with it |
 |---|---|---|
 | The test command | `scripts` of `package.json`: the first of `test:integration`, `test-integration`, `test:int`, `integration`, `test:e2e`, `test-e2e`, `e2e` and `test`, and npm's «no test specified» placeholder is no test | writes it to `downtrace.json` as `check.command`, run by the package manager that `packageManager` names or the lockfile is of — `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` or `bun.lockb`, `package-lock.json` or `npm-shrinkwrap.json` — and npm without one: `npm run test:integration`, `pnpm test` |
-| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
+| A framework whose routes are named by their templates | `express`, `koa`, `@strapi/strapi` (which runs on Koa), `fastify`, `hono`, `@hapi/hapi`, `next`, or NestJS's `@nestjs/platform-express` or `@nestjs/platform-fastify` (Nest serves through them) among the dependencies | says which |
 | What the instrumentation observes inside a request | `pg`, `@prisma/adapter-pg`, `slonik` (which queries through `pg`: observed when that `pg` is the one at the application's root, as npm installs it), `postgres`, `mysql2`, `mysql`, `mariadb` (3 and later), `@prisma/adapter-mariadb`, `tedious`, `mssql`, `@prisma/adapter-mssql`, `better-sqlite3`, `@prisma/adapter-better-sqlite3`, `libsql`, `@libsql/client`, `sqlite3`, `mongodb` (6 and later), `mongoose` (8 and later), MikroORM's `@mikro-orm/postgresql`, `@mikro-orm/mysql`, `@mikro-orm/sqlite`, `@mikro-orm/better-sqlite`, `@mikro-orm/libsql` and `@mikro-orm/mongodb` (6 and later), `@prisma/client` (3.15 and later), `ioredis` and `redis` (node-redis, 5.12 and later) among the dependencies; outgoing HTTP always | says which |
 | What it does not | `oracledb`, `kafkajs` and `amqplib` among the dependencies, and a Prisma driver adapter other than `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3`, `@prisma/adapter-mariadb` and `@prisma/adapter-mssql` (`@prisma/adapter-neon`, …), whose driver Prisma then queries through, `@prisma/client` before 7 whose schema (`prisma/schema.prisma` or `schema.prisma`) has the `prisma-client` generator on Prisma's own engine — what `prisma init` writes in 6.19 —, and `@prisma/client` before 3.15, `mongodb` before 6, `mongoose` before 8, `@mikro-orm/mongodb` before 6, `redis` before 5.12 and `mariadb` before 3, by the range declared: one that cannot reach that version (`^4.6.0`, `~5.11.9`, `5.1.0` of `redis`), and not one that lets the minor float (`^5.1.0`, `^5`), which may install it | says which, as `detected.unobserved`, and is configured all the same: `check` sees those requests and their calls, not that work, and a route whose work all goes there is not evaluated |
 | A build that prunes what nothing imports | Next.js with `output: "standalone"` in `next.config` | writes [the hook above](#nextjs), in `src/` when the application is there, and as `instrumentation.js` in a project with no `tsconfig.json` |
@@ -1276,6 +1276,16 @@ close it, apart from the code that called `inject()`: what the test does after i
 An application that injects requests in production — a batch endpoint that answers each part with `inject()` — has
 each part counted as a request of its own route, with its own work, and the outer request keeps only what it ran
 itself.
+
+**Hapi** routes (21) are named by the path of the route Hapi matched, as it was registered, a plugin's prefix included
+and with Hapi's own braces: `/api/orders/{id?}` for every order, as Next.js keeps its brackets. Hapi routes a request
+in its request class, which it does not export, and the instrumentation wraps it as Hapi's own modules require it — at
+load, from Node 22, whether the application imported Hapi or required it. What Hapi's `notFound` answered is
+`(unmatched)`, and no part of the path travels. A request made with **`server.inject()`** — how Hapi's guide and Lab
+call an application — is observed as one the server received, as Fastify's `inject()` is: by its template, with what
+it ran, apart from the code that injected it. On Node 20, which does not announce what modules require, a Hapi loaded
+after the instrumentation started is named by the heuristic, and its injected requests are not seen. The routes of a
+Hapi application that no test called are not listed by `check`: Hapi does not hand them over.
 
 **Hono** routes (4) are named by the path of the first route the request matched that is not a middleware, as it was
 registered, the prefixes of `app.route()` and `basePath()` included: `/v1/users/:userId` for every user. A middleware is

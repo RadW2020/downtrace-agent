@@ -1643,6 +1643,70 @@ describe("a suite Jest runs, whose application queries MySQL through mysqljs", (
   });
 });
 
+/**
+ * Hapi, tested as its guide and Lab test it: `server.inject()`, which never reaches Node's server. Its routes are named
+ * by Hapi's templates, braces included, and its requests are opened by the instrumentation itself (`hapi.ts`): from an
+ * application that requires Hapi, and from one that imports it, whose own `import` Node does not announce.
+ */
+const HAPI_APP = (load: string) => `
+${load}
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const db = new Database(":memory:");
+db.exec('create table "users" ("id" integer primary key, "email" text)');
+db.prepare('insert into "users" ("email") values (?)').run("ana@example.com");
+const byId = db.prepare('select * from "users" where "id" = ?');
+const server = Hapi.server();
+server.route({
+  method: "GET",
+  path: "/users/{id}",
+  handler: (request) => {
+    for (let i = 0; i < lookups; i += 1) byId.get(Number(request.params.id));
+    return "user";
+  },
+});
+server.route({ method: "POST", path: "/users", handler: () => "made" });
+await server.initialize();
+for (let i = 0; i < 3; i += 1) {
+  const res = await server.inject("/users/" + (i + 1));
+  if (res.statusCode !== 200) throw new Error("status " + res.statusCode);
+}
+await server.stop();
+`;
+
+const HAPI_DIR = dirname(dirname(createRequire(import.meta.url).resolve("@hapi/hapi")));
+
+describe.each([
+  [
+    "imports Hapi",
+    'import { readFileSync } from "node:fs";\nimport Hapi from "@hapi/hapi";\nimport Database from "better-sqlite3";',
+  ],
+  [
+    "requires Hapi",
+    'import { readFileSync } from "node:fs";\nimport { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\nconst Hapi = require("@hapi/hapi");\nconst Database = require("better-sqlite3");',
+  ],
+])("a suite that injects into a Hapi application that %s", (_name, load) => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await serverProject(
+      { "app.mjs": HAPI_APP(load) },
+      "node app.mjs",
+      { "@hapi/hapi": HAPI_DIR, "better-sqlite3": BETTER_SQLITE3_DIR },
+      {},
+    );
+  });
+
+  it("sees the lookups multiplied, under Hapi's template, and exits 1", () => {
+    const users = route(checked.report, "GET /users/{id}");
+    expect(users.verdict, JSON.stringify(checked.report.routes.map((r) => [r.id, r.verdict]))).toBe("worse");
+    expect(users.requests).toEqual({ base: 3, change: 3 });
+    expect(users.operations.find((operation) => operation.kind === "query")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 4 },
+    });
+    expect(checked.code).toBe(1);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("a suite whose queries go through postgres.js, imported as ESM", () => {
   // The driver of Drizzle's `postgres-js` and of most Supabase backends. Its ESM copy never enters the module
   // cache, and its first request is a test's: both runs would lose it alike (ADR 0235).
