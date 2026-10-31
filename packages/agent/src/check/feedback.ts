@@ -42,7 +42,6 @@ export const DATA_PACKAGES = [
   "sequelize",
   "typeorm",
   "@mikro-orm/core",
-  "@neondatabase/serverless",
   "@planetscale/database",
   "@supabase/supabase-js",
   "@upstash/redis",

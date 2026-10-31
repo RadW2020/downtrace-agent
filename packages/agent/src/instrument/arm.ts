@@ -1,6 +1,7 @@
 import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
 import path, { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { basesOf, type From } from "../entry.ts";
 import type { Logger } from "../log.ts";
 
@@ -51,6 +52,15 @@ export interface ArmDeps<Driver> {
    * not its entry. It is that module `patch` is given, and the entry is not loaded for it.
    */
   trigger?: string | undefined;
+  /**
+   * The ES module copy beside a copy `require` resolves, by its file, for a package that ships both: an application
+   * that imports it loads the one the module cache never holds. Imported by its file from the first request, on the
+   * next turn of the loop, and from the start under `check` (`early`), as postgres.js's is (ADR 0235); `patch` is given
+   * its namespace. Unsaid, or a file that is not there, for a driver that ships one module.
+   */
+  esm?: ((resolved: string) => string) | undefined;
+  /** Under `check`: the ES module copy is imported from the start, and not from the first request (ADR 0235). */
+  early?: boolean | undefined;
   log: Logger;
   /**
    * Where a failure of the attach goes: the agent's count of internal errors (invariant 2, ADR 0161). Never
@@ -114,7 +124,41 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
   }
   if (copies.length === 0) return { state: "unavailable", attach: () => true };
 
-  const attach = (): boolean => {
+  // The ES module copies, one beside each copy found, before the attach takes the copies off their list.
+  const esm: EsmCopy[] = [];
+  for (const copy of copies) {
+    const file = deps.esm?.(copy.resolved);
+    if (file === undefined || esm.some((other) => other.file === file)) continue;
+    try {
+      copy.require.resolve(file); // there, or a package that ships one module
+    } catch {
+      continue;
+    }
+    esm.push({ file, version: copy.version, require: copy.require, resolved: copy.resolved, done: undefined });
+  }
+  const importEsm = (copy: EsmCopy): void => {
+    copy.done = false;
+    setImmediate(() => {
+      import(pathToFileURL(copy.file).href).then(
+        (module: unknown) => {
+          copy.done = true;
+          try {
+            deps.patch(module as Driver, copy.version, copy.require, copy.resolved);
+          } catch (err) {
+            deps.internalError(err);
+          }
+        },
+        (err: unknown) => {
+          copy.done = true;
+          deps.internalError(err);
+        },
+      );
+    });
+  };
+  if (deps.early === true) for (const copy of esm) importEsm(copy);
+  const esmSettled = (): boolean => esm.every((copy) => copy.done === true);
+
+  const attachCommonJs = (): boolean => {
     for (let i = 0; i < copies.length; ) {
       const copy = copies[i] as Copy;
       const loaded = deps.trigger === undefined ? copy.resolved : join(dirname(copy.resolved), deps.trigger);
@@ -146,8 +190,15 @@ export function armDriver<Driver>(deps: ArmDeps<Driver>): Armed {
     }
     return copies.length === 0;
   };
-  // The copies are one list, so a copy patched at a load is not patched again at a request, nor the reverse.
-  return { state: "on", attach, atLoad: attach };
+  const attach = (): boolean => {
+    for (const copy of esm) if (copy.done === undefined) importEsm(copy);
+    // An application that imports the ES module copy never loads the CommonJS one, and pays this property read for as
+    // long as it answers requests, as one that never loads the driver does (ADR 0209).
+    return attachCommonJs() && esmSettled();
+  };
+  // The copies are one list, so a copy patched at a load is not patched again at a request, nor the reverse. At a load
+  // only the CommonJS copies: the import of an ES module one is a request's to start.
+  return { state: "on", attach, atLoad: () => attachCommonJs() && esmSettled() };
 }
 
 /**
@@ -276,6 +327,15 @@ export function whenRequired(deps: {
   };
 }
 
+/** An ES module copy of the driver: its file, and its import, not asked for yet, in flight, or settled. */
+interface EsmCopy {
+  file: string;
+  version: string;
+  require: NodeRequire;
+  resolved: string;
+  done: boolean | undefined;
+}
+
 /** One copy of the driver: where it is, what version it says it is, and the `require` that finds it. */
 interface Copy {
   resolved: string;
@@ -293,12 +353,31 @@ function copyOf(from: string, driver: string, log: Logger): Copy | undefined {
     return undefined;
   }
   // The version of the log, read at start-up where the old start-up require read it, and not in a request.
-  let version = "unknown";
+  let version: string | undefined;
   try {
     const pkg = require(`${driver}/package.json`) as { version?: unknown };
     if (typeof pkg.version === "string") version = pkg.version;
   } catch {
-    log.debug(`${driver} resolved but its version could not be read; it stays unknown`);
+    // A package whose `exports` leave its `package.json` out — Neon's — is read by its path.
+    version = versionBeside(resolved, driver, require);
   }
-  return { resolved, version, require };
+  if (version === undefined) log.debug(`${driver} resolved but its version could not be read; it stays unknown`);
+  return { resolved, version: version ?? "unknown", require };
+}
+
+/** The version the `package.json` of `driver` says, looked for in the directories above its resolved entry. */
+function versionBeside(resolved: string, driver: string, require: NodeRequire): string | undefined {
+  let dir = dirname(resolved);
+  for (let depth = 0; depth < 4; depth += 1) {
+    try {
+      const pkg = require(join(dir, "package.json")) as { name?: unknown; version?: unknown };
+      if (pkg.name === driver) return typeof pkg.version === "string" ? pkg.version : undefined;
+    } catch {
+      // No package.json here, or not one that can be read: the next directory up may have it.
+    }
+    const up = dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+  return undefined;
 }

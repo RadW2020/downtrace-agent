@@ -266,8 +266,8 @@ describe("what the project runs", () => {
   /**
    * A datastore or a broker reached through a protocol of its own — Cassandra's, Neo4j's Bolt, Memcached's, MQTT,
    * NATS, AMQP 1.0 —, through a native binding (Couchbase, librdkafka), through gRPC, which runs on `node:http2` and
-   * not on the channels the HTTP observer reads, or through a WebSocket (`@vercel/postgres`, on Neon's `Pool`), leaves
-   * nothing in the request: it is named, so that a route with nothing observed in it is explained.
+   * not on the channels the HTTP observer reads, leaves nothing in the request: it is named, so that a route with nothing
+   * observed in it is explained.
    */
   it.each(UNOBSERVED_PACKAGES)("says %s is not observed, and does not call it observed", async (name) => {
     const found = await detect(await project({}), pkg({ dependencies: { express: "^5", [name]: "*" } }));
@@ -287,11 +287,9 @@ describe("what the project runs", () => {
   /**
    * A client over HTTP is seen as the calls it makes, by host (`instrument/http.ts`), and a queue on ioredis as the
    * commands ioredis publishes: a route whose work goes through them is evaluated, and none of them is named as not
-   * observed. Neon's `neon()` queries over `fetch`; its `Pool` and `Client`, over a WebSocket, are not seen, and
-   * Prisma's adapter for it, which takes the `Pool`, is named.
+   * observed.
    */
   it.each([
-    "@neondatabase/serverless",
     "@planetscale/database",
     "@elastic/elasticsearch",
     "@aws-sdk/client-dynamodb",

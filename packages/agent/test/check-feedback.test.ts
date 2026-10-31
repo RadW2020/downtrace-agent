@@ -152,7 +152,7 @@ describe("what the issue says", () => {
     const names = ["@prisma/client", "firebase-admin", "@vercel/postgres", "@neondatabase/serverless", "kafkajs"];
     const once = feedbackFor(report, context({ dependencies: new Set(names) }));
     expect(issueOf(once?.url ?? "").body).toContain(
-      "| Data packages | @prisma/client, firebase-admin, @vercel/postgres, kafkajs, @neondatabase/serverless |",
+      "| Data packages | @neondatabase/serverless, @vercel/postgres, @prisma/client, firebase-admin, kafkajs |",
     );
     expect(new Set(DATA_PACKAGES).size).toBe(DATA_PACKAGES.length);
   });

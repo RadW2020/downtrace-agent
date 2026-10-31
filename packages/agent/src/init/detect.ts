@@ -31,8 +31,9 @@ export const FRAMEWORK_PACKAGES = [
 
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
- * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2`, `mysql` and `mariadb` (and Prisma's adapter for it), SQL Server through
+ * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it), through
+ * postgres.js (`postgres`) and through Neon's driver over its WebSocket (and `@vercel/postgres` and Prisma's adapter for
+ * Neon, which query through it; its `neon()` over `fetch` is a call), MySQL through `mysql2`, `mysql` and `mariadb` (and Prisma's adapter for it), SQL Server through
  * `tedious` (and `mssql` and Prisma's adapter, which query through it), SQLite through `better-sqlite3` (and Prisma's
  * adapter for it) and `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and
  * Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends every command through it), Prisma from 3.15
@@ -47,6 +48,9 @@ export const OBSERVED_PACKAGES = [
   "slonik",
   "postgres",
   "@mikro-orm/postgresql",
+  "@neondatabase/serverless",
+  "@vercel/postgres",
+  "@prisma/adapter-neon",
   "mysql2",
   "mysql",
   "@mikro-orm/mysql",
@@ -84,9 +88,6 @@ export const OBSERVED_PACKAGES = [
  * - gRPC, which runs on `node:http2` and not on the channels the HTTP observer reads (undici's and `node:http`'s):
  *   Google Cloud's Firestore, Datastore, Spanner, Bigtable and Pub/Sub, and `firebase-admin`, whose Firestore is that
  *   one and whose Realtime Database is a WebSocket — what it asks of Firebase over HTTPS, its Auth, is seen as calls;
- * - a WebSocket: `@vercel/postgres`, which queries through Neon's `Pool` with `ws` in Node. Neon's own package is not
- *   here: its `neon()` queries over `fetch`, seen as calls, and its `Pool` is named as `@prisma/adapter-neon` when
- *   Prisma takes it.
  *
  * A client over HTTP — PlanetScale's, Elasticsearch's, DynamoDB's, ClickHouse's, Upstash's, Supabase's — is not here
  * either, nor a queue on ioredis (BullMQ): those are observed, as calls and as Redis commands.
@@ -101,7 +102,6 @@ export const UNOBSERVED_PACKAGES = [
   "@google-cloud/datastore",
   "@google-cloud/spanner",
   "@google-cloud/bigtable",
-  "@vercel/postgres",
   "memjs",
   "memcached",
   "kafkajs",
@@ -118,7 +118,7 @@ export const UNOBSERVED_PACKAGES = [
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the
  * instrumentation does not observe: a client given one queries through that driver, and is left to its observer
- * (ADR 0241), so with `@prisma/adapter-neon` nothing is seen.
+ * (ADR 0241), so with `@prisma/adapter-planetscale` nothing is seen as a query.
  */
 export function unobservedOf(
   dependencies: ReadonlySet<string>,
@@ -137,6 +137,7 @@ export function unobservedOf(
 /** Prisma's driver adapters whose driver the instrumentation observes: with one, Prisma 7 queries through it. */
 const PRISMA_ADAPTERS = [
   "@prisma/adapter-pg",
+  "@prisma/adapter-neon",
   "@prisma/adapter-better-sqlite3",
   "@prisma/adapter-mariadb",
   "@prisma/adapter-mssql",
@@ -166,6 +167,8 @@ const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: num
   "@mikro-orm/mongodb": [6, 0],
   redis: [5, 12],
   mariadb: [3, 0],
+  // The shape `pg`'s patch reads — `pg`'s `Client` and `Pool`, exported — measured from 0.9 to 1.2.
+  "@neondatabase/serverless": [0, 9],
 };
 
 /**

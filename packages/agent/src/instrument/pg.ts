@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { PgDepth } from "../config.ts";
 import {
@@ -144,12 +145,44 @@ export function armPg(deps: Omit<InstrumentPgDeps, "moduleImpl">): Armed {
   });
 }
 
+/** Neon's driver, by the name an application imports it with. */
+const NEON = "@neondatabase/serverless";
+
+/**
+ * Neon's driver, `@neondatabase/serverless`: `pg` bundled into one file of its own, with no dependency, whose `Client`
+ * and `Pool` are `pg`'s, subclassed to speak Postgres's protocol over a WebSocket. `pg`'s patch fits them as it is:
+ * `query` and `connect` are inherited, and the wrapper goes on the subclass. Armed as `pg` is (ADR 0209), beside
+ * `@vercel/postgres`, which nests a copy of its own, and Prisma's adapter for Neon; and its ES module copy, which an
+ * application that imports it loads, is imported by its file (ADR 0235). Its `neon()` queries over `fetch`, and is a
+ * call to a host as any other.
+ */
+export function armNeon(deps: Omit<InstrumentPgDeps, "moduleImpl"> & { early?: boolean | undefined }): Armed {
+  return armDriver<PgModule>({
+    driver: NEON,
+    from: deps.from ?? applicationEntry(),
+    beside: ["@vercel/postgres", "@prisma/adapter-neon"],
+    esm: (resolved) => join(dirname(resolved), "index.mjs"),
+    early: deps.early,
+    log: deps.log,
+    internalError: deps.internalError,
+    patch: (neon, version) => {
+      const proto = neon.Client?.prototype;
+      if (!proto || typeof proto.query !== "function") {
+        deps.log.debug(`${NEON} found but Client.prototype.query is not a function; not instrumenting`);
+        return;
+      }
+      if (Object.hasOwn(proto, MARK)) return;
+      patchClientAndPool(neon, version, deps, NEON);
+    },
+  });
+}
+
 /**
  * The patch both entry points share: the wrapper on `Client.prototype.query`, the wait on
  * `Pool.prototype.connect`, and the marks that keep it to one. The shape of the module was checked by the
  * caller, which is the one that knows how to say it is wrong.
  */
-function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDeps): void {
+function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDeps, driver = "pg"): void {
   const proto = pg.Client?.prototype;
   if (!proto || typeof proto.query !== "function") {
     deps.log.debug("pg found but Client.prototype.query is not a function; not instrumenting");
@@ -168,7 +201,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
       return original.apply(this, args);
     };
     proto[MARK] = true;
-    deps.log.debug(`instrumented pg ${version} (wrapper only: it records nothing)`);
+    deps.log.debug(`instrumented ${driver} ${version} (wrapper only: it records nothing)`);
     return;
   }
   const original = proto.query as (...args: unknown[]) => unknown;
@@ -285,7 +318,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
   proto.query = wrapped;
   proto[MARK] = true;
   wrapPoolConnect(pg, deps);
-  deps.log.debug(`instrumented pg ${version}`);
+  deps.log.debug(`instrumented ${driver} ${version}`);
 }
 
 /**

@@ -235,7 +235,16 @@ export function adviceForUnbuiltBase(base: UnbuiltBase): string {
  * observer. Every switch of `INSTRUMENTS` but `http` and `runtime`, which need no driver.
  */
 export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
-  pg: ["pg", "@prisma/adapter-pg", "slonik", "postgres", "@mikro-orm/postgresql"],
+  pg: [
+    "pg",
+    "@prisma/adapter-pg",
+    "slonik",
+    "postgres",
+    "@mikro-orm/postgresql",
+    "@neondatabase/serverless",
+    "@vercel/postgres",
+    "@prisma/adapter-neon",
+  ],
   mysql: ["mysql2", "mysql", "@mikro-orm/mysql", "mariadb", "@prisma/adapter-mariadb"],
   mssql: ["tedious", "mssql", "@prisma/adapter-mssql"],
   sqlite: [

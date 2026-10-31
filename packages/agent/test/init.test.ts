@@ -140,12 +140,14 @@ describe("a project it can configure", () => {
     [{ express: "^5", mssql: "^11" }, []],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mssql": "^7" }, []],
     [{ express: "^5", oracledb: "^6" }, ["oracledb"]],
-    // A protocol of its own, gRPC on node:http2, or Neon's Pool over a WebSocket: nothing of it is seen.
+    // A protocol of its own, or gRPC on node:http2: nothing of it is seen.
     [{ express: "^5", "cassandra-driver": "^4" }, ["cassandra-driver"]],
     [{ express: "^5", "firebase-admin": "^13" }, ["firebase-admin"]],
-    [{ express: "^5", "@vercel/postgres": "^0.10" }, ["@vercel/postgres"]],
+    // Neon's driver is pg bundled, and seen over its WebSocket; `@vercel/postgres` and Prisma's adapter query through it.
+    [{ express: "^5", "@vercel/postgres": "^0.10" }, []],
+    [{ express: "^5", "@neondatabase/serverless": "0.8.1" }, ["@neondatabase/serverless"]],
     [{ fastify: "^5", mqtt: "^5", nats: "^2" }, ["mqtt", "nats"]],
-    // Over HTTP it is seen as calls, and a queue on ioredis as its commands.
+    // Over HTTP it is seen as calls, and a queue on ioredis as its commands; Neon's `neon()` too.
     [{ hono: "^4", "drizzle-orm": "^0.44", "@neondatabase/serverless": "^1" }, []],
     [{ fastify: "^5", "@elastic/elasticsearch": "^9", "@clickhouse/client": "^1" }, []],
     [{ express: "^5", bullmq: "^5", ioredis: "^5" }, []],
@@ -162,13 +164,14 @@ describe("a project it can configure", () => {
     [{ express: "^5", redis: "^6" }, []],
     [{ express: "^5", redis: "latest" }, []],
     // Prisma before 7 queries through an engine of its own, and its client is observed from 3.15 (ADR 0241); with a
-    // driver adapter it queries through the driver, observed for Postgres, better-sqlite3 and MySQL or MariaDB
-    // (`mariadb`), and not for Neon's.
+    // driver adapter it queries through the driver, observed for Postgres (`pg`, and Neon's), better-sqlite3, MySQL or
+    // MariaDB (`mariadb`) and SQL Server, and not for PlanetScale's.
     [{ express: "^5", "@prisma/client": "^6" }, []],
     [{ express: "^4", "@prisma/client": "^4.0.0" }, []],
     [{ express: "^4", "@prisma/client": "~3.10.0" }, ["@prisma/client"]],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mariadb": "^7" }, []],
-    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-neon": "^7" }, ["@prisma/adapter-neon"]],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-neon": "^7" }, []],
+    [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-planetscale": "^7" }, ["@prisma/adapter-planetscale"]],
     // `mariadb` runs every query through one method from 3.0.1, and 2 through others.
     [{ express: "^5", mariadb: "^3.5.4" }, []],
     [{ express: "^4", mariadb: "^2.5.6" }, ["mariadb"]],

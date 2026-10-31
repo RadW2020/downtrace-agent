@@ -52,7 +52,7 @@ import {
 import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armTedious, patchMssql, patchTedious, watchMssql } from "./instrument/mssql.ts";
 import { armMysql, armMysqljs, patchMysql, patchMysqlPool } from "./instrument/mysql.ts";
-import { armPg, instrumentPg } from "./instrument/pg.ts";
+import { armNeon, armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
 import { armPrisma, patchPrisma } from "./instrument/prisma.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
@@ -641,14 +641,19 @@ export class Agent {
         // request at which the application has loaded the driver. A tracker loaded beside this observer
         // instruments pg by hooking module loading, and a driver this observer loaded at start-up is one its
         // hook never sees — or sees a second time, on top of this observer's own wrapper.
-        const armed = armPg({
+        const pgDeps = {
           log: this.log,
           internalError,
           fingerprints: this.fingerprints,
           errors: this.errors,
           depth: this.config.pgDepth,
           from,
-        });
+        };
+        // Neon's driver is `pg` bundled, and the same patch: its ES module copy is imported as postgres.js's is.
+        const armed = armedTogether([
+          armPg(pgDeps),
+          armNeon({ ...pgDeps, early: this.config.checkRoutes !== undefined }),
+        ]);
         // postgres.js is Postgres too, and the same switch: the observer is «on» when either driver is there.
         const postgresJs = armPostgresJs({
           log: this.log,
@@ -710,7 +715,11 @@ export class Agent {
         depth: this.config.pgDepth,
       };
       sandbox.push(
-        { matches: (name) => name === "pg", patch: (pg) => instrumentPg({ ...pgDeps, moduleImpl: pg }) },
+        {
+          // Neon's driver is `pg` bundled into a file of its own, whose `Client` and `Pool` the same patch fits.
+          matches: (name) => name === "pg" || name === "@neondatabase/serverless",
+          patch: (pg) => instrumentPg({ ...pgDeps, moduleImpl: pg }),
+        },
         {
           matches: (name, from) => name === "./query.js" && requiredFrom(from, "postgres", "cjs", "src", "index.js"),
           patch: (query) => patchPostgresJs(query, "unknown", pgDeps),
