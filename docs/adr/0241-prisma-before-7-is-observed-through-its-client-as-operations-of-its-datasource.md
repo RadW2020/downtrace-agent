@@ -1,6 +1,6 @@
 # 0241 — Prisma before 7 is observed through its client, as operations of its datasource
 
-Estado: aceptado · Fecha: 2026-10-30 · Amplía el ADR 0209 y el ADR 0240, y el protocolo a 0.12.0 · Alcance: público
+Estado: aceptado; SQL Server, que no observaba porque el protocolo no tenía su dependencia, es `mssql` desde el protocolo 0.13.0 (ADR 0245) y se observa como los demás · Fecha: 2026-10-30 · Amplía el ADR 0209 y el ADR 0240, y el protocolo a 0.12.0 · Alcance: público
 
 ## Context
 

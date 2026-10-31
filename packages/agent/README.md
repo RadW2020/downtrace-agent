@@ -619,8 +619,9 @@ What the instrumentation does with the driver, and what it gives up:
   as your application loads it, from Node 22; on Node 20, an `mssql` loaded after the instrumentation started keeps
   counting it.
 - **The wait for a connection is not measured:** `mssql`'s pool has no request to wrap.
-- **Prisma 4 to 6 on SQL Server** goes through its own engine, and is not observed; Prisma 7, which needs
-  `@prisma/adapter-mssql`, is.
+- **Prisma 4 to 6 on SQL Server** goes through its own engine, and is observed through its client, by action and model
+  ([Prisma](#prisma), switch `prisma`); Prisma 7, which needs `@prisma/adapter-mssql`, through `mssql`, statement by
+  statement.
 
 ### SQLite
 
@@ -721,8 +722,9 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: proc
 **Through the client**, on Prisma's own engine, nothing is asked of you either. Every operation of a generated client goes
 through one method of its class, and the instrumentation wraps it (switch `prisma`):
 
-- **Each operation is one query, of the database the datasource is** — `postgresql` and `cockroachdb` are Postgres, and
-  `mysql`, `sqlite` and `mongodb` their own — **named by its action and its model**: `findMany Post`, `create User`,
+- **Each operation is one query, of the database the datasource is** — `postgresql` and `cockroachdb` are Postgres,
+  `sqlserver` is SQL Server (`mssql`), and `mysql`, `sqlite` and `mongodb` their own — **named by its action and its
+  model**: `findMany Post`, `create User`,
   `count Order`. Never its arguments. A raw query is named by its SQL, normalised as that database reads it:
   `` prisma.$queryRaw`select "id" from "User" where "email" = ${email}` `` is `select "id" from "User" where "email" = ?`.
 - **It counts what your code asked for.** An `include` is one operation, however many statements the engine runs for
@@ -741,7 +743,6 @@ through one method of its class, and the instrumentation wraps it (switch `prism
   imports Prisma's runtime as an ES module nothing can reach into (on Prisma 7 it goes through a driver adapter, and is
   seen through the driver); one a bundler inlined; and, outside `check`, one a runner loads itself.
 - **Not counted twice.** A client given a driver adapter is left alone: its SQL is the driver's to count.
-- **SQL Server** is not observed: the protocol has no dependency for it.
 - `observers` in the batch says `prisma: on` when `@prisma/client` resolves from your application, and nothing when it
   does not.
 

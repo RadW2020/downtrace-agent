@@ -816,7 +816,12 @@ export class Agent {
       const prismaDeps = {
         log: this.log,
         internalError,
-        fingerprints: { postgres: this.fingerprints, mysql: this.mysqlFingerprints, sqlite: this.sqliteFingerprints },
+        fingerprints: {
+          postgres: this.fingerprints,
+          mysql: this.mysqlFingerprints,
+          sqlite: this.sqliteFingerprints,
+          mssql: this.mssqlFingerprints,
+        },
         errors: this.errors,
       };
       // Under `check` its runtime is wrapped as it loads, for a client Vitest runs itself (ADR 0243).

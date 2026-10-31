@@ -36,7 +36,7 @@ async function inRequest(fn: () => Promise<void>): Promise<RequestContext> {
 
 const operationsOf = (ctx: RequestContext) =>
   [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "query").map((o) => [o.text, o.count, o.errors]);
-const workOf = (ctx: RequestContext, kind: "postgres" | "mysql" | "sqlite" | "mongodb") =>
+const workOf = (ctx: RequestContext, kind: "postgres" | "mysql" | "sqlite" | "mssql" | "mongodb") =>
   ctx.work?.get(dependencyKey(kind, ""));
 
 function deps() {
@@ -47,6 +47,7 @@ function deps() {
       postgres: new FingerprintCache(100, "postgres"),
       mysql: new FingerprintCache(100, "mysql"),
       sqlite: new FingerprintCache(100, "sqlite"),
+      mssql: new FingerprintCache(100, "mssql"),
     },
     errors: new ErrorFingerprintCache(),
   };
@@ -211,6 +212,7 @@ describe("the dependency an operation is, by the provider of the datasource", ()
     ["postgresql", "postgres", ['select * from "Order" where "id" = ', ' and "total" > ', ""], "$1", "$2"],
     ["mysql", "mysql", ["select * from `Order` where `id` = ", " and `total` > ", ""], "?", "?"],
     ["sqlite", "sqlite", ['select * from "Order" where "id" = ', ' and "total" > ', ""], "?", "?"],
+    ["sqlserver", "mssql", ["select * from [Order] where [id] = ", " and [total] > ", ""], "@P1", "@P2"],
   ] as const)(
     "reads %s's raw SQL as %s reads it, with its own placeholders",
     async (provider, dialect, strings, ...marks) => {
@@ -236,8 +238,8 @@ describe("the dependency an operation is, by the provider of the datasource", ()
     expect(ctx.work).toBeUndefined();
   });
 
-  it("counts nothing for a provider with no dependency of the protocol's: SQL Server", async () => {
-    const Client = fakeClient("sqlserver");
+  it("counts nothing for a provider it does not know", async () => {
+    const Client = fakeClient("oracle");
     patchPrisma(Client, "test", deps());
     const client = new Client();
     const ctx = await inRequest(async () => {

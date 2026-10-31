@@ -43,13 +43,14 @@ const MARK = Symbol.for("downtrace.prisma.instrumented");
 
 /**
  * The dependency each provider a datasource names is. CockroachDB speaks Postgres's protocol and Postgres's SQL, as
- * Prisma reads it.
+ * Prisma reads it. SQL Server is `mssql` since protocol 0.13.0 (ADR 0245).
  */
 export const PRISMA_PROVIDERS = {
   postgresql: "postgres",
   cockroachdb: "postgres",
   mysql: "mysql",
   sqlite: "sqlite",
+  sqlserver: "mssql",
   mongodb: "mongodb",
 } as const satisfies Record<string, DependencyKind>;
 
@@ -123,6 +124,12 @@ function operationFingerprint(dependency: PrismaDependency, action: string, mode
   return fingerprint;
 }
 
+/** The placeholders of a dialect that does not write `?`, numbered from 1, as Prisma's runtime numbers them. */
+const PLACEHOLDERS: { [Dependency in SqlDependency]?: (i: number) => string } = {
+  postgres: (i) => `$${i}`,
+  mssql: (i) => `@P${i}`,
+};
+
 /**
  * The SQL of a raw query, as the engine is handed it: a tagged template's pieces joined by the database's placeholders,
  * or the text of an `Unsafe` one. Its values are never read.
@@ -133,7 +140,7 @@ function rawSql(dependency: SqlDependency, args: unknown): string | undefined {
   if (!Array.isArray(strings) || !strings.every((piece) => typeof piece === "string")) return undefined;
   return strings.reduce((sql: string, piece: string, i) => {
     if (i === 0) return piece;
-    return `${sql}${dependency === "postgres" ? `$${i}` : "?"}${piece}`;
+    return `${sql}${PLACEHOLDERS[dependency]?.(i) ?? "?"}${piece}`;
   }, "");
 }
 
