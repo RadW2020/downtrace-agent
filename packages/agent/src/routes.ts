@@ -1,7 +1,7 @@
 import { isRegExp } from "node:util/types";
 import type { Endpoint } from "@downtrace/protocol";
 import { fastifyInstanceOf, fastifyMatchedRoute, fastifyRegistered } from "./fastify.ts";
-import { hapiMatchedRoute, hapiUnmatched } from "./hapi.ts";
+import { hapiMatchedRoute, hapiRegistered, hapiUnmatched } from "./hapi.ts";
 import { honoMatchedRoute, honoMiddleware, honoRegistered, honoRouterOf } from "./hono.ts";
 import { koaMatchedRoute, koaRouterSawRequest } from "./koa.ts";
 import { matchedMountOf, mountPathOf } from "./mounts.ts";
@@ -106,6 +106,8 @@ export function declaredRoutesOf(app: unknown): string[] {
   if (fastify !== undefined) return fastifyDeclared(fastify);
   const hono = honoRegistered(app);
   if (hono !== undefined) return honoDeclared(hono);
+  const hapi = hapiRegistered(app);
+  if (hapi !== undefined) return hapiDeclared(hapi);
   return (
     safeRead(() => {
       const anchor = anchorRouter(app);
@@ -153,6 +155,19 @@ function honoDeclared(routes: ReadonlyArray<{ method: string; path: string }>): 
     const upper = route.method.toUpperCase();
     if (upper !== "HEAD" && METHODS.has(upper))
       out.add(`${upper} ${joinTemplate([], route.path).slice(0, MAX_ROUTE_LENGTH)}`);
+  }
+  return [...out];
+}
+
+/**
+ * A Hapi router's routes, named the way `hapiTemplate` names a request: braces, and a plugin's prefix, as Hapi keeps
+ * the path. A route for every method (`*`) has no single name, as `all` in Express.
+ */
+function hapiDeclared(routes: ReadonlyArray<{ method: string; path: string }>): string[] {
+  const out = new Set<string>();
+  for (const { method, path } of routes) {
+    const upper = method.toUpperCase();
+    if (METHODS.has(upper)) out.add(`${upper} ${joinTemplate([], path).slice(0, MAX_ROUTE_LENGTH)}`);
   }
   return [...out];
 }

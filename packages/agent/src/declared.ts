@@ -1,13 +1,15 @@
 import { appendFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { fastifyInstanceOf } from "./fastify.ts";
+import { hapiRouterOf } from "./hapi.ts";
 import { honoRouterOf } from "./hono.ts";
 import type { Logger } from "./log.ts";
 import { matchedMountOf } from "./mounts.ts";
 import { declaredRoutesOf } from "./routes.ts";
 
 /**
- * The routes the Express, Fastify and Hono applications of this process declare, written for `downtrace check` (ESC-18).
+ * The routes the Express, Fastify, Hono and Hapi applications of this process declare, written for `downtrace check`
+ * (ESC-18).
  *
  * A route no test calls leaves nothing in the batches, so the comparison could only name it from a list the
  * user wrote by hand, and a coding agent that ran `init` and `check` had none: the routes it never reached were
@@ -85,6 +87,7 @@ export function createDeclaredRoutes(spec: {
         remember(matchedMountOf(request)?.app);
         remember(fastifyInstanceOf(request));
         remember(honoRouterOf(request));
+        remember(hapiRouterOf(request));
       } catch {
         // A request whose `app` cannot be read is one whose routes are not walked (invariant 2).
       }

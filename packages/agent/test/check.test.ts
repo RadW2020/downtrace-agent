@@ -1705,6 +1705,13 @@ describe.each([
     });
     expect(checked.code).toBe(1);
   });
+
+  it("names the route Hapi declares and nobody called, in Hapi's form", () => {
+    expect(route(checked.report, "POST /users")).toMatchObject({
+      verdict: "not-evaluated",
+      reasons: [{ code: "not-called" }],
+    });
+  });
 });
 
 /**

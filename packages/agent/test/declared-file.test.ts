@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import v8 from "node:v8";
 import { runInNewContext } from "node:vm";
+import Hapi from "@hapi/hapi";
 import express from "express";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeclaredRoutes } from "../src/declared.ts";
 import { attachFastify } from "../src/fastify.ts";
+import { attachHapi } from "../src/hapi.ts";
 import type { Logger } from "../src/log.ts";
 import { armMountRecording } from "../src/mounts.ts";
 
@@ -101,6 +103,23 @@ describe("createDeclaredRoutes", () => {
     await declared?.write();
     await app.close();
     expect(await lines(file)).toEqual([["GET /users/:id"]]);
+  });
+
+  it("writes the routes of a Hapi server that answered a request, injected or not", async () => {
+    const stop = attachHapi({ from: import.meta.filename, internalError: () => {} });
+    const app = Hapi.server();
+    app.route({ method: "GET", path: "/users/{id}", handler: () => "user" });
+    app.route({ method: "POST", path: "/users", handler: () => "made" });
+    await app.initialize();
+    const res = await app.inject("/users/7");
+    stop();
+    await app.stop();
+    const file = join(await room(), "run.routes.jsonl");
+    const declared = createDeclaredRoutes({ file, log: quiet, observed: everything });
+    // What the request Shot made for Hapi carries, as one Node gave it would: Hapi's own request kept it.
+    declared?.answered((res.request as unknown as { raw: { req: object } }).raw.req);
+    await declared?.write();
+    expect(await lines(file)).toEqual([["GET /users/{id}", "POST /users"]]);
   });
 
   /**

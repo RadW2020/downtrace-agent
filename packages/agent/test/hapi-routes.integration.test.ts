@@ -6,8 +6,9 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { currentContext } from "../src/context.ts";
-import { attachHapi } from "../src/hapi.ts";
+import { attachHapi, hapiRouterOf, patchHapiRequest } from "../src/hapi.ts";
 import type { Logger } from "../src/log.ts";
+import { declaredRoutesOf } from "../src/routes.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -212,6 +213,69 @@ describe("attachHapi, when the instrumentation's own doors fail or it stopped", 
     expect(res.statusCode).toBe(200);
     expect(res.result).toEqual({ ok: true });
     expect(failures).toEqual([broken]);
+  });
+
+  /**
+   * ESC-18: `check` names a route no test called only from the routes the application declares. A Hapi server keeps
+   * them in its router, plugins' included, and a request it answered — matched or not — says which server that was.
+   */
+  it("declares the routes of the server that answered for check: one per method, as a request gets it, and none for every method", async () => {
+    const stop = attachHapi({ from: import.meta.filename, internalError: () => {} });
+    cleanups.push(stop);
+    const app = Hapi.server();
+    app.route({ method: "GET", path: "/users/{id}", handler: () => "user" });
+    app.route({ method: ["PUT", "PATCH"], path: "/items/{id}", handler: () => "item" });
+    app.route({ method: "*", path: "/graphql", handler: () => "graphql" });
+    await app.register(
+      {
+        name: "orders",
+        register: (api) => {
+          api.route({ method: "POST", path: "/orders/{id?}", handler: () => "order" });
+        },
+      },
+      { routes: { prefix: "/api" } },
+    );
+    await app.initialize();
+    cleanups.push(() => app.stop());
+    const matched = await app.inject("/users/ana");
+    expect(matched.statusCode).toBe(200);
+    const nowhere = await app.inject("/nowhere");
+    expect(nowhere.statusCode).toBe(404);
+    // A route registered after the server answered is one it declares too: the router is read when the routes are.
+    app.route({ method: "DELETE", path: "/sessions/{id}", handler: () => "gone" });
+    const expected = [
+      "DELETE /sessions/{id}",
+      "GET /users/{id}",
+      "PATCH /items/{id}",
+      "POST /api/orders/{id?}",
+      "PUT /items/{id}",
+    ];
+    for (const res of [matched, nowhere]) {
+      const req = (res.request as unknown as { raw: { req: object } }).raw.req;
+      expect(declaredRoutesOf(hapiRouterOf(req)).sort()).toEqual(expected);
+    }
+  });
+
+  it("declares nothing for a server whose router cannot be read, and never throws (invariant 2)", () => {
+    class Request {
+      raw = { req: {} };
+      route = { path: "/x" };
+      _core = {
+        router: {
+          table: () => {
+            throw new Error("no");
+          },
+        },
+      };
+      _lookup(): void {}
+      _execute(): void {}
+    }
+    expect(patchHapiRequest(Request)).toBe(true);
+    const request = new Request();
+    request._lookup();
+    const router = hapiRouterOf(request.raw.req);
+    expect(router).toBe(request._core.router);
+    expect(declaredRoutesOf(router)).toEqual([]);
   });
 
   it("opens nothing once the instrumentation stopped, though the wrappers stay with the class", async () => {

@@ -30,6 +30,10 @@ const MARK = Symbol.for("downtrace.hapi.instrumented");
 const templates = new WeakMap<object, string>();
 /** The requests Hapi answered with its `notFound`: no route matched, and nothing of the path travels. */
 const unmatched = new WeakSet<object>();
+/** The router of the server that routed each request, matched or not, for its routes to be declared (ESC-18). */
+const routers = new WeakMap<object, object>();
+/** The routers this file has seen route a request: only those are read as Hapi's. */
+const known = new WeakSet<object>();
 
 interface Listener {
   internalError: (err: unknown) => void;
@@ -50,6 +54,38 @@ export function hapiMatchedRoute(req: object): string | undefined {
 /** Whether Hapi answered the request with no route of the application's: then it is `(unmatched)`. */
 export function hapiUnmatched(req: object): boolean {
   return unmatched.has(req);
+}
+
+/**
+ * The router of the Hapi server that routed the request, or undefined when Hapi did not. One per server: a plugin's
+ * routes, prefix included, are in its server's router.
+ */
+export function hapiRouterOf(req: object): object | undefined {
+  return routers.get(req);
+}
+
+/**
+ * The routes a Hapi router holds, `method` as Hapi keeps it (lower case, `*` for every method) and `path` the template
+ * a request to it is named by, read from the router when asked: a route registered after the server answered is
+ * there too. Undefined for what is not a router this file saw route a request, and empty for one that cannot be read
+ * (invariant 2).
+ */
+export function hapiRegistered(router: unknown): ReadonlyArray<{ method: string; path: string }> | undefined {
+  if (router === null || typeof router !== "object" || !known.has(router)) return undefined;
+  try {
+    const table = (router as { table?: unknown }).table;
+    if (typeof table !== "function") return [];
+    const routes: unknown = table.call(router);
+    if (!Array.isArray(routes)) return [];
+    const out: Array<{ method: string; path: string }> = [];
+    for (const route of routes) {
+      const { method, path } = (route ?? {}) as { method?: unknown; path?: unknown };
+      if (typeof method === "string" && typeof path === "string") out.push({ method, path });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 interface HapiRequest {
@@ -94,11 +130,19 @@ export function patchHapiRequest(Request: unknown): boolean {
   return true;
 }
 
-/** Keeps the template the request matched, or that it matched none, against the request Node or Shot gave Hapi. */
+/**
+ * Keeps the template the request matched, or that it matched none, against the request Node or Shot gave Hapi, and the
+ * router of the server that routed it.
+ */
 function remember(hapi: HapiRequest): void {
   const req = hapi.raw?.req;
   if (req === null || typeof req !== "object") return;
-  const notFound = hapi._core?.router?.specials?.notFound?.route;
+  const router = hapi._core?.router;
+  if (router !== null && typeof router === "object") {
+    routers.set(req, router);
+    known.add(router);
+  }
+  const notFound = router?.specials?.notFound?.route;
   if (notFound !== undefined && hapi._route === notFound) {
     unmatched.add(req);
     return;
