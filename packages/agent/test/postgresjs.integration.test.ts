@@ -124,17 +124,45 @@ async function application(load: string, options: { warm: boolean; env?: Record<
     const said = JSON.parse(stdout.trim()) as { marked: boolean; markedAtFirst: boolean; broken: number };
     const batches = batchesOf(stderr);
     expect(batches.length, `no batch left\n${stderr}`).toBeGreaterThan(0);
-    const endpoint = (route: string) =>
-      batches
+    // Over every interval and every profile: under `check` a process writes each time it has no request in flight,
+    // so its requests are spread over several.
+    const endpoint = (route: string) => {
+      const found = batches
         .flatMap((b) => b.intervals)
         .flatMap((i) => i.endpoints)
-        .find((e) => e.route === route);
-    const operations = (route: string) =>
-      batches
-        .find((b) => b.profile)
-        ?.profile?.endpoints.find((e) => e.route === route)
-        ?.operations.map((o) => [o.kind, o.text, o.count])
-        .sort();
+        .filter((e) => e.route === route);
+      if (found.length === 0) return undefined;
+      const dependencies = new Map<
+        string,
+        { kind: string; target: string; callsPerRequest: number[]; errors: number }
+      >();
+      for (const dependency of found.flatMap((e) => e.dependencies ?? [])) {
+        const key = `${dependency.kind} ${dependency.target}`;
+        const known = dependencies.get(key);
+        if (known === undefined) {
+          dependencies.set(key, { ...dependency, callsPerRequest: [...dependency.callsPerRequest] });
+          continue;
+        }
+        dependency.callsPerRequest.forEach((n, i) => {
+          known.callsPerRequest[i] = (known.callsPerRequest[i] ?? 0) + n;
+        });
+        known.errors += dependency.errors;
+      }
+      return { route, dependencies: [...dependencies.values()] };
+    };
+    const operations = (route: string) => {
+      const counted = new Map<string, [string, string | undefined, number]>();
+      for (const operation of batches
+        .flatMap((b) => b.profile?.endpoints ?? [])
+        .filter((e) => e.route === route)
+        .flatMap((e) => e.operations)) {
+        const key = `${operation.kind} ${operation.text}`;
+        const known = counted.get(key);
+        if (known === undefined) counted.set(key, [operation.kind, operation.text, operation.count]);
+        else known[2] += operation.count;
+      }
+      return counted.size === 0 ? undefined : [...counted.values()].sort();
+    };
     return { said, batches, endpoint, operations, stderr, wire: batches.map((b) => JSON.stringify(b)).join("\n") };
   } finally {
     await rm(dir, { recursive: true, force: true });

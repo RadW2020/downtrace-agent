@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
  *
  * The instrumentation writes what it holds when its process ends in an orderly way, once a window has closed, and,
  * when it only writes a file as it does in a run of `check`, when the process exits, so a runner that ends its
- * processes with `process.exit()` keeps the profile (DT-79, ADR 0230). What no process can write is what a runner
- * stops without letting it run: the threads of a pool that terminates them. The file does not say it lost
- * anything — a process that wrote nothing looks like a process that served nothing — so the only thing `check`
- * can do is name the likely cause from the command it ran and say what to use instead. It never lets the absence
+ * processes with `process.exit()` keeps the profile (DT-79, ADR 0230) — and, in a run of `check`, each time it has no
+ * request in flight, so a runner that terminates a thread or kills a server with SIGKILL keeps it too. What is lost
+ * is what was in flight when a process was ended. The file does not say it lost anything — a process that wrote
+ * nothing looks like a process that served nothing — so `check` says what it can tell, and never lets the absence
  * read as «unchanged».
  *
  * Nor can anything write in a process the instrumentation was never loaded into. `check` loads it by adding to the
@@ -23,37 +23,18 @@ import { fileURLToPath } from "node:url";
  * `adviceForUnlinkedBase`, at the end.
  */
 
-export interface LosingRunner {
-  /** The runner and the setting, as a person names them. */
-  runner: string;
-  /** What in the command line gives it away. */
-  matches: RegExp;
-  /** What to use instead. */
-  use: string;
-}
+/** What follows «the run left no profile» when processes wrote and no request was among what they wrote. */
+export const NO_REQUEST_REACHED =
+  "This happens when no test reaches a route of the application in a process that loads the instrumentation: the " +
+  "tests call none, or call the application in a way it does not see.";
 
-/** Every runner setting known to end a run without its profile. The README table is this list. */
-export const LOSING_RUNNERS: readonly LosingRunner[] = [
-  {
-    runner: "Vitest with the threads or vmThreads pool",
-    matches: /(^|\s)--pool(\s+|=)['"]?(threads|vmThreads)\b/,
-    use: "use --pool=forks, which is Vitest's default",
-  },
-];
-
-const GENERIC =
-  "This happens when no test reaches a route of the application in a process that loads the instrumentation, or " +
-  "when the runner stops the threads that run the tests without letting them write: Vitest with the threads or " +
-  "vmThreads pool. Run the tests with --pool=forks for Vitest.";
-
-/** The sentence that follows «the run left no profile»: this happens with X, use Y. */
-export function adviceForNoProfile(command: string): string {
-  const found = LOSING_RUNNERS.filter((runner) => runner.matches.test(command));
-  if (found.length === 0) return GENERIC;
-  const happens = found.map((runner) => runner.runner).join(" and ");
-  const use = found.map((runner) => runner.use).join(", and ");
-  return `This happens with ${happens}, which end the processes or threads that run the tests without letting the instrumentation write: ${use}.`;
-}
+/**
+ * What follows requests that no profile covers. A process writes what it holds each time it has no request in flight,
+ * so what is lost is what was in flight when it was ended.
+ */
+export const UNPROFILED =
+  "This happens when a process is ended while requests are in flight in it — killed, or its thread terminated — and " +
+  "what they did is lost with it.";
 
 /** A package manager running a script, after the variables a command may set for itself: `DATABASE_URL=… npm test`. */
 const RUNS_SCRIPT = /^(?:\S+=\S*\s+)*(?!bun\s+test(?:\s|$))(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:.-]+)/;
@@ -133,12 +114,8 @@ export function noProfile(run: NoProfileRun): { message: string; advice: string 
         `which is how check loads the instrumentation into every process. ${keep}`,
     };
   }
-  if (run.processes === 0) {
-    // The runner a command names is not ruled out by nothing having been written, and is named after it.
-    const named = LOSING_RUNNERS.some((runner) => runner.matches.test(run.command));
-    return { message, advice: named ? `${NOTHING_WROTE} ${adviceForNoProfile(run.command)}` : NOTHING_WROTE };
-  }
-  return { message, advice: adviceForNoProfile(run.command) };
+  if (run.processes === 0) return { message, advice: NOTHING_WROTE };
+  return { message, advice: NO_REQUEST_REACHED };
 }
 
 /**

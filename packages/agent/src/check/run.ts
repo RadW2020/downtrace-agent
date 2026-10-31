@@ -6,11 +6,11 @@ import { commandFor, LOCKFILES, type PackageManager, packageManagerOf, parsePack
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
 import { CONFIG_FILE } from "./config.ts";
 import {
-  adviceForNoProfile,
   adviceForUnbuiltBase,
   adviceForUnlinkedBase,
   missingModulesIn,
   noProfile,
+  UNPROFILED,
   unseenObservers,
 } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
@@ -499,7 +499,6 @@ async function cleanUp(made: Made, env: NodeJS.ProcessEnv): Promise<string[]> {
 
 /** What the reader should keep in mind about this comparison, beyond the verdicts. */
 function notesOf(
-  command: string,
   tallies: Map<Side, RunTally>,
   routes: readonly RouteResult[],
   dependencies: ReadonlySet<string> | undefined,
@@ -513,7 +512,7 @@ function notesOf(
       notes.push(
         `On the ${side}, ${lost} request${lost === 1 ? "" : "s"} made calls that no profile covers: what each ` +
           "route ran is counted over the requests a profile does cover. " +
-          adviceForNoProfile(command),
+          UNPROFILED,
       );
     }
     if (tally.malformed > 0) {
@@ -533,7 +532,7 @@ function notesOf(
     }
   }
   if (routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")))) {
-    notes.push(`Some routes had requests and no profile. ${adviceForNoProfile(command)}`);
+    notes.push(`Some routes had requests and no profile. ${UNPROFILED}`);
   }
   return notes;
 }
@@ -745,7 +744,7 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
       null,
       "no route could be evaluated, so nothing is said about any of them",
       {
-        ...(lost ? { advice: adviceForNoProfile(options.command) } : {}),
+        ...(lost ? { advice: UNPROFILED } : {}),
         routes,
       },
     );
@@ -754,6 +753,6 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     base: made.sides.base,
     change: made.sides.change,
     routes,
-    notes: notesOf(options.command, tallies, routes, options.dependencies),
+    notes: notesOf(tallies, routes, options.dependencies),
   });
 }

@@ -1450,6 +1450,15 @@ export class Agent {
     // goes first only when the arithmetic no longer holds, and the loss is said as a loss of coverage, not
     // hidden.
     if (this.overMemoryReserve()) this.overhead.shedForMemory();
+    // Under `check`, what the requests left is on disk before anything else runs, each time none is in flight: a
+    // runner may end this process with SIGKILL as soon as its last answer is in — Playwright's `webServer` does,
+    // unless told otherwise —, and nothing runs after that. The interval and the profile's window are closed with
+    // it, so that each is written once and whole (`check` reads an interval written twice once, by its start).
+    if (this.declared !== undefined && this.sender.writesOnly && this.runtime.idle()) {
+      this.enqueueHeld({ leaving: true });
+      this.sender.writeHeld();
+      this.declared.writeOnExit();
+    }
   }
 
   /** Every hook runs through here: an agent bug must never reach the application. */

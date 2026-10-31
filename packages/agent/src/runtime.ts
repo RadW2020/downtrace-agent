@@ -82,6 +82,11 @@ export class RuntimeSampler {
     if (this.inFlight > 0) this.inFlight -= 1;
   }
 
+  /** Whether no request is in flight: the process is between requests. */
+  idle(): boolean {
+    return this.inFlight === 0;
+  }
+
   /**
    * Closes the measurement window and starts a new one. The in-flight peak restarts from what is in flight right
    * now, not from zero: those requests are still there.

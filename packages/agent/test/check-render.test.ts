@@ -240,7 +240,7 @@ describe("a comparison that could not be made", () => {
       side: "base",
       message: "the run left no profile",
       advice:
-        "This happens with Vitest with the threads or vmThreads pool: use --pool=forks, which is Vitest's default.",
+        "This happens when no test reaches a route of the application in a process that loads the instrumentation.",
       outputTail: "line one\nline two",
     },
     base: side("main", { requests: 0, routes: 0 }),
@@ -251,7 +251,7 @@ describe("a comparison that could not be made", () => {
     expect(text).toContain("no comparison could be made");
     expect(text).toContain("base: the run left no profile");
     expect(text).toContain(
-      "This happens with Vitest with the threads or vmThreads pool: use --pool=forks, which is Vitest's default.",
+      "This happens when no test reaches a route of the application in a process that loads the instrumentation.",
     );
     expect(text).toContain("Last output of the base run:");
     expect(text).toContain("  line two");

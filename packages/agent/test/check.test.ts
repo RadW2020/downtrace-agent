@@ -1707,6 +1707,125 @@ describe.each([
   });
 });
 
+/**
+ * An application a runner starts as a process of its own and ends with SIGKILL: Playwright's `webServer` does, unless
+ * told to shut it down gracefully, and so does any harness that kills its server's process group. Nothing runs after a
+ * SIGKILL, so what the server observed has to be on disk before it: under `check` a process writes what it holds each
+ * time it has no request left in flight. Found with Next.js under Playwright, where every request to the application
+ * after the first second was lost.
+ */
+const KILLED_SERVER = `
+import { readFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import express from "express";
+
+const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+const db = new Database(":memory:");
+db.exec('create table "users" ("id" integer primary key, "email" text)');
+db.prepare('insert into "users" ("email") values (?)').run("ana@example.com");
+const byId = db.prepare('select * from "users" where "id" = ?');
+const app = express();
+app.get("/users/:id", (req, res) => {
+  for (let i = 0; i < lookups; i += 1) byId.get(Number(req.params.id));
+  res.send("user");
+});
+app.post("/users", (req, res) => res.send("made"));
+const server = app.listen(0, "127.0.0.1", () => process.send({ port: server.address().port }));
+`;
+
+const KILLING_RUNNER = `
+import { fork } from "node:child_process";
+
+const server = fork(new URL("./server.mjs", import.meta.url));
+const { port } = await new Promise((resolve) => server.once("message", resolve));
+for (let i = 0; i < 3; i += 1) {
+  const res = await fetch("http://127.0.0.1:" + port + "/users/" + (i + 1));
+  await res.text();
+  if (res.status !== 200) throw new Error("status " + res.status);
+}
+// As soon as the last answer is in: no time for the server to write anything on its way out.
+server.kill("SIGKILL");
+`;
+
+describe("a suite whose runner ends the application's server with SIGKILL, as Playwright's webServer does", () => {
+  let checked: Checked;
+  beforeAll(async () => {
+    checked = await serverProject(
+      { "server.mjs": KILLED_SERVER, "runner.mjs": KILLING_RUNNER },
+      "node runner.mjs",
+      { express: EXPRESS_DIR, "better-sqlite3": BETTER_SQLITE3_DIR },
+      {},
+    );
+  });
+
+  it("sees every request the server answered before it was killed, and the lookups multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * Vitest's `threads` pool terminates the thread that ran a file, and a terminated thread runs nothing: what it held was
+ * lost. Under `check` a thread writes what it holds each time no request is in flight, so what its requests left is on
+ * disk before Vitest ends it. The `forks` pool, which ends its processes with a signal, keeps it either way.
+ */
+const VITEST_MYSQL_SUITE = `
+import http from "node:http";
+import { readFileSync } from "node:fs";
+import express from "express";
+import mysql from "mysql2";
+import { afterAll, expect, test } from "vitest";
+
+const pool = mysql.createPool({ host: "127.0.0.1", port: Number(process.env.MYSQL_PORT), user: "app", connectionLimit: 2 }).promise();
+afterAll(() => pool.end());
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(new URL("./lookups.txt", import.meta.url), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await pool.query("select id, email from users where id = ?", [Number(req.params.id)]);
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+const MYSQL2_DIR = dirname(createRequire(import.meta.url).resolve("mysql2/package.json"));
+
+describe.each(["forks", "threads"])("a suite Vitest runs in its %s pool", (pool) => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await serverProject(
+      {
+        "users.test.mjs": VITEST_MYSQL_SUITE,
+        "package.json": JSON.stringify({ name: `vitest-${pool}`, private: true }),
+      },
+      `node node_modules/vitest/vitest.mjs run --pool=${pool}`,
+      { vitest: VITEST_DIR, express: EXPRESS_DIR, mysql2: MYSQL2_DIR },
+      { MYSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups multiplied, and exits 1", () => {
+    expect(checked.report.failure, JSON.stringify(checked.report.failure)).toBeNull();
+    expectLookupsMultiplied(checked);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("a suite whose queries go through postgres.js, imported as ESM", () => {
   // The driver of Drizzle's `postgres-js` and of most Supabase backends. Its ESM copy never enters the module
   // cache, and its first request is a test's: both runs would lose it alike (ADR 0235).
@@ -2351,8 +2470,7 @@ describe("what goes wrong, said (COB-01)", () => {
   it("a run that left no profile is said, with what happens and what to use, and is never unchanged", async () => {
     const made = await project(appFiles({}));
     // The instrumentation is not loaded in this run, which is what a runner that does not pass NODE_OPTIONS on is:
-    // no process writes anything, and that is said. The runner the command names is still named, since nothing in
-    // the command says which of the two it was.
+    // no process writes anything, and that is said.
     const checked = await check(made, [
       "--base",
       "HEAD",
@@ -2372,8 +2490,8 @@ describe("what goes wrong, said (COB-01)", () => {
     });
     expect(checked.report.base?.processes).toBe(0);
     expect(checked.report.failure?.advice).toContain("Most likely the instrumentation loaded in no process");
-    expect(checked.report.failure?.advice).toContain("This happens with Vitest with the threads or vmThreads pool");
-    expect(checked.report.failure?.advice).toContain("use --pool=forks");
+    // A runner's pool is no cause any more: a thread under `check` writes each time it has no request in flight.
+    expect(checked.report.failure?.advice).not.toContain("--pool");
     expect(checked.report.summary).toBeNull();
     const text = (
       await downtrace(["check", "--base", "HEAD", "--", "env", "-u", "NODE_OPTIONS", "node", "app.mjs"], {

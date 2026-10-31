@@ -525,15 +525,29 @@ export class Sender {
    * has the same interval twice, and if it does not, the interval is not lost. A repeat is the lesser loss.
    */
   dumpOnExit(ending: Ending): void {
-    const inspector = this.opts.inspector;
-    if (inspector === undefined || !this.local) return;
+    if (this.opts.inspector === undefined || !this.local) return;
     if (this.queue.length === 0 && this.profiles.length === 0 && !this.endingPending) return;
     this.declareEnding(ending);
+    this.writeNow();
+    this.endingLanded = true;
+  }
+
+  /**
+   * Writes what is queued **now, and blocking**, saying no ending: under `check`, each time the process has no request
+   * in flight, because a runner may end it with SIGKILL, after which nothing runs (Playwright's `webServer` does). A
+   * write in flight is not waited for, as on the way out: an interval written twice is read once.
+   */
+  writeHeld(): void {
+    if (this.opts.inspector === undefined || !this.local) return;
+    if (this.queue.length === 0 && this.profiles.length === 0) return;
+    this.writeNow();
+  }
+
+  private writeNow(): void {
     const { body, intervals, profile } = this.assemble();
-    inspector.writeOnExit(body);
+    this.opts.inspector?.writeOnExit(body);
     this.queue = this.queue.filter((iv) => !intervals.includes(iv));
     if (profile) this.profiles = this.profiles.filter((p) => p !== profile);
-    this.endingLanded = true;
   }
 
   async flush(deadline: Deadline = this.timeoutMs): Promise<boolean> {

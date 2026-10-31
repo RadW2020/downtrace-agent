@@ -10,7 +10,6 @@ import {
   NOT_SESSION_LEADS,
 } from "../src/check/compare.ts";
 import { CONFIG_FILE, CONFIG_KEYS } from "../src/check/config.ts";
-import { LOSING_RUNNERS } from "../src/check/hints.ts";
 import { FAILURE_CODES, REPORT_SCHEMA } from "../src/check/report.ts";
 
 /**
@@ -35,11 +34,6 @@ describe("the README on downtrace check", () => {
 
   it.each(FAILURE_CODES)("lists the failure %s", (code) => {
     expect(says(code), code).toBe(true);
-  });
-
-  it.each(LOSING_RUNNERS)("tells what to use instead of $runner", (runner) => {
-    expect(says(runner.runner), runner.runner).toBe(true);
-    expect(says(runner.use), runner.use).toBe(true);
   });
 
   it("tells how a command that sets NODE_OPTIONS keeps the one the instrumentation is loaded with", () => {

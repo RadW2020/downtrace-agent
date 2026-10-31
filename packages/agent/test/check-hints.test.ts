@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  adviceForNoProfile,
   adviceForUnbuiltBase,
   adviceForUnlinkedBase,
-  LOSING_RUNNERS,
   missingModulesIn,
+  NO_REQUEST_REACHED,
   noProfile,
   OBSERVER_PACKAGES,
   scriptOf,
+  UNPROFILED,
   type UnlinkedBase,
   unseenObservers,
 } from "../src/check/hints.ts";
@@ -15,38 +15,14 @@ import { INSTRUMENTS } from "../src/config.ts";
 import { OBSERVED_PACKAGES } from "../src/init/detect.ts";
 
 /**
- * A run that left no profile is said, with the likely cause and what to use instead (LOC-01, COB-01). The file does
- * not say a profile was lost, so the command is all there is to read.
+ * A run that left no profile is said, with the likely cause (LOC-01, COB-01). The file does not say a profile was lost,
+ * so what it can tell is from the command, and from what the processes wrote.
  */
 
-/** A command line that has each runner's setting in it, written the way a person writes one. */
-const COMMANDS: Record<string, string> = {
-  "Vitest with the threads or vmThreads pool": "vitest run --pool=threads",
-};
-
 describe("what is said of a run that left no profile", () => {
-  it("has a command line for every runner it knows", () => {
-    expect(Object.keys(COMMANDS).sort()).toEqual(LOSING_RUNNERS.map((runner) => runner.runner).sort());
-  });
-
-  it.each(LOSING_RUNNERS)("names $runner and says what to use, when the command has it", (runner) => {
-    const command = COMMANDS[runner.runner] ?? "";
-    expect(runner.matches.test(command), command).toBe(true);
-    const advice = adviceForNoProfile(command);
-    expect(advice).toContain(runner.runner);
-    expect(advice).toContain(runner.use);
-  });
-
-  it.each(["vitest run --pool=vmThreads", "vitest run --pool vmThreads", "vitest --pool='threads'"])(
-    "reads the threads pool as Vitest's flag is written: %s",
-    (command) => {
-      expect(adviceForNoProfile(command)).toContain("Vitest");
-    },
-  );
-
-  // Until DT-79 these four lost the profile, and this list named them. With no cloud the instrumentation writes
-  // what it holds when the process exits, so a run that ends with an explicit exit keeps it, and blaming one of
-  // them would send a person to drop a flag that does nothing to the result (ADR 0230).
+  // Until DT-79 a run ended with an explicit exit lost the profile, and until a run of `check` wrote each time a
+  // process had no request in flight so did Vitest's threads pool and a server killed with SIGKILL. None of them is a
+  // cause any more, and naming one would send a person to change a flag that does nothing to the result (ADR 0230).
   it.each([
     "node --test --test-force-exit test/",
     "npx jest --forceExit --runInBand",
@@ -54,18 +30,17 @@ describe("what is said of a run that left no profile", () => {
     "mocha --parallel test",
     "vitest run",
     "vitest run --pool=forks",
-    "jest --forceExitNever",
-    "mocha --exit-code 1",
-    "node --test",
+    "vitest run --pool=threads",
     "npm test",
-  ])("does not blame a command that has none of them: %s", (command) => {
-    expect(adviceForNoProfile(command)).toContain("This happens when no test reaches a route");
+  ])("does not blame a runner of: %s", (command) => {
+    const said = noProfile({ command, scripts: {}, processes: 1 });
+    expect(said.advice).toBe(NO_REQUEST_REACHED);
+    expect(said.advice).not.toContain("--pool");
   });
 
-  it("lists every runner when it cannot tell which one: the generic sentence is the table", () => {
-    const generic = adviceForNoProfile("npm test");
-    expect(generic).toContain("Vitest with the threads or vmThreads pool");
-    expect(generic).toContain("--pool=forks");
+  it("says what requests that no profile covers mean: a process ended with requests in flight", () => {
+    expect(UNPROFILED).toContain("in flight");
+    expect(UNPROFILED).not.toContain("--pool");
   });
 });
 
@@ -155,18 +130,11 @@ describe("what is said of a run whose processes did not load the instrumentation
     expect(said.advice).not.toContain("--pool");
   });
 
-  it("still names a runner the command names, when it cannot tell which it was", () => {
-    const said = noProfile({ command: "vitest run --pool=threads", scripts: NONE, processes: 0 });
-    expect(said.advice).toContain("Most likely the instrumentation loaded in no process");
-    expect(said.advice).toContain("Vitest with the threads or vmThreads pool");
-    expect(said.advice).toContain("use --pool=forks");
-  });
-
-  it("says what it always said of a run whose processes wrote and kept no request", () => {
+  it("says no request reached the application, of a run whose processes wrote and kept no request", () => {
     for (const command of ["vitest run --pool=threads", "npm test"]) {
       expect(noProfile({ command, scripts: NONE, processes: 1 })).toEqual({
         message: "the run left no profile",
-        advice: adviceForNoProfile(command),
+        advice: NO_REQUEST_REACHED,
       });
     }
   });
