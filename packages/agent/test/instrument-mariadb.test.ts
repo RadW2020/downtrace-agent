@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -386,5 +387,107 @@ describe("armMariadb, the start-up half", () => {
       [app.entry],
     );
     expect(lines).toEqual(["unavailable", "true"]);
+  });
+});
+
+describe("Prisma's adapter, over the CommonJS bundle the driver's `require` loads from 3.5.3", () => {
+  const here = (file: string) => JSON.stringify(fileURLToPath(new URL(file, import.meta.url)));
+  const ADAPTER = path.dirname(path.dirname(createRequire(import.meta.url).resolve("@prisma/adapter-mariadb")));
+  /** An application with Prisma's adapter installed, the real one or one of the test's own. */
+  async function application(adapter: "real" | "over 3.4"): Promise<string> {
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), "downtrace-prismamariadb-")));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    await mkdir(path.join(dir, "node_modules", "@prisma"), { recursive: true });
+    const installed = path.join(dir, "node_modules", "@prisma", "adapter-mariadb");
+    if (adapter === "real") {
+      await symlink(ADAPTER, installed, "dir");
+    } else {
+      // The shape of the adapter, over the driver's CommonJS modules: what Prisma 7.0 to 7.9 bring.
+      await mkdir(installed);
+      await writeFile(
+        path.join(installed, "package.json"),
+        JSON.stringify({ name: "@prisma/adapter-mariadb", main: "index.js" }),
+      );
+      await writeFile(
+        path.join(installed, "index.js"),
+        `require("mariadb");
+        class Queryable { async performIO() { return []; } }
+        class PrismaMariaDb { async connect() { return new Queryable(); } }
+        module.exports = { PrismaMariaDb };`,
+      );
+      await symlink(rootOf("mariadb34"), path.join(dir, "node_modules", "mariadb"), "dir");
+    }
+    const entry = path.join(dir, "app.cjs");
+    await writeFile(entry, "");
+    return entry;
+  }
+  const preamble = `
+    import { createRequire } from "node:module";
+    import { watchPrismaMariadb } from ${here("../src/instrument/mariadb.ts")};
+    import { dependencyKey, enterRequest } from ${here("../src/context.ts")};
+    import { FingerprintCache } from ${here("../src/fingerprint.ts")};
+    import { startFakeMysql } from ${here("./support/mysql.ts")};
+    const deps = {
+      log: { warn: () => {}, debug: () => {} },
+      internalError: (err) => { console.error(String(err)); process.exit(2); },
+      fingerprints: new FingerprintCache(100, "mysql"),
+      from: process.argv[1],
+    };
+    const require = createRequire(process.argv[1]);
+  `;
+  /** Prisma's queries through the adapter, one that the server answers and one it refuses, in one request. */
+  const queries = `
+    const server = await startFakeMysql((sql) => (/boom/.test(sql) ? { error: { code: 1064, message: "no" } } : {}));
+    const { PrismaMariaDb } = require("@prisma/adapter-mariadb");
+    const adapter = await new PrismaMariaDb(
+      { host: "127.0.0.1", port: server.port, user: "app", connectionLimit: 1 },
+      { useTextProtocol: true },
+    ).connect();
+    const ctx = enterRequest();
+    await adapter.queryRaw({ sql: "SELECT id FROM users WHERE id = ?", args: [7], argTypes: [{ scalarType: "int", arity: "scalar" }] });
+    const failed = await adapter.executeRaw({ sql: "boom", args: [], argTypes: [] }).then(() => "resolved", (err) => err.name);
+    const work = ctx.work?.get(dependencyKey("mysql", ""));
+    console.log(JSON.stringify({
+      calls: work?.calls,
+      errors: work?.errors,
+      first: [...(ctx.operations?.values() ?? [])].find((o) => o.kind === "query")?.text,
+      failed,
+    }));
+    await adapter.dispose();
+    await server.close();
+  `;
+  const expected = {
+    calls: 2,
+    errors: 1,
+    first: "SELECT id FROM users WHERE id = ?",
+    failed: "DriverAdapterError",
+  };
+
+  it("counts the queries Prisma sends through it, in the request that sent them", async () => {
+    const entry = await application("real");
+    const lines = await runAlone(`${preamble} const stop = watchPrismaMariadb(deps); ${queries} stop();`, [entry]);
+    expect(JSON.parse(lines.at(-1) ?? "{}")).toEqual(expected);
+  });
+
+  it("patches an adapter the application had loaded before the instrumentation started", async () => {
+    const entry = await application("real");
+    const lines = await runAlone(
+      `${preamble} require("@prisma/adapter-mariadb"); const stop = watchPrismaMariadb(deps); ${queries} stop();`,
+      [entry],
+    );
+    expect(JSON.parse(lines.at(-1) ?? "{}")).toEqual(expected);
+  });
+
+  it("leaves alone an adapter over the driver's own modules, which the driver's observer counts", async () => {
+    const entry = await application("over 3.4");
+    const lines = await runAlone(
+      `${preamble}
+      const stop = watchPrismaMariadb(deps);
+      const { PrismaMariaDb } = require("@prisma/adapter-mariadb");
+      console.log(Object.getOwnPropertySymbols(PrismaMariaDb.prototype).length === 0 ? "untouched" : "patched");
+      stop();`,
+      [entry],
+    );
+    expect(lines).toEqual(["untouched"]);
   });
 });

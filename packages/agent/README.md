@@ -558,10 +558,15 @@ prepared statements, batches, errors and transactions, on 3.4.7 and 3.5.4, and i
 - **Up to 3.4 the driver is CommonJS, and from 3.5 its modules are ES modules.** 3.5's are imported by their URL, the
   modules your application's `import` loads, from the first request — from the start under `downtrace check` —, as
   postgres.js's are: a query that starts before that import resolves is not counted.
-- **What `require("mariadb")` loads from 3.5.3 on is not observed.** That is one bundle, `dist/promise.cjs`, which
-  exports none of the driver's classes: an application compiled to CommonJS — NestJS's, for one — with Prisma 7.10's
-  adapter, which pins 3.5.4, has its queries go there. `DOWNTRACE_DEBUG=1` says so at the first request. Prisma 7.0
-  to 7.9 pin 3.4.5, which is observed however it is loaded.
+- **What `require("mariadb")` loads from 3.5.3 on is one bundle, `dist/promise.cjs`, which exports none of the
+  driver's classes**, and is not observed; `DOWNTRACE_DEBUG=1` says so at the first request. An application compiled
+  to CommonJS — NestJS's, for one — with Prisma 7.10's adapter, which pins 3.5.4, has its queries go there, and they
+  are observed one floor up, at the adapter: as it loads, which Node announces on its `module.require` channel (on Node
+  22 and later; on Node 20, only an adapter loaded before the instrumentation started), and under Jest in its
+  registry. Every query Prisma sends is a query of the route, with its time and its failure; the dependency is `mysql`
+  with no target, because the bundle keeps the server to itself, and the wait for a connection and the `BEGIN` and
+  `COMMIT` the adapter sends on its own are not seen. Prisma 7.0 to 7.9 pin 3.4.5, which is observed at the driver
+  however it is loaded. Sequelize or code of your own on the bundle stays unobserved.
 - **What the connection runs while it opens** — `SET NAMES`, the session's variables — is not counted: a pool opens a
   connection inside the request that found none free, and those statements are the driver's.
 - **`queryStream`**, and `execute` and `batch` before 3.4, which return a promise of their own, are not observed. A
@@ -640,7 +645,7 @@ Measured version by version, with this instrumentation loaded through `--import`
 
 | Your Prisma | Its queries go | Observed |
 |---|---|---|
-| 7.x, with `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3` or `@prisma/adapter-mariadb` | through `pg`, `better-sqlite3` or `mariadb`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`, `mysql`); with `@prisma/adapter-mariadb` 7.10 or later in an application compiled to CommonJS, **no** ([MySQL](#mysql)) |
+| 7.x, with `@prisma/adapter-pg`, `@prisma/adapter-better-sqlite3` or `@prisma/adapter-mariadb` | through `pg`, `better-sqlite3` or `mariadb`: 7 has no engine of its own and requires an adapter | **Yes**, as the driver's SQL (`pg`, `sqlite`, `mysql`); with `@prisma/adapter-mariadb` 7.10 or later in an application compiled to CommonJS, at the adapter, with no server named ([MySQL](#mysql)) |
 | 6.16 and later with `engineType = "client"` in the schema's generator (6.7 to 6.15: the `queryCompiler` preview), with either adapter | through the driver, as 7 does | **Yes**, the same |
 | 3.15 to 6.x on its default engine, with no adapter, from the `prisma-client-js` generator: what Prisma does before 7 unless told otherwise | from Prisma's query engine, which speaks to the database itself | **Yes**, as Prisma's operations (`prisma`), measured on 3.15.2, 4.0.0, 4.16.2, 5.22.0 and 6.19.3 |
 | 6.x on its default engine from the `prisma-client` generator, what `prisma init` writes in 6.19 | the same, from a client that imports Prisma's runtime as an ES module | **No**: see below |

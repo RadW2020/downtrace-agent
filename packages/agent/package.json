@@ -33,6 +33,7 @@
     "@koa/router": "^15.7.0",
     "@koa/router12": "npm:@koa/router@^12.0.2",
     "@libsql/client": "^0.18.0",
+    "@prisma/adapter-mariadb": "7.10.1",
     "@prisma/client": "^6.19.3",
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",

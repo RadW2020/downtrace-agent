@@ -1236,8 +1236,10 @@ async function mariadbProject(
     "downtrace.json": JSON.stringify({ check: { command } }),
   });
   projects.push(made);
-  await mkdir(join(made.dir, "node_modules"), { recursive: true });
-  for (const [name, dir] of Object.entries(link)) await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  for (const [name, dir] of Object.entries(link)) {
+    await mkdir(dirname(join(made.dir, "node_modules", name)), { recursive: true });
+    await symlink(dir, join(made.dir, "node_modules", name), "dir");
+  }
   await made.write("lookups.txt", "4");
   return check(made, ["--base", "HEAD"], { MARIADB_PORT: String(database.port) });
 }
@@ -1284,6 +1286,95 @@ describe("a suite Jest runs, whose application queries MySQL through mariadb 3.4
   afterAll(() => database.close());
 
   it("sees the lookups the tests' own copy of the driver ran, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
+/**
+ * Prisma's adapter for MySQL from CommonJS, as a NestJS application on Prisma 7.10 holds it: over the driver's
+ * CommonJS bundle, whose classes are out of reach, and connected at start-up, before any request. The route asks the
+ * adapter what Prisma's client would.
+ */
+const PRISMA_MARIADB_APP = `
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const { PrismaMariaDb } = require("@prisma/adapter-mariadb");
+
+async function main() {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const adapter = await new PrismaMariaDb(
+    { host: "127.0.0.1", port: Number(process.env.MARIADB_PORT), user: "app", connectionLimit: 2 },
+    { useTextProtocol: true },
+  ).connect();
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) {
+      await adapter.queryRaw({
+        sql: "SELECT id, email FROM users WHERE id = ?",
+        args: [Number(req.params.id)],
+        argTypes: [{ scalarType: "int", arity: "scalar" }],
+      });
+    }
+    res.send("user");
+  });
+  app.post("/users", (req, res) => res.send("made"));
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  const base = "http://127.0.0.1:" + server.address().port;
+  for (let i = 0; i < 3; i += 1) {
+    const res = await fetch(base + "/users/" + (i + 1));
+    if (res.status !== 200) throw new Error("status " + res.status);
+  }
+  server.close();
+  await adapter.dispose();
+}
+main();
+`;
+
+const PRISMA_ADAPTER_DIR = dirname(dirname(createRequire(import.meta.url).resolve("@prisma/adapter-mariadb")));
+
+describe("a suite whose application holds Prisma's adapter for MySQL from CommonJS, over mariadb's bundle", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await mariadbProject(
+      { "app.cjs": PRISMA_MARIADB_APP },
+      "node app.cjs",
+      { express: EXPRESS_DIR, "@prisma/adapter-mariadb": PRISMA_ADAPTER_DIR },
+      database,
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the queries Prisma would send multiplied, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    expect(route(checked.report, "GET /users/:id").operations[0]?.label).toBe(
+      "SELECT id, email FROM users WHERE id = ?",
+    );
+  });
+});
+
+describe("a suite Jest runs, whose application holds Prisma's adapter for MySQL over mariadb's bundle", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await mariadbProject(
+      {
+        "users.test.js": PRISMA_MARIADB_APP.replace("main();", 'test("users", main);'),
+        "package.json": JSON.stringify({ name: "prisma-mariadb-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, "@prisma/adapter-mariadb": PRISMA_ADAPTER_DIR },
+      database,
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the queries the tests' own copy of the adapter sent, multiplied", () => {
     expectLookupsMultiplied(checked);
   });
 });

@@ -38,7 +38,15 @@ import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { armedTogether } from "./instrument/arm.ts";
 import { instrumentHttp } from "./instrument/http.ts";
-import { armMariadb, patchMariadbCallback, patchMariadbConnection, patchMariadbPool } from "./instrument/mariadb.ts";
+import {
+  armMariadb,
+  patchMariadbCallback,
+  patchMariadbConnection,
+  patchMariadbPool,
+  patchPrismaMariadb,
+  prismaAdapterOverBundle,
+  watchPrismaMariadb,
+} from "./instrument/mariadb.ts";
 import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armMysql, patchMysql } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
@@ -286,6 +294,8 @@ export class Agent {
   private stopFastify: (() => void) | undefined;
   private stopHono: (() => void) | undefined;
   private stopJest: (() => void) | undefined;
+  /** Stops listening for Prisma's adapter for MySQL loaded over `mariadb`'s CommonJS bundle. */
+  private stopPrismaMariadb: (() => void) | undefined;
   private stopRedis: (() => void) | undefined;
   private timer: NodeJS.Timeout | undefined;
   /** The tick that feeds the coarse register's event loop series, one reading a second (gh-629). */
@@ -645,6 +655,9 @@ export class Agent {
         ]);
         said(observers, "mysql", armed.state);
         this.mysqlAttach = armed.attach;
+        // Prisma's adapter over the driver's CommonJS bundle, whose classes are out of reach: at the adapter, as it
+        // loads, because a NestJS application connects before its first request.
+        this.stopPrismaMariadb = watchPrismaMariadb({ ...mysqlDeps, from });
       }
     }
     // Under Jest every module a test file requires comes from Jest's own registry, never from the cache the
@@ -700,6 +713,11 @@ export class Agent {
             (name === "./lib/connection-callback" && fromMariadb(from, "callback.js")) ||
             (name === "./connection-callback" && fromMariadb(from, "lib", "pool-callback.js")),
           patch: (callback) => patchMariadbCallback(callback, mysqlDeps),
+        },
+        {
+          // From 3.5.3 Jest loads the driver's CommonJS bundle, and Prisma's adapter over it is observed instead.
+          matches: (name, from) => name === "@prisma/adapter-mariadb" && prismaAdapterOverBundle(from),
+          patch: (adapter) => patchPrismaMariadb(adapter, mysqlDeps),
         },
       );
     }
@@ -844,6 +862,8 @@ export class Agent {
     this.stopHono = undefined;
     this.stopJest?.();
     this.stopJest = undefined;
+    this.stopPrismaMariadb?.();
+    this.stopPrismaMariadb = undefined;
     this.stopRedis?.();
     this.stopRedis = undefined;
     this.runtime.stop();

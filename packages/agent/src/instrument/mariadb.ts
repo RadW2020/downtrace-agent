@@ -1,3 +1,4 @@
+import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -39,12 +40,17 @@ import { type Armed, armedTogether } from "./arm.ts";
  *   the application sees (invariant 1).
  * - **The CommonJS build of 3.5.3 and later** (`dist/promise.cjs`), which is one bundle that exports none of its
  *   classes: an application that `require`s the driver from there is not observed, and the log says so. One that
- *   imports it, and Prisma's adapter from an ES module, load `lib/`, which is.
+ *   imports it, and Prisma's adapter from an ES module, load `lib/`, which is. Prisma's adapter from CommonJS — a
+ *   NestJS application on Prisma 7.10 — is observed one floor up, at the adapter (`watchPrismaMariadb`).
  */
 
 const MARK = Symbol.for("downtrace.mariadb.instrumented");
 const POOL_MARK = Symbol.for("downtrace.mariadb.pool.instrumented");
 const CALLBACK_MARK = Symbol.for("downtrace.mariadb.callback.instrumented");
+const ADAPTER_MARK = Symbol.for("downtrace.mariadb.prisma.instrumented");
+
+/** Prisma's driver adapter for MySQL and MariaDB, by the name an application requires it with. */
+const PRISMA_ADAPTER = "@prisma/adapter-mariadb";
 
 /**
  * The driver's `CONNECTED`, the same number in every version from 3 (`lib/const/connection_status.js`): before it
@@ -59,6 +65,7 @@ interface Proto extends Record<string | symbol, unknown> {
   [MARK]?: boolean;
   [POOL_MARK]?: boolean;
   [CALLBACK_MARK]?: boolean;
+  [ADAPTER_MARK]?: boolean;
 }
 
 export interface InstrumentMariadbDeps {
@@ -219,8 +226,18 @@ function begin(
   if (!ctx) return undefined;
   const status = (connection as { status?: unknown } | null)?.status;
   if (typeof status === "number" && status < CONNECTED) return undefined;
-  const { fingerprints, errors, internalError } = deps;
   const target = targetOf((connection as { opts?: unknown } | null)?.opts);
+  return { ctx, settle: started(ctx, target, command, deps) };
+}
+
+/** Starts the clock on a statement of `ctx`, and returns what records it once, when it ends. */
+function started(
+  ctx: RequestContext,
+  target: string,
+  command: unknown,
+  deps: InstrumentMariadbDeps,
+): (failed: boolean, err: unknown) => void {
+  const { fingerprints, errors, internalError } = deps;
   const sql = fingerprints ? textOf(command) : undefined;
   const started = performance.now();
   let counted = false;
@@ -247,7 +264,7 @@ function begin(
       internalError(failure);
     }
   };
-  return { ctx, settle };
+  return settle;
 }
 
 /**
@@ -305,6 +322,151 @@ function targetOf(opts: unknown): string {
 
 function targetOfPool(pool: unknown): string {
   return targetOf((pool as { opts?: { connOptions?: unknown } } | null | undefined)?.opts?.connOptions);
+}
+
+/** Whether the `mariadb` that `file` requires is the CommonJS bundle of 3.5.3 and later, whose classes are its own. */
+function requiresBundle(file: string): boolean {
+  try {
+    return createRequire(file).resolve("mariadb").endsWith(path.join("dist", "promise.cjs"));
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the Prisma adapter `from` requires queries through that bundle: then it is observed at the adapter. */
+export function prismaAdapterOverBundle(from: string): boolean {
+  try {
+    return requiresBundle(createRequire(from).resolve(PRISMA_ADAPTER));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Observes Prisma's adapter for MySQL and MariaDB where the driver under it cannot be: required from CommonJS, over the
+ * bundle 3.5.3 and later ship for `require` — a NestJS application on Prisma 7.10. Every query Prisma sends goes
+ * through the adapter's `performIO`, on a class the adapter does not export; the adapter its factory's `connect` hands
+ * over is the way to it. So the factory is patched when the adapter is loaded, which Node announces on its
+ * `module.require` channel (as it announces Jest's runtime), or at once when the application loaded it already: a
+ * NestJS application connects at start-up, before any request, and the first request is too late (ADR 0209).
+ *
+ * Over the driver's own modules — up to 3.4, or imported — the driver's observer counts those queries, and the
+ * adapter is left alone. What this does not say: the server, which the bundle keeps to itself (the dependency `mysql`
+ * with no target, as postgres.js's); the `BEGIN` and `COMMIT` of a transaction, which the adapter sends on the
+ * connection itself; and the wait for a connection. Node 20 has no `module.require` channel: there, only an adapter
+ * loaded before the instrumentation started is observed. Returns what stops listening.
+ */
+export function watchPrismaMariadb(deps: InstrumentMariadbDeps & { from?: From | undefined }): () => void {
+  for (const base of basesOf(deps.from ?? applicationEntry())) {
+    let file: string;
+    try {
+      file = createRequire(base).resolve(PRISMA_ADAPTER);
+    } catch {
+      continue; // most applications do not have it
+    }
+    const loaded = createRequire(base).cache[file];
+    if (loaded !== undefined && requiresBundle(file)) patchPrismaMariadb(loaded.exports, deps);
+  }
+  const channel = diagnostics_channel.tracingChannel("module.require");
+  const handlers = {
+    start: () => {},
+    end: (message: unknown) => {
+      const { id, parentFilename, result } = message as { id?: unknown; parentFilename?: unknown; result?: unknown };
+      // One comparison for every module the process loads, at load, and nothing in a request.
+      if (id !== PRISMA_ADAPTER || typeof parentFilename !== "string" || !path.isAbsolute(parentFilename)) return;
+      if (!prismaAdapterOverBundle(parentFilename)) return;
+      try {
+        patchPrismaMariadb(result, deps);
+      } catch (err) {
+        deps.internalError(err);
+      }
+    },
+    asyncStart: () => {},
+    asyncEnd: () => {},
+    error: () => {},
+  };
+  channel.subscribe(handlers);
+  return () => {
+    channel.unsubscribe(handlers);
+  };
+}
+
+/**
+ * Patches the factory Prisma's adapter exports: its `connect`, whose adapter is patched before the application gets
+ * it. The promise the application gets settles as Prisma's does, with the same adapter or the same error.
+ */
+export function patchPrismaMariadb(exports: unknown, deps: InstrumentMariadbDeps): boolean {
+  const proto = prototypeOf((exports as { PrismaMariaDb?: unknown } | null | undefined)?.PrismaMariaDb);
+  if (proto?.[ADAPTER_MARK] === true) return true;
+  if (!proto || typeof proto.connect !== "function") {
+    deps.log.debug(`${PRISMA_ADAPTER} found but its PrismaMariaDb has no connect; its queries are not observed`);
+    return false;
+  }
+  const connect = proto.connect as (...args: unknown[]) => unknown;
+  proto.connect = function (this: unknown, ...args: unknown[]): unknown {
+    const connecting = connect.apply(this, args);
+    if (!isThenable(connecting)) return connecting;
+    return connecting.then((adapter: unknown) => {
+      try {
+        patchQueryable(adapter, deps);
+      } catch (err) {
+        deps.internalError(err);
+      }
+      return adapter;
+    });
+  };
+  proto[ADAPTER_MARK] = true;
+  deps.log.debug(`instrumented ${PRISMA_ADAPTER}, over the CommonJS bundle of mariadb`);
+  return true;
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+/**
+ * Wraps `performIO` on the class of the adapter that defines it, which its transactions extend too: the query, its
+ * time and its failure, in the request that asked. What it returns is the promise Prisma awaits, settled as the
+ * adapter's own.
+ */
+function patchQueryable(adapter: unknown, deps: InstrumentMariadbDeps): void {
+  let proto = adapter !== null && typeof adapter === "object" ? (Object.getPrototypeOf(adapter) as Proto | null) : null;
+  while (proto !== null && proto !== Object.prototype && !Object.hasOwn(proto, "performIO")) {
+    proto = Object.getPrototypeOf(proto) as Proto | null;
+  }
+  if (proto === null || proto === Object.prototype || typeof proto.performIO !== "function") {
+    deps.log.debug(`${PRISMA_ADAPTER} connected an adapter with no performIO; its queries are not observed`);
+    return;
+  }
+  if (proto[ADAPTER_MARK] === true) return;
+  const performIO = proto.performIO as (...args: unknown[]) => unknown;
+  proto.performIO = function (this: unknown, ...args: unknown[]): unknown {
+    let settle: ((failed: boolean, err: unknown) => void) | undefined;
+    try {
+      const ctx = currentContext();
+      if (ctx) settle = started(ctx, "", args[0], deps);
+    } catch (err) {
+      deps.internalError(err);
+    }
+    const result = performIO.apply(this, args);
+    if (settle === undefined || !isThenable(result)) return result;
+    const record = settle;
+    return result.then(
+      (value: unknown) => {
+        record(false, undefined);
+        return value;
+      },
+      (err: unknown) => {
+        record(true, err);
+        throw err;
+      },
+    );
+  };
+  proto[ADAPTER_MARK] = true;
 }
 
 /** A copy of the driver: its directory, its version, whether its `lib/` is ESM, and the `require` that found it. */
