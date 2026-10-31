@@ -74,9 +74,46 @@ export const OBSERVED_PACKAGES = [
 /**
  * Drivers whose work the instrumentation does not see at all: no diagnostics channel, no patch, and not HTTP, which
  * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
- * route whose work went through it.
+ * route whose work went through it. Datastores first, then brokers:
+ *
+ * - a protocol of its own over a socket: Oracle's (`oracledb`), Cassandra's (`cassandra-driver`, ScyllaDB's too),
+ *   Neo4j's Bolt (`neo4j-driver`), Memcached's (`memjs`, `memcached`), Kafka's (`kafkajs`), AMQP 0-9-1 (`amqplib`, and
+ *   `amqp-connection-manager` on it), AMQP 1.0 (`@azure/service-bus`), MQTT (`mqtt`) and NATS (`nats`);
+ * - a native binding, whose I/O is in C or C++: Couchbase's SDK (`couchbase`), and librdkafka's
+ *   (`@confluentinc/kafka-javascript`, `node-rdkafka`);
+ * - gRPC, which runs on `node:http2` and not on the channels the HTTP observer reads (undici's and `node:http`'s):
+ *   Google Cloud's Firestore, Datastore, Spanner, Bigtable and Pub/Sub, and `firebase-admin`, whose Firestore is that
+ *   one and whose Realtime Database is a WebSocket — what it asks of Firebase over HTTPS, its Auth, is seen as calls;
+ * - a WebSocket: `@vercel/postgres`, which queries through Neon's `Pool` with `ws` in Node. Neon's own package is not
+ *   here: its `neon()` queries over `fetch`, seen as calls, and its `Pool` is named as `@prisma/adapter-neon` when
+ *   Prisma takes it.
+ *
+ * A client over HTTP — PlanetScale's, Elasticsearch's, DynamoDB's, ClickHouse's, Upstash's, Supabase's — is not here
+ * either, nor a queue on ioredis (BullMQ): those are observed, as calls and as Redis commands.
  */
-export const UNOBSERVED_PACKAGES = ["oracledb", "kafkajs", "amqplib"] as const;
+export const UNOBSERVED_PACKAGES = [
+  "oracledb",
+  "cassandra-driver",
+  "neo4j-driver",
+  "couchbase",
+  "@google-cloud/firestore",
+  "firebase-admin",
+  "@google-cloud/datastore",
+  "@google-cloud/spanner",
+  "@google-cloud/bigtable",
+  "@vercel/postgres",
+  "memjs",
+  "memcached",
+  "kafkajs",
+  "@confluentinc/kafka-javascript",
+  "node-rdkafka",
+  "amqplib",
+  "amqp-connection-manager",
+  "@azure/service-bus",
+  "mqtt",
+  "nats",
+  "@google-cloud/pubsub",
+] as const;
 
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the

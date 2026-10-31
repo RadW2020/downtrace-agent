@@ -36,7 +36,6 @@ export const ISSUES_URL = "https://github.com/RadW2020/downtrace-agent/issues/ne
 export const DATA_PACKAGES = [
   ...OBSERVED_PACKAGES,
   ...UNOBSERVED_PACKAGES,
-  "@prisma/client",
   "drizzle-orm",
   "knex",
   "kysely",
@@ -44,14 +43,13 @@ export const DATA_PACKAGES = [
   "typeorm",
   "@mikro-orm/core",
   "@neondatabase/serverless",
-  "@vercel/postgres",
   "@planetscale/database",
   "@supabase/supabase-js",
   "@upstash/redis",
   "bullmq",
   "@aws-sdk/client-dynamodb",
-  "firebase-admin",
   "@elastic/elasticsearch",
+  "@clickhouse/client",
 ] as const;
 
 /** The frameworks a report names. */

@@ -15,6 +15,7 @@ import {
   parsePackageJson,
   TEST_SCRIPTS,
   testScriptOf,
+  UNOBSERVED_PACKAGES,
   unobservedOf,
 } from "../src/init/detect.ts";
 
@@ -260,6 +261,48 @@ describe("what the project runs", () => {
     const ranges = new Map([[name, range]]);
     expect(observedOf(dependencies, ranges)).toEqual(observed ? [name] : []);
     expect(unobservedOf(dependencies, ranges)).toEqual(observed ? [] : [name]);
+  });
+
+  /**
+   * A datastore or a broker reached through a protocol of its own — Cassandra's, Neo4j's Bolt, Memcached's, MQTT,
+   * NATS, AMQP 1.0 —, through a native binding (Couchbase, librdkafka), through gRPC, which runs on `node:http2` and
+   * not on the channels the HTTP observer reads, or through a WebSocket (`@vercel/postgres`, on Neon's `Pool`), leaves
+   * nothing in the request: it is named, so that a route with nothing observed in it is explained.
+   */
+  it.each(UNOBSERVED_PACKAGES)("says %s is not observed, and does not call it observed", async (name) => {
+    const found = await detect(await project({}), pkg({ dependencies: { express: "^5", [name]: "*" } }));
+    expect(found.unobserved).toEqual([name]);
+    expect(found.observed).toEqual([]);
+  });
+
+  it("names every package it does not observe that a project depends on, in the order of the list", async () => {
+    const found = await detect(
+      await project({}),
+      pkg({ dependencies: { nats: "^2", "firebase-admin": "^13", "cassandra-driver": "^4", pg: "^8", mqtt: "^5" } }),
+    );
+    expect(found.observed).toEqual(["pg"]);
+    expect(found.unobserved).toEqual(["cassandra-driver", "firebase-admin", "mqtt", "nats"]);
+  });
+
+  /**
+   * A client over HTTP is seen as the calls it makes, by host (`instrument/http.ts`), and a queue on ioredis as the
+   * commands ioredis publishes: a route whose work goes through them is evaluated, and none of them is named as not
+   * observed. Neon's `neon()` queries over `fetch`; its `Pool` and `Client`, over a WebSocket, are not seen, and
+   * Prisma's adapter for it, which takes the `Pool`, is named.
+   */
+  it.each([
+    "@neondatabase/serverless",
+    "@planetscale/database",
+    "@elastic/elasticsearch",
+    "@aws-sdk/client-dynamodb",
+    "@aws-sdk/lib-dynamodb",
+    "@clickhouse/client",
+    "@upstash/redis",
+    "@supabase/supabase-js",
+    "@azure/cosmos",
+    "bullmq",
+  ])("does not name %s as not observed: it is seen through HTTP or through ioredis", (name) => {
+    expect(unobservedOf(new Set([name]))).toEqual([]);
   });
 
   it("says whether this package is installed, which decides how its commands are spelled", async () => {

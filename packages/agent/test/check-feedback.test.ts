@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RouteResult } from "../src/check/compare.ts";
-import { type FeedbackContext, feedbackFor, ISSUES_URL } from "../src/check/feedback.ts";
+import { DATA_PACKAGES, type FeedbackContext, feedbackFor, ISSUES_URL } from "../src/check/feedback.ts";
 import { renderText } from "../src/check/render.ts";
 import { type CheckReport, compared, failed, type SideReport } from "../src/check/report.ts";
 
@@ -146,6 +146,15 @@ describe("what the issue says", () => {
     expect(body).toContain("| Failure | no-profile (change) |");
     expect(body).toContain("| Routes not evaluated | no-profile-in-change: 1, not-called: 1 |");
     expect(body).toContain("| Observers, base | no run |");
+  });
+
+  it("names each data package once, whichever of the lists it is in", () => {
+    const names = ["@prisma/client", "firebase-admin", "@vercel/postgres", "@neondatabase/serverless", "kafkajs"];
+    const once = feedbackFor(report, context({ dependencies: new Set(names) }));
+    expect(issueOf(once?.url ?? "").body).toContain(
+      "| Data packages | @prisma/client, firebase-admin, @vercel/postgres, kafkajs, @neondatabase/serverless |",
+    );
+    expect(new Set(DATA_PACKAGES).size).toBe(DATA_PACKAGES.length);
   });
 
   it("writes nothing of the code: no route, no command, no script, no package that is not a known one", () => {

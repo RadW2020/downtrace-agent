@@ -140,6 +140,15 @@ describe("a project it can configure", () => {
     [{ express: "^5", mssql: "^11" }, []],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mssql": "^7" }, []],
     [{ express: "^5", oracledb: "^6" }, ["oracledb"]],
+    // A protocol of its own, gRPC on node:http2, or Neon's Pool over a WebSocket: nothing of it is seen.
+    [{ express: "^5", "cassandra-driver": "^4" }, ["cassandra-driver"]],
+    [{ express: "^5", "firebase-admin": "^13" }, ["firebase-admin"]],
+    [{ express: "^5", "@vercel/postgres": "^0.10" }, ["@vercel/postgres"]],
+    [{ fastify: "^5", mqtt: "^5", nats: "^2" }, ["mqtt", "nats"]],
+    // Over HTTP it is seen as calls, and a queue on ioredis as its commands.
+    [{ hono: "^4", "drizzle-orm": "^0.44", "@neondatabase/serverless": "^1" }, []],
+    [{ fastify: "^5", "@elastic/elasticsearch": "^9", "@clickhouse/client": "^1" }, []],
+    [{ express: "^5", bullmq: "^5", ioredis: "^5" }, []],
     // mysqljs, which TypeORM loads first when it is installed, through the observer of mysql2, whose API it is.
     [{ express: "^4", typeorm: "^0.3", mysql: "^2.18.1" }, []],
     [{ express: "^5", mongoose: "^9" }, []],

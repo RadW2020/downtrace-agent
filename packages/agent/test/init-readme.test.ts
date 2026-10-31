@@ -1,6 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
-import { FRAMEWORK_PACKAGES, LOCKFILES, OBSERVED_PACKAGES, TEST_SCRIPTS } from "../src/init/detect.ts";
+import {
+  FRAMEWORK_PACKAGES,
+  LOCKFILES,
+  OBSERVED_PACKAGES,
+  TEST_SCRIPTS,
+  UNOBSERVED_PACKAGES,
+} from "../src/init/detect.ts";
 import { REGISTER_FUNCTION } from "../src/init/files.ts";
 import { INIT_FAILURE_CODES, INIT_SCHEMA, MISSING_CODES } from "../src/init/report.ts";
 
@@ -38,9 +44,12 @@ describe("the README on downtrace init", () => {
     expect(says(script), script).toBe(true);
   });
 
-  it.each([...FRAMEWORK_PACKAGES, ...OBSERVED_PACKAGES])("names the package %s it looks for", (name) => {
-    expect(says(name), name).toBe(true);
-  });
+  it.each([...FRAMEWORK_PACKAGES, ...OBSERVED_PACKAGES, ...UNOBSERVED_PACKAGES])(
+    "names the package %s it looks for",
+    (name) => {
+      expect(says(name), name).toBe(true);
+    },
+  );
 
   it.each(LOCKFILES.map(([file]) => file))("names the lockfile %s", (file) => {
     expect(says(file), file).toBe(true);
