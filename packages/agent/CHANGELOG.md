@@ -1,5 +1,16 @@
 # @downtrace/agent
 
+## 0.18.0
+
+### Minor Changes
+
+- 5565be7: Hapi's routes are named by their templates, a plugin's prefix included and with Hapi's braces (`/api/orders/{id?}`), and what its `notFound` answered is `(unmatched)` with nothing of the path; a request made with `server.inject()` — how Hapi's guide and Lab call an application — is observed as one the server received, so `downtrace check` can judge a Hapi suite. The request class is patched as Hapi's own modules require it, from Node 22. `downtrace init` names `@hapi/hapi` among the frameworks it names routes for.
+
+### Patch Changes
+
+- 44f4c5f: An application that imports `mysql2/promise` alone — Drizzle's guide writes it so, and most hand-written ones — was not observed at all from mysql2 3.24, whose promise entry requires the driver's classes and not `mysql2`'s own entry, which the instrumentation waited for. It now waits for the connection's module, which both entries load, and patches the classes from there; under Jest too.
+- 7779137: Under `downtrace check` a process writes what it holds each time it has no request in flight, and not only as it ends. A runner that ends the application's server with SIGKILL — Playwright's `webServer` does by default — lost every request after the last periodic write: a Next.js application under Playwright came back with one request seen out of four. Vitest's `threads` and `vmThreads` pools, which terminate their threads, keep the profile too, and `check` no longer tells a run to use `--pool=forks`.
+
 ## 0.17.0
 
 ### Minor Changes
