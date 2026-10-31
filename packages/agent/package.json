@@ -58,6 +58,7 @@
     "mongodb6": "npm:mongodb@^6.21.0",
     "mongoose": "^9.11.4",
     "mssql": "^12.7.13",
+    "mysql": "2.18.1",
     "mysql2": "^3.24.5",
     "mysql2-legacy": "npm:mysql2@3.11.5",
     "pg": "^8.23.0",

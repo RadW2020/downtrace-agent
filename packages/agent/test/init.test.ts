@@ -140,6 +140,8 @@ describe("a project it can configure", () => {
     [{ express: "^5", mssql: "^11" }, []],
     [{ express: "^5", "@prisma/client": "^7", "@prisma/adapter-mssql": "^7" }, []],
     [{ express: "^5", oracledb: "^6" }, ["oracledb"]],
+    // mysqljs, which TypeORM loads first when it is installed, through the observer of mysql2, whose API it is.
+    [{ express: "^4", typeorm: "^0.3", mysql: "^2.18.1" }, []],
     [{ express: "^5", mongoose: "^9" }, []],
     // Mongoose before 8 runs on a driver before 6, which answers through callbacks (ADR 0237).
     [{ express: "^4", mongoose: "^5.7.7" }, ["mongoose"]],

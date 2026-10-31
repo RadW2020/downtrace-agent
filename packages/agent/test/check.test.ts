@@ -1526,6 +1526,123 @@ describe("a suite Jest runs, whose application queries SQL Server through mssql"
   });
 });
 
+/**
+ * MySQL through `mysql` (mysqljs), the driver TypeORM loads first when it is installed and Knex's `mysql` client uses,
+ * through the observer of `mysql2`: as an application holds its pool, and in a suite Jest runs, where it loads each of
+ * its classes the first time it is used. The server is the one of `support/mysql.ts`, found by `MYSQL_PORT`.
+ */
+const MYSQLJS_SUITE = `
+const http = require("node:http");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const mysql = require("mysql");
+
+const pool = mysql.createPool({ host: "127.0.0.1", port: Number(process.env.MYSQL_PORT), user: "app", connectionLimit: 2 });
+afterAll(() => new Promise((resolve) => pool.end(resolve)));
+const query = (sql, values) => new Promise((resolve, reject) => pool.query(sql, values, (err, rows) => (err ? reject(err) : resolve(rows))));
+
+function get(server, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port: server.address().port, path }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    }).on("error", reject);
+  });
+}
+
+test("users", async () => {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await query("SELECT id, email FROM users WHERE id = ?", [Number(req.params.id)]);
+    res.send("user");
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  for (const id of [1, 2, 3]) expect(await get(server, "/users/" + id)).toBe(200);
+  await new Promise((resolve) => server.close(resolve));
+});
+`;
+
+const MYSQLJS_APP = `
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const express = require("express");
+const mysql = require("mysql");
+
+const pool = mysql.createPool({ host: "127.0.0.1", port: Number(process.env.MYSQL_PORT), user: "app", connectionLimit: 2 });
+const query = (sql, values) => new Promise((resolve, reject) => pool.query(sql, values, (err, rows) => (err ? reject(err) : resolve(rows))));
+
+async function main() {
+  const lookups = Number(readFileSync(join(__dirname, "lookups.txt"), "utf8"));
+  const app = express();
+  app.get("/users/:id", async (req, res) => {
+    for (let i = 0; i < lookups; i += 1) await query("SELECT id, email FROM users WHERE id = ?", [Number(req.params.id)]);
+    res.send("user");
+  });
+  app.post("/users", (req, res) => res.send("made"));
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  const base = "http://127.0.0.1:" + server.address().port;
+  for (let i = 0; i < 3; i += 1) {
+    const res = await fetch(base + "/users/" + (i + 1));
+    if (res.status !== 200) throw new Error("status " + res.status);
+  }
+  server.close();
+  await new Promise((resolve) => pool.end(resolve));
+}
+main();
+`;
+
+const MYSQLJS_DIR = dirname(createRequire(import.meta.url).resolve("mysql/package.json"));
+
+describe("a suite whose application queries MySQL through mysqljs", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await serverProject(
+      { "app.cjs": MYSQLJS_APP },
+      "node app.cjs",
+      { express: EXPRESS_DIR, mysql: MYSQLJS_DIR },
+      { MYSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups multiplied, in the text the application wrote, and exits 1", () => {
+    expectLookupsMultiplied(checked);
+    expect(route(checked.report, "GET /users/:id").operations[0]?.label).toBe(
+      "SELECT id, email FROM users WHERE id = ?",
+    );
+    expect(checked.report.base?.observers.mysql).toBe("on");
+  });
+});
+
+describe("a suite Jest runs, whose application queries MySQL through mysqljs", () => {
+  let checked: Checked;
+  let database: FakeMysql;
+  beforeAll(async () => {
+    database = await startFakeMysql();
+    checked = await serverProject(
+      {
+        "users.test.js": MYSQLJS_SUITE,
+        "package.json": JSON.stringify({ name: "mysqljs-jest", private: true, jest: { transform: {} } }),
+      },
+      "node node_modules/jest/bin/jest.js --runInBand",
+      { jest: JESTS[0][1], express: EXPRESS4_DIR, mysql: MYSQLJS_DIR },
+      { MYSQL_PORT: String(database.port) },
+    );
+  });
+  afterAll(() => database.close());
+
+  it("sees the lookups the tests' own copy of the driver ran, multiplied", () => {
+    expectLookupsMultiplied(checked);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("a suite whose queries go through postgres.js, imported as ESM", () => {
   // The driver of Drizzle's `postgres-js` and of most Supabase backends. Its ESM copy never enters the module
   // cache, and its first request is a test's: both runs would lose it alike (ADR 0235).

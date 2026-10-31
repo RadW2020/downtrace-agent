@@ -49,7 +49,7 @@ import {
 } from "./instrument/mariadb.ts";
 import { armMongo, patchMongo } from "./instrument/mongodb.ts";
 import { armTedious, patchMssql, patchTedious, watchMssql } from "./instrument/mssql.ts";
-import { armMysql, patchMysql } from "./instrument/mysql.ts";
+import { armMysql, armMysqljs, patchMysql, patchMysqlPool } from "./instrument/mysql.ts";
 import { armPg, instrumentPg } from "./instrument/pg.ts";
 import { armPostgresJs, patchPostgresJs } from "./instrument/postgresjs.ts";
 import { armPrisma, patchPrisma } from "./instrument/prisma.ts";
@@ -660,6 +660,7 @@ export class Agent {
         // the same switch. Its ESM copy is imported, from the start under `check`, as postgres.js's is.
         const armed = armedTogether([
           armMysql({ ...mysqlDeps, from }),
+          armMysqljs({ ...mysqlDeps, from }),
           armMariadb({ ...mysqlDeps, from, early: this.config.checkRoutes !== undefined }),
         ]);
         said(observers, "mysql", armed.state);
@@ -702,6 +703,21 @@ export class Agent {
           name === "mysql2" || (name === "./index.js" && requiredFrom(from, "mysql2", "promise.js")),
         patch: (mysql) => patchMysql(mysql, "unknown", mysqlDeps),
       });
+      // mysqljs loads each class the first time it is used: its connection, from its entry or its pool, and its pool.
+      const fromMysqljs = (from: string, ...file: string[]) => requiredFrom(from, "mysql", ...file);
+      sandbox.push(
+        {
+          matches: (name, from) =>
+            (name === "./lib/Connection" && fromMysqljs(from, "index.js")) ||
+            (name === "./Connection" &&
+              (fromMysqljs(from, "lib", "Pool.js") || fromMysqljs(from, "lib", "PoolConnection.js"))),
+          patch: (Connection) => patchMysql({ Connection }, "unknown", mysqlDeps),
+        },
+        {
+          matches: (name, from) => name === "./lib/Pool" && fromMysqljs(from, "index.js"),
+          patch: (Pool) => patchMysqlPool(Pool, mysqlDeps),
+        },
+      );
       // `mariadb` up to 3.4, whose modules are CommonJS: the connection and the pool its entries require, and the
       // callback API's class. From 3.5 they are ES modules, which Jest's registry does not load.
       const fromMariadb = (from: string, ...file: string[]) => requiredFrom(from, "mariadb", ...file);

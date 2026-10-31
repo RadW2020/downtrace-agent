@@ -178,6 +178,12 @@ describe("what the project runs", () => {
     expect(found.repository).toBe(false);
   });
 
+  it("knows MySQL goes through mysql2, mysqljs or mariadb, whichever the project declares", async () => {
+    const found = await detect(await project({}), pkg({ dependencies: { mysql: "^2", mysql2: "^3", mariadb: "^3" } }));
+    expect(found.observed).toEqual(["mysql2", "mysql", "mariadb"]);
+    expect(found.unobserved).toEqual([]);
+  });
+
   it("knows SQL Server goes through tedious, whoever holds it", async () => {
     const found = await detect(
       await project({}),

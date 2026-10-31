@@ -259,7 +259,7 @@ export function adviceForUnbuiltBase(base: UnbuiltBase): string {
  */
 export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   pg: ["pg", "@prisma/adapter-pg", "slonik", "postgres", "@mikro-orm/postgresql"],
-  mysql: ["mysql2", "@mikro-orm/mysql", "mariadb", "@prisma/adapter-mariadb"],
+  mysql: ["mysql2", "mysql", "@mikro-orm/mysql", "mariadb", "@prisma/adapter-mariadb"],
   mssql: ["tedious", "mssql", "@prisma/adapter-mssql"],
   sqlite: [
     "better-sqlite3",

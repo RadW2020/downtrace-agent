@@ -1,3 +1,4 @@
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { currentContext, recordCallIn, recordErrorIn, recordOperationIn, recordWaitIn, runIn } from "../context.ts";
 import { applicationEntry, type From } from "../entry.ts";
@@ -138,6 +139,38 @@ export function armMysql(deps: InstrumentMysqlDeps & { from?: From | undefined }
 }
 
 /**
+ * MySQL through `mysql` (mysqljs), the driver `mysql2` was written to replace, which TypeORM still loads first when it
+ * is installed and Knex's `mysql` client uses: its API is the one `mysql2` copied, and the same patch reaches it — its
+ * connection's `query`, and its pool's `getConnection`. It exports none of its classes, and loads each the first time it
+ * is used (`loadClass`), so the attach requires them from the package's `lib`: the very modules the application's
+ * driver loads, a cache hit once it has made a connection or a pool, and the classes it will make them from otherwise.
+ */
+export function armMysqljs(deps: InstrumentMysqlDeps & { from?: From | undefined }): Armed {
+  return armDriver<unknown>({
+    driver: "mysql",
+    from: deps.from ?? applicationEntry(),
+    log: deps.log,
+    internalError: deps.internalError,
+    patch: (_module, version, require, resolved) => {
+      const lib = path.join(path.dirname(resolved), "lib");
+      patchMysql(
+        { Connection: require(path.join(lib, "Connection.js")), Pool: require(path.join(lib, "Pool.js")) },
+        version,
+        deps,
+      );
+    },
+  });
+}
+
+/** The wait on a pool alone: mysqljs's `Pool`, as Jest's registry hands it over apart from the connection. */
+export function patchMysqlPool(Pool: unknown, deps: InstrumentMysqlDeps): boolean {
+  const proto = ownerOf((Pool as { prototype?: Proto } | null | undefined)?.prototype, "getConnection");
+  if (!proto) return false;
+  wrapPoolConnection(proto, deps);
+  return true;
+}
+
+/**
  * Wraps `query` or `execute` so the statement counts towards the request that asked for it.
  *
  * Only the instrumentation's own work sits inside the `try`, and all of it is best effort: a bug here must never
@@ -223,21 +256,21 @@ function observe(connection: unknown, args: unknown[], deps: InstrumentMysqlDeps
     return undefined;
   }
 
-  // The command a pool built, handed to the connection with the callback inside it. The driver reads `onResult`
-  // when the statement ends, so replacing it now — before the driver is called — takes in every way it can end.
+  // The command a pool built, handed to the connection with the callback inside it: `onResult` in `mysql2`,
+  // `_callback` in mysqljs. The driver reads it when the statement ends, so replacing it now — before the driver is
+  // called — takes in every way it can end.
   const command = args[0];
-  if (
-    command !== null &&
-    typeof command === "object" &&
-    typeof (command as { onResult?: unknown }).onResult === "function"
-  ) {
-    const holder = command as { onResult: (...cbArgs: unknown[]) => unknown };
-    const onResult = holder.onResult;
-    holder.onResult = function (this: unknown, ...cbArgs: unknown[]): unknown {
-      settle(cbArgs[0]);
-      return runIn(ctx, () => onResult.apply(this, cbArgs));
-    };
-    return undefined;
+  if (command !== null && typeof command === "object") {
+    for (const key of ["onResult", "_callback"] as const) {
+      const holder = command as Record<string, unknown>;
+      const inside = holder[key];
+      if (typeof inside !== "function") continue;
+      holder[key] = function (this: unknown, ...cbArgs: unknown[]): unknown {
+        settle(cbArgs[0]);
+        return runIn(ctx, () => (inside as (...a: unknown[]) => unknown).apply(this, cbArgs));
+      };
+      return undefined;
+    }
   }
 
   // The event form — listeners on the command, or a stream — settles on events whose listeners are the

@@ -31,7 +31,7 @@ export const FRAMEWORK_PACKAGES = [
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
  * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it) and through
- * postgres.js (`postgres`), MySQL through `mysql2` and `mariadb` (and Prisma's adapter for it), SQL Server through
+ * postgres.js (`postgres`), MySQL through `mysql2`, `mysql` and `mariadb` (and Prisma's adapter for it), SQL Server through
  * `tedious` (and `mssql` and Prisma's adapter, which query through it), SQLite through `better-sqlite3` (and Prisma's
  * adapter for it) and `libsql` (and `@libsql/client`, which opens a file with it) and `sqlite3` (Knex's and
  * Sequelize's), MongoDB through `mongodb` (and Mongoose, which sends every command through it), Prisma from 3.15
@@ -47,6 +47,7 @@ export const OBSERVED_PACKAGES = [
   "postgres",
   "@mikro-orm/postgresql",
   "mysql2",
+  "mysql",
   "@mikro-orm/mysql",
   "mariadb",
   "@prisma/adapter-mariadb",
@@ -74,7 +75,7 @@ export const OBSERVED_PACKAGES = [
  * it would see as calls. A route with nothing observed, in a project that depends on one of them, is most likely a
  * route whose work went through it.
  */
-export const UNOBSERVED_PACKAGES = ["mysql", "oracledb", "kafkajs", "amqplib"] as const;
+export const UNOBSERVED_PACKAGES = ["oracledb", "kafkajs", "amqplib"] as const;
 
 /**
  * The packages of `UNOBSERVED_PACKAGES` a project depends on, and Prisma's driver adapters whose driver the
