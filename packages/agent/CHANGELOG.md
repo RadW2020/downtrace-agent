@@ -1,5 +1,11 @@
 # @downtrace/agent
 
+## 0.19.0
+
+### Minor Changes
+
+- f4277be: Neon's driver, `@neondatabase/serverless`, is observed over its WebSocket. Its `Pool` and `Client` are `pg`'s, bundled into the package, and their queries are now counted as Postgres's under the `pg` switch, by host and with the wait for a pool connection: Drizzle's `neon-serverless`, `@vercel/postgres` and Prisma's `@prisma/adapter-neon` all query through them. `init` names the three as observed. Its `neon()` over `fetch` stays a call to Neon's host.
+
 ## 0.18.1
 
 ### Patch Changes
