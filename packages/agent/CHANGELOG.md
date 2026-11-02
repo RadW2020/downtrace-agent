@@ -1,5 +1,20 @@
 # @downtrace/agent
 
+## 0.20.0
+
+### Minor Changes
+
+- a66a2d7: What is left of the path after a mount that answered no longer travels: it is `(unmatched)`.
+  
+  A middleware that answers under a mount before any route matched — a 401 from `app.use("/tenants/:tenant", auth)`,
+  a file from `app.use("/assets", express.static(dir))` — was named by the mount's pattern and the rest of the path
+  through the heuristic, so a plain word in it, the secret of a webhook included, left the server as written. The
+  route is now the mount's pattern followed by `/(unmatched)`: `/tenants/:tenant/(unmatched)`, `/assets/(unmatched)`.
+  
+  This changes those route identities once: `/tenants/:tenant/users/:id` is now `/tenants/:tenant/(unmatched)`, a
+  finding on the old route receives no data, and an exclusion written against it has to be rewritten against the new
+  name.
+
 ## 0.19.0
 
 ### Minor Changes
