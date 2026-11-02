@@ -291,19 +291,20 @@ function expressTemplate(req: RouteSource): string | undefined {
  * The template of a request that no route matched, when a mount still carries it: a middleware answered
  * before any route matched, and `baseUrl` is what the mounts it went through took of the path (gh-899).
  *
- * The mount comes out as the patterns it was registered with, and what is left of the path, `url`, goes
- * through the heuristic. With nothing on `baseUrl` there is no mount to name and no template at all — a 404
- * of finalhandler, a middleware of the first level, and an error answered by the app's handler after Express
- * put `baseUrl` back to nothing — and the request is `(unmatched)`, as `routeOf` says (DT-56).
+ * The mount comes out as the patterns it was registered with, and what is left of the path is `(unmatched)`:
+ * no route names it, and a word with no digit is a segment no rule of shape tells from a route's own words, so
+ * nothing of it travels (invariant 5, DT-106). With nothing on `baseUrl` there is no mount to name and no
+ * template at all — a 404 of finalhandler, a middleware of the first level, and an error answered by the app's
+ * handler after Express put `baseUrl` back to nothing — and the request is `(unmatched)`, as `routeOf` says
+ * (DT-56).
  */
 function unmatchedTemplate(req: RouteSource): string | undefined {
   const base = typeof req.baseUrl === "string" ? req.baseUrl : "";
   if (base === "") return undefined;
-  const asked = typeof req.url === "string" ? req.url : "/";
   // A read of the application's objects that throws is a walk the request cannot be trusted to: the whole
   // stretch is a parameter, and the request is recorded all the same (invariant 2).
   const links = safeRead(() => baseLinks(req.app, base)) ?? [{ value: base, pattern: undefined }];
-  return joinTemplate(links, heuristicTemplate(asked));
+  return joinTemplate(links, `/${UNMATCHED_ROUTE}`);
 }
 
 /** A router as the walk sees it: the layers, in registration order. Express calls it `stack`. */

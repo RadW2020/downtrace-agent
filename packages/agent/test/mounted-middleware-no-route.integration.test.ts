@@ -75,11 +75,17 @@ interface Kit {
 }
 
 const kits: Kit[] = [
-  { name: "Express 5", make: express, arm: async () => {}, wildcard: "/orgs/*rest", arrayRoute: "/b/literal/u/:id" },
+  {
+    name: "Express 5",
+    make: express,
+    arm: async () => {},
+    wildcard: "/orgs/*rest",
+    arrayRoute: "/b/literal/(unmatched)",
+  },
   {
     name: "Express 4",
     wildcard: "/orgs/*",
-    arrayRoute: "/:param/:param/u/:id",
+    arrayRoute: "/:param/:param/(unmatched)",
     make: express4 as unknown as typeof express,
     arm: async () => {
       const root = await express4Root();
@@ -122,8 +128,8 @@ async function run(kit: Kit, build: (app: express.Express, make: typeof express)
  * gh-899. A middleware that answers before any route matched leaves the request with no `req.route`, and its
  * route came from `originalUrl` as the client wrote it: under a mount with a parameter, the tenant's name
  * went to the cloud inside the route (invariant 5). With the mount still on `baseUrl` at the end of the
- * response, the mount comes out as the pattern it was registered with, and what is left of the path goes
- * through the heuristic.
+ * response, the mount comes out as the pattern it was registered with, and what is left of the path is
+ * `(unmatched)` (DT-106).
  */
 describe.each(kits)("a middleware that answers under a mount keeps the mount's pattern on $name (gh-899)", (kit) => {
   it("names the mount of a router's middleware by its pattern, not by the tenant", async () => {
@@ -139,7 +145,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/tenants/acme-corp/users/42", "/tenants/otro/users/7"],
     );
     expect(out.statuses).toEqual([401, 401]);
-    expect([...out.routes]).toEqual([["/tenants/:tenant/users/:id", 2]]);
+    expect([...out.routes]).toEqual([["/tenants/:tenant/(unmatched)", 2]]);
     expect(out.bytes, "the tenant's name does not leave").not.toContain("acme-corp");
   });
 
@@ -153,7 +159,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       },
       ["/tenants/acme-corp/users/42"],
     );
-    expect([...out.routes]).toEqual([["/tenants/:tenant/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/tenants/:tenant/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -170,7 +176,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/orgs/acme-corp/members/7"],
     );
     expect(out.statuses).toEqual([403]);
-    expect([...out.routes]).toEqual([["/orgs/:org/members/:id", 1]]);
+    expect([...out.routes]).toEqual([["/orgs/:org/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -188,7 +194,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
     );
     expect(out.statuses).toEqual([403]);
     // The wildcard took the whole path, so the whole path is the mount: every segment of it a parameter.
-    expect([...out.routes].map(([route]) => route)).toEqual(["/:param/:param/:param/:param/:param/:param"]);
+    expect([...out.routes].map(([route]) => route)).toEqual(["/:param/:param/:param/:param/:param/:param/(unmatched)"]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -202,7 +208,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       },
       ["/t/acme-corp/users/42"],
     );
-    expect([...out.routes].map(([route]) => route)).toEqual(["/:param/:param/users/:id"]);
+    expect([...out.routes].map(([route]) => route)).toEqual(["/:param/:param/(unmatched)"]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -221,7 +227,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
     );
     expect(out.statuses).toEqual([401]);
     expect([...out.routes], "a stretch that cannot be told is a parameter, not either pattern").toEqual([
-      ["/:param/:param/users/:id", 1],
+      ["/:param/:param/(unmatched)", 1],
     ]);
     expect(out.bytes).not.toContain("acme-corp");
   });
@@ -239,7 +245,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       },
       ["/admin/users/42"],
     );
-    expect([...out.routes]).toEqual([["/admin/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/admin/(unmatched)", 1]]);
   });
 
   it("keeps a literal mount when the other mount of its stretch is a middleware that took less", async () => {
@@ -255,7 +261,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       },
       ["/api/v1/users/42"],
     );
-    expect([...out.routes]).toEqual([["/api/v1/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/api/v1/(unmatched)", 1]]);
   });
 
   it("does not guess between a router and a mount that matched stretches of different lengths", async () => {
@@ -274,7 +280,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/api/v1/users/42"],
     );
     expect(out.statuses).toEqual([401]);
-    expect([...out.routes]).toEqual([["/:param/:param/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/:param/:param/(unmatched)", 1]]);
   });
 
   it("does not guess between two routers on the same stretch that explain the rest differently", async () => {
@@ -295,7 +301,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/api/tenants/acme-corp/users/42"],
     );
     expect(out.statuses).toEqual([401]);
-    expect([...out.routes]).toEqual([["/api/:param/:param/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/api/:param/:param/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -312,7 +318,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/orgs/acme-corp/teams/red/members/7"],
     );
     expect(out.statuses).toEqual([403]);
-    expect([...out.routes]).toEqual([["/orgs/:org/teams/:team/members/:id", 1]]);
+    expect([...out.routes]).toEqual([["/orgs/:org/teams/:team/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -328,7 +334,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       },
       ["/api/tenants/acme-corp/users/42"],
     );
-    expect([...out.routes]).toEqual([["/api/tenants/:tenant/users/:id", 1]]);
+    expect([...out.routes]).toEqual([["/api/tenants/:tenant/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
   });
 
@@ -348,8 +354,8 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/admin/users/42", "/tenants/acme-corp/users/7"],
     );
     expect([...out.routes].sort()).toEqual([
-      ["/admin/users/:id", 1],
-      ["/tenants/:tenant/users/:id", 1],
+      ["/admin/(unmatched)", 1],
+      ["/tenants/:tenant/(unmatched)", 1],
     ]);
     expect(out.bytes).not.toContain("acme-corp");
   });
@@ -372,7 +378,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/api/admin/reports/42"],
     );
     expect(out.statuses).toEqual([403]);
-    expect([...out.routes]).toEqual([["/api/admin/reports/:id", 1]]);
+    expect([...out.routes]).toEqual([["/api/admin/(unmatched)", 1]]);
   });
 
   it("keeps the literal of a mount nested in a prefix that another mount shares", async () => {
@@ -389,7 +395,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/api/admin/reports/42"],
     );
     expect(out.statuses).toEqual([403]);
-    expect([...out.routes]).toEqual([["/api/admin/reports/:id", 1]]);
+    expect([...out.routes]).toEqual([["/api/admin/(unmatched)", 1]]);
   });
 
   it("does not take the first path of a mount registered with several for the one that matched", async () => {
@@ -422,7 +428,7 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/api/a/acme-corp/b/globex/z/1"],
     );
     expect(out.statuses).toEqual([403]);
-    expect([...out.routes]).toEqual([["/:param/:param/:param/:param/:param/z/:id", 1]]);
+    expect([...out.routes]).toEqual([["/:param/:param/:param/:param/:param/(unmatched)", 1]]);
     expect(out.bytes).not.toContain("acme-corp");
     expect(out.bytes).not.toContain("globex");
   });
@@ -438,9 +444,48 @@ describe.each(kits)("a middleware that answers under a mount keeps the mount's p
       ["/static/app.css", "/nothing/here"],
     );
     expect(out.statuses).toEqual([200, 404]);
-    // What a mount took is still named by it, and the rest of the path by the heuristic. What no mount took
+    // What a mount took is still named by it, and the rest of the path is (unmatched). What no mount took
     // and no route matched is nothing to be named by, and the path the client asked for does not travel.
-    expect([...out.routes].map(([route]) => route).sort()).toEqual(["(unmatched)", "/static/app.css"]);
+    expect([...out.routes].map(([route]) => route).sort()).toEqual(["(unmatched)", "/static/(unmatched)"]);
     expect(out.bytes).not.toContain("nothing");
+  });
+});
+
+/**
+ * DT-106. What is left of the path after a mount that answered is no route's, and a word with no digit is a
+ * segment no rule of shape tells from a route's own words: through the heuristic, `/api/webhook/plainsecret`
+ * left the server as written. The mount stays as the readable part, by its pattern, and the rest is
+ * `(unmatched)`, as a request no route names is (invariant 5, ADR 0231).
+ */
+describe.each(kits)("the rest of the path after a mount that answered does not travel on $name (DT-106)", (kit) => {
+  it("names a middleware that answers under a mount by the mount and (unmatched), and no byte of the word leaves", async () => {
+    const out = await run(
+      kit,
+      (app, make) => {
+        app.use("/api", (_req, res) => {
+          res.status(401).end();
+        });
+        app.use("/tenants/:tenant", (_req, res) => {
+          res.status(401).end();
+        });
+        app.use("/assets", make.static(path.join(import.meta.dirname, "support")));
+      },
+      [
+        "/api/webhook/plainsecret",
+        "/api/otherword",
+        "/tenants/acme/webhook/plainsecret",
+        "/tenants/globex/users/42",
+        "/assets/express4-root.ts",
+      ],
+    );
+    expect(out.statuses).toEqual([401, 401, 401, 401, 200]);
+    expect([...out.routes].sort()).toEqual([
+      ["/api/(unmatched)", 2],
+      ["/assets/(unmatched)", 1],
+      ["/tenants/:tenant/(unmatched)", 2],
+    ]);
+    for (const word of ["plainsecret", "webhook", "otherword", "acme", "globex", "users", "express4-root"]) {
+      expect(out.bytes, `«${word}» does not leave`).not.toContain(word);
+    }
   });
 });

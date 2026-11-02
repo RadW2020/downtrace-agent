@@ -293,7 +293,7 @@ describe("what actually leaves, in the bytes", () => {
     }
     ch.unsubscribe(finish);
     server.close();
-    expect(routes, "the two requests were read").toEqual(["/admin/users/:id/orders", "/admin/reset-password/:id"]);
+    expect(routes, "the two requests were read").toEqual(["/admin/(unmatched)", "/admin/(unmatched)"]);
 
     // The aggregates door: the real interval the sender enqueues.
     const recorder = new IntervalAggregator({ now: () => 1_000_000 });
@@ -319,7 +319,7 @@ describe("what actually leaves, in the bytes", () => {
     expect(await sender.flush()).toBe(true);
     expect(body, "nothing was sent").not.toBe("");
 
-    for (const value of ["ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB"]) {
+    for (const value of ["ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB", "reset-password", "orders"]) {
       expect(body, `«${value}» reached the wire`).not.toContain(value);
     }
     // And what those values became did arrive, prefix and all: omission has to be the exception.
@@ -425,7 +425,10 @@ describe("what actually leaves, in the bytes", () => {
     }
     ch.unsubscribe(finish);
     server.close();
-    expect(routes, "the two requests were read").toEqual(["/tenants/:tenant/users/:id", "/tenants/:tenant/users/:id"]);
+    expect(routes, "the two requests were read").toEqual([
+      "/tenants/:tenant/(unmatched)",
+      "/tenants/:tenant/(unmatched)",
+    ]);
 
     const recorder = new IntervalAggregator({ now: () => 1_000_000 });
     for (const route of routes) recorder.record("GET", route, 401, 1);
@@ -450,10 +453,10 @@ describe("what actually leaves, in the bytes", () => {
     expect(await sender.flush()).toBe(true);
     expect(body, "nothing was sent").not.toBe("");
 
-    for (const tenant of ["acme-corp", "otro"]) {
+    for (const tenant of ["acme-corp", "otro", "users"]) {
       expect(body, `«${tenant}» reached the wire`).not.toContain(tenant);
     }
-    expect(body).toContain(`"route":"/tenants/:tenant/users/:id"`);
+    expect(body).toContain(`"route":"/tenants/:tenant/(unmatched)"`);
     expect(validate(JSON.parse(body)), ajv.errorsText(validate.errors)).toBe(true);
   });
 });

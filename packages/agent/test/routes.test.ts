@@ -397,9 +397,9 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
 
   const request = (app: unknown) => ({ url: "/users/42", baseUrl: "/tenants/acme-corp", app });
 
-  it("names the mount by the pattern it was registered with, and the rest of the path by the heuristic", () => {
+  it("names the mount by the pattern it was registered with, and the rest of the path (unmatched) (DT-106)", () => {
     const { app } = mounted();
-    expect(routeOf(request(app))).toBe("/tenants/:tenant/users/:id");
+    expect(routeOf(request(app))).toBe("/tenants/:tenant/(unmatched)");
   });
 
   it("is (unmatched), and not the path the client asked for, when nothing is left on baseUrl (DT-56)", () => {
@@ -419,7 +419,7 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
       },
     ];
     expect(() => routeOf(request(app))).not.toThrow();
-    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+    expect(routeOf(request(app))).toBe("/:param/:param/(unmatched)");
   });
 
   it("says :param for the stretch when the layer's handle cannot be read, and throws nothing", () => {
@@ -431,7 +431,7 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
       },
     });
     expect(() => routeOf(request(app))).not.toThrow();
-    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+    expect(routeOf(request(app))).toBe("/:param/:param/(unmatched)");
   });
 
   it("does not take the other mount's word for a stretch when one of the two cannot be read", () => {
@@ -447,7 +447,7 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
       },
     });
     expect(() => routeOf(request(app))).not.toThrow();
-    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+    expect(routeOf(request(app))).toBe("/:param/:param/(unmatched)");
   });
 
   it("does not run the matcher of a mount registered with a regular expression that keeps state", () => {
@@ -457,7 +457,7 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
       res.status(200).end("pong");
     });
     stateful.lastIndex = 0;
-    expect(routeOf({ url: "/x", baseUrl: "/ping", app })).toBe("/:param/x");
+    expect(routeOf({ url: "/x", baseUrl: "/ping", app })).toBe("/:param/(unmatched)");
     expect(stateful.lastIndex, "the application's own regexp is left where it was").toBe(0);
   });
 
@@ -470,7 +470,7 @@ describe("routeOf when a middleware answered before any route matched (gh-899)",
       },
     });
     expect(() => routeOf(request(app))).not.toThrow();
-    expect(routeOf(request(app))).toBe("/:param/:param/users/:id");
+    expect(routeOf(request(app))).toBe("/:param/:param/(unmatched)");
   });
 });
 
@@ -510,7 +510,7 @@ describe("routeOf for a request no route named (DT-56)", () => {
         baseUrl: "/tenants/acme-corp",
         app: mounted,
       }),
-    ).toBe("/tenants/:tenant/users/:id");
+    ).toBe("/tenants/:tenant/(unmatched)");
   });
 
   it("is the heuristic's, as it was, for a request Express did not answer", () => {

@@ -63,7 +63,8 @@ function routesOf(batch: AggregatesBatch | undefined): Map<string, number> {
  * gh-766. A router mounted under a prefix that answers from its own middleware — before any route matched —
  * lost the mount's prefix in the route: Express trims `req.url` as the request passes through the mount, and
  * the heuristic read what was left, so `/admin/x` and `/x` landed on the same route, and the 401s of a mounted
- * admin router were attributed to a path that does not exist at the top level.
+ * admin router were attributed to a path that does not exist at the top level. The rest of the path after the
+ * mount is `(unmatched)` since DT-106: a plain word in it is no route's, and it does not travel.
  *
  * Real Express (5.2.1, the package's devDependency), real agent, real batch, like `agent.integration.test.ts`.
  *
@@ -71,7 +72,7 @@ function routesOf(batch: AggregatesBatch | undefined): Map<string, number> {
  * and a mount registered before the record is armed comes out as `:param`.
  */
 describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () => {
-  it("names a middleware's answer by the path the client asked for, and leaves the prefix-less path alone", async () => {
+  it("names a middleware's answer by its mount, and leaves the prefix-less path alone", async () => {
     const sink = await startSink();
     const agent = createAgent(config(sink.url), { log: quiet });
     agent.start();
@@ -101,8 +102,8 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     expect(validate(batch), ajv.errorsText(validate.errors)).toBe(true);
 
     const byRoute = routesOf(batch);
-    expect([...byRoute.keys()].sort(), "the two requests are two routes").toEqual(["/admin/x", "/x"]);
-    expect(byRoute.get("/admin/x")).toBe(1);
+    expect([...byRoute.keys()].sort(), "the two requests are two routes").toEqual(["/admin/(unmatched)", "/x"]);
+    expect(byRoute.get("/admin/(unmatched)")).toBe(1);
     expect(byRoute.get("/x")).toBe(1);
   });
 
@@ -125,10 +126,10 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
 
     expect(await hit(url, "/static/app.css")).toBe(200);
     expect(await agent.flushNow()).toBe(true);
-    expect([...routesOf(sink.batches[0]).keys()]).toEqual(["/static/app.css"]);
+    expect([...routesOf(sink.batches[0]).keys()]).toEqual(["/static/(unmatched)"]);
   });
 
-  it("folds a value in any segment of the path, the prefix and all, and the value does not leave", async () => {
+  it("keeps the prefix, and nothing of the rest of the path leaves (DT-106)", async () => {
     const sink = await startSink();
     const agent = createAgent(config(sink.url), { log: quiet });
     agent.start();
@@ -152,14 +153,14 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     expect(await agent.flushNow()).toBe(true);
     const batch = sink.batches[0];
     const byRoute = routesOf(batch);
-    expect([...byRoute.keys()].sort()).toEqual(["/admin/reset-password/:id", "/admin/users/:id/orders"]);
+    expect([...byRoute.keys()].sort()).toEqual(["/admin/(unmatched)"]);
     const body = JSON.stringify(batch);
-    for (const value of ["ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB"]) {
+    for (const value of ["ana%40cliente.com", "Zx8kQ2vN4pL9mR7tY3wB", "reset-password", "orders"]) {
       expect(body, `«${value}» does not leave`).not.toContain(value);
     }
   });
 
-  it("still lets a matched route win over the heuristic", async () => {
+  it("still lets a matched route win over the mount", async () => {
     const sink = await startSink();
     const agent = createAgent(config(sink.url), { log: quiet });
     agent.start();
@@ -189,7 +190,8 @@ describe("a mounted router's middleware keeps the mount's prefix (gh-766)", () =
     expect(await hit(url, "/admin/items/42")).toBe(200);
     expect(await agent.flushNow()).toBe(true);
     const byRoute = routesOf(sink.batches[0]);
-    expect(byRoute.get("/admin/secret"), "the middleware's answer, by the path asked for").toBe(1);
+    expect(byRoute.get("/admin/(unmatched)"), "the middleware's answer, by the mount").toBe(1);
+    expect(byRoute.get("/admin/secret")).toBeUndefined();
     expect(byRoute.get("/admin/items/:id"), "the matched route, by its template").toBe(1);
     expect(byRoute.get("/admin/42")).toBeUndefined();
   });

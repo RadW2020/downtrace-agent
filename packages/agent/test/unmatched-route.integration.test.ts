@@ -359,9 +359,10 @@ describe.each(kits)("a middleware under a mount with a parameter, on $name (DT-2
     expectNoneOf(JSON.stringify(batch), TENANTS);
   });
 
-  it("answers from the router itself, and the mount is still on baseUrl: it keeps the pattern, with no tenant in the batch", async () => {
+  it("answers from the router itself, and the mount is still on baseUrl: it keeps the pattern, and nothing past it travels", async () => {
     // The case gh-899 closed, beside the two that it did not reach: the mount is read from the routers the
-    // request went through while `baseUrl` still holds it, and that is not a request nothing named.
+    // request went through while `baseUrl` still holds it, and that is not a request nothing named. What is
+    // left of the path after the mount is no route's, and it is `(unmatched)` (DT-106).
     const { ask, statuses, flush } = await serve(kit, (app, make) => {
       const router = make.Router();
       router.use((_req, res) => {
@@ -372,7 +373,7 @@ describe.each(kits)("a middleware under a mount with a parameter, on $name (DT-2
     for (const p of PATHS) await ask(p);
     expect(statuses).toEqual([401, 401]);
     const batch = await flush();
-    expect(routesOf(batch)).toEqual({ "GET /tenants/:tenant/users/:id": 2 });
+    expect(routesOf(batch)).toEqual({ "GET /tenants/:tenant/(unmatched)": 2 });
     expectNoneOf(JSON.stringify(batch), TENANTS);
   });
 });

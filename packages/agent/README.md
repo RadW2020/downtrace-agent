@@ -1229,8 +1229,10 @@ app (Express records only the last, and the other is never named after it), for 
 started — start the agent before the routes are registered, and `--import` does that for you — and for routes
 registered on a copy of Express different from the one the agent wrapped (a duplicated dependency). A middleware that
 answers under a mount before any route matched — a 401 from `app.use("/tenants/:tenant", auth)` — keeps the mount's
-pattern too: the mount is read from the routers the request went through, and the rest of the path goes through the
-heuristic below. Where the same stretch is matched by two mounts registered with different patterns, or by routers the
+pattern too: the mount is read from the routers the request went through, and the rest of the path, which no route
+names, is `(unmatched)`: `/tenants/:tenant/(unmatched)`, whatever was asked after the tenant, and nothing of it
+travels. A file served by a static mount that is not `/`, `app.use("/assets", express.static(dir))`, is
+`/assets/(unmatched)` the same way. Where the same stretch is matched by two mounts registered with different patterns, or by routers the
 walk cannot tell apart, the stretch comes out as `:param` per segment — and so does a mount registered with several paths on Express 4, which keeps no matcher per path.
 
 **A request that no route names is `(unmatched)`.** When Express is answering and no route matched the request and
@@ -1260,8 +1262,7 @@ every build renames. Its cost is a camelCase word of exactly eight after the las
 `:id` too, while `user-settings.js` keeps its name.
 A plain word — a name, a slug, a file name with no number and no hash — travels as written: no rule of shape can tell a
 parameter from a route's own words, and the ways to keep it out are an endpoint exclusion, matched against
-the template, and minimal mode. The same heuristic names the rest of the path after a mount that answered, as
-above.
+the template, and minimal mode.
 
 A route registered after the server starts listening is that case until it exists. n8n listens first, answers
 «starting up» from a middleware while it migrates, then lets Express answer a 404, and registers
@@ -1342,6 +1343,12 @@ Hono, then Fastify, then Express.
 request that was a path — `/webhook/:id`, `/assets/:id`, a 404's path, a path with a plain word in it — is seen as
 `GET (unmatched)` or the method's own, a finding on the old route receives no data and is not declared recovered,
 and an exclusion written against such a path has to be rewritten against `(unmatched)`.
+
+**The first version that names the rest of the path after a mount that answered `(unmatched)` changes their route
+identities, once**: a request a middleware answered under a mount — `/tenants/:tenant/users/:id`, `/static/app.css`
+— is seen as the mount's pattern followed by `/(unmatched)`, `/tenants/:tenant/(unmatched)` and
+`/static/(unmatched)`; a finding on the old route receives no data, and an exclusion written against it has to be
+rewritten against the new name.
 
 **The first version that names Hono routes by their templates changes their route identities, once**, as the one for
 Fastify did: a route that was a path — `/users/ana`, a 404's words — is seen as the template it became or as
