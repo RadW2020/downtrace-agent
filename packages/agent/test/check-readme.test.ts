@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import { USAGE } from "../src/check/args.ts";
 import {
@@ -11,10 +10,11 @@ import {
 } from "../src/check/compare.ts";
 import { CONFIG_FILE, CONFIG_KEYS } from "../src/check/config.ts";
 import { FAILURE_CODES, REPORT_SCHEMA } from "../src/check/report.ts";
+import { readDocumentation } from "./support/documentation.ts";
 
 /**
  * What `downtrace check` can say is in the source — the reasons a route is not evaluated, the ways a comparison
- * fails, the runners that lose a profile, the keys of the configuration — and what the README tells its readers
+ * fails, the runners that lose a profile, the keys of the configuration — and what the documentation (the README and guide/) tells its readers
  * has to be the same list. A table written by hand drifts the day somebody adds a seventh row to the code, so each
  * one is read from the source and looked for in the text (and `downtrace init` follows what the README says).
  */
@@ -22,7 +22,7 @@ import { FAILURE_CODES, REPORT_SCHEMA } from "../src/check/report.ts";
 let readme: string;
 beforeAll(async () => {
   // Without the backticks and the bold, which are how the README writes a flag and a status, and not part of them.
-  readme = (await readFile(new URL("../README.md", import.meta.url), "utf8")).replaceAll("`", "").replaceAll("**", "");
+  readme = (await readDocumentation()).replaceAll("`", "").replaceAll("**", "");
 });
 
 const says = (text: string): boolean => readme.includes(text);

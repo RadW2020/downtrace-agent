@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   FRAMEWORK_PACKAGES,
@@ -9,10 +8,11 @@ import {
 } from "../src/init/detect.ts";
 import { REGISTER_FUNCTION } from "../src/init/files.ts";
 import { INIT_FAILURE_CODES, INIT_SCHEMA, MISSING_CODES } from "../src/init/report.ts";
+import { readDocumentation } from "./support/documentation.ts";
 
 /**
- * What `downtrace init` looks for, says and writes is in the source, and what the README tells its readers has to be
- * the same: each list is read from the source and looked for in the text. The hook it writes is the README's own,
+ * What `downtrace init` looks for, says and writes is in the source, and what the documentation (the README and guide/) tells its readers has
+ * to be the same: each list is read from the source and looked for in the text. The hook it writes is the README's own,
  * character for character, so that a person who follows the README and a coding agent that runs init end with the
  * same file.
  */
@@ -20,7 +20,7 @@ import { INIT_FAILURE_CODES, INIT_SCHEMA, MISSING_CODES } from "../src/init/repo
 let raw: string;
 let readme: string;
 beforeAll(async () => {
-  raw = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  raw = await readDocumentation();
   // Without the backticks and the bold, which are how the README writes a name and a status, and not part of them.
   readme = raw.replaceAll("`", "").replaceAll("**", "");
 });
