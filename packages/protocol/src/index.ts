@@ -51,7 +51,7 @@ export {
 } from "./generated/boundaries.ts";
 /**
  * The endpoint's dependency cap and the kinds it is counted against, and the most requests a capture's
- * evidence may carry — generated from the schemas (gh-776, gh-901).
+ * evidence may carry — generated from the schemas.
  */
 export { DEPENDENCIES_MAX_ITEMS_V0, DEPENDENCY_KINDS_V0, EVIDENCE_REQUESTS_MAX_ITEMS_V0 } from "./generated/caps.ts";
 export type {
@@ -64,7 +64,7 @@ export type { IngestResponse, PendingCapture } from "./generated/ingest-response
 /**
  * The protocol version this package speaks, and every minor of v0 ever published. Both are generated from the
  * schema's `protocol` enum, which is the only thing that decides what the cloud accepts: an agent on an older
- * minor keeps working because fields are only ever added, and always optional (ADR 0008).
+ * minor keeps working because fields are only ever added, and always optional.
  */
 export { ACCEPTED_PROTOCOL_VERSIONS_V0, PROTOCOL_VERSION } from "./generated/versions.ts";
 

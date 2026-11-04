@@ -2,7 +2,7 @@
 /** The most dependencies one endpoint may carry in a batch. */
 export const DEPENDENCIES_MAX_ITEMS_V0 = 64;
 
-/** The most requests a capture's evidence may carry: the ring is sized as this minus the reserves' room (gh-901). */
+/** The most requests a capture's evidence may carry: the ring is sized as this minus the reserves' room. */
 export const EVIDENCE_REQUESTS_MAX_ITEMS_V0 = 4096;
 
 /** The dependency kinds the schema names, in the order it names them. */

@@ -83,7 +83,7 @@ const current = accepted[accepted.length - 1];
 await writeFile(
   `${outDir}versions.ts`,
   `${header}
-/** Every published minor of v0, oldest first. The cloud never stops accepting one it published (ADR 0008). */
+/** Every published minor of v0, oldest first. The cloud never stops accepting one it published. */
 export const ACCEPTED_PROTOCOL_VERSIONS_V0 = [${accepted.map((v) => JSON.stringify(v)).join(", ")}] as const;
 
 /** The newest published minor: what an up-to-date agent stamps on every batch. */
@@ -136,7 +136,7 @@ await writeFile(
 /** The most dependencies one endpoint may carry in a batch. */
 export const DEPENDENCIES_MAX_ITEMS_V0 = ${depsCap};
 
-/** The most requests a capture's evidence may carry: the ring is sized as this minus the reserves' room (gh-901). */
+/** The most requests a capture's evidence may carry: the ring is sized as this minus the reserves' room. */
 export const EVIDENCE_REQUESTS_MAX_ITEMS_V0 = ${evidenceRequestsCap};
 
 /** The dependency kinds the schema names, in the order it names them. */
@@ -161,7 +161,7 @@ export const AGGREGATES_PATH = ${JSON.stringify(ingestPath)};
 /** Path template that receives a capture's evidence. \`{id}\` is the capture's identifier. */
 export const CAPTURE_EVIDENCE_PATH = ${JSON.stringify(evidencePathTemplate)};
 
-/** The evidence path for one capture. Here rather than in every caller: one place builds it (gh-322). */
+/** The evidence path for one capture. Here rather than in every caller: one place builds it. */
 export function captureEvidencePath(id: string): string {
   return CAPTURE_EVIDENCE_PATH.replace("{id}", encodeURIComponent(id));
 }

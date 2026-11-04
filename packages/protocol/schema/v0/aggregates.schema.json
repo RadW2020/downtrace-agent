@@ -43,7 +43,7 @@
       "items": {
         "$ref": "#/$defs/Interval"
       },
-      "description": "The intervals this batch carries. May be empty whenever the batch carries anything else: a process that serves no requests closes no interval, and nothing else a batch carries hangs off one — tying delivery to an interval lost the profile at every shutdown (gh-375) and every exception of a process with no traffic (gh-627). A batch that carries nothing at all is refused by the cloud with a reason, which the schema cannot say without making the generated types unusable."
+      "description": "The intervals this batch carries. May be empty whenever the batch carries anything else: a process that serves no requests closes no interval, and nothing else a batch carries hangs off one — tying delivery to an interval lost the profile at every shutdown and every exception of a process with no traffic. A batch that carries nothing at all is refused by the cloud with a reason, which the schema cannot say without making the generated types unusable."
     },
     "profile": {
       "$ref": "#/$defs/Profile"
@@ -70,11 +70,11 @@
       "items": {
         "$ref": "#/$defs/LocalTrigger"
       },
-      "description": "Local signals that ask for a capture. `product.md:124` gives the instrumentation «trigger on local signals»: it sees a process in trouble before any aggregate crosses the cloud, and asking in the batch costs no channel of its own — the answer already carries the orders (ADR 0071). Absent from every sender that predates it and from every batch with nothing to ask. The cloud decides: the same budget, cooldown and concurrency as any other capture (`product.md:122`), and a refusal is silence, because there is nothing the instrumentation would do differently."
+      "description": "Local signals that ask for a capture. The instrumentation sees a process in trouble before any aggregate crosses the cloud, and asking in the batch costs no channel of its own — the answer already carries the orders. Absent from every sender that predates it and from every batch with nothing to ask. The cloud decides: the same budget, cooldown and concurrency as any other capture, and a refusal is silence, because there is nothing the instrumentation would do differently."
     },
     "ending": {
       "enum": ["signal", "exit", "idle"],
-      "description": "This batch is the last one: the process is leaving deliberately and has already been handed everything the instrumentation was holding. `signal`, a SIGTERM or SIGINT the instrumentation's own handler saw; `exit`, an application that awaited `shutdown()` before calling `process.exit()`; `idle`, an event loop that emptied. Absent means **this sender did not say**, the same reading as `observers` \u2014 never that it ended badly: an instrumentation older than this never says it, and a process an exception killed says nothing because it cannot. It is the half of ERR-04 the cloud cannot infer \u2014 from outside, every ending looks like batches stopping \u2014 and it carries no instant, because the one that matters is when the batch arrived, which the cloud measures."
+      "description": "This batch is the last one: the process is leaving deliberately and has already been handed everything the instrumentation was holding. `signal`, a SIGTERM or SIGINT the instrumentation's own handler saw; `exit`, an application that awaited `shutdown()` before calling `process.exit()`; `idle`, an event loop that emptied. Absent means **this sender did not say**, the same reading as `observers` \u2014 never that it ended badly: an instrumentation older than this never says it, and a process an exception killed says nothing because it cannot. It is the part of how a process ended that the cloud cannot infer \u2014 from outside, every ending looks like batches stopping \u2014 and it carries no instant, because the one that matters is when the batch arrived, which the cloud measures."
     }
   },
   "$defs": {
@@ -112,7 +112,7 @@
         },
         "resources": {
           "$ref": "#/$defs/AgentResources",
-          "description": "What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`. `product.md:239` asks for it by name: «measured internal resources»."
+          "description": "What the instrumentation costs and what it has lost, measured by itself. Absent means **this sender did not say**, the same reading as `observers` and `withholding`."
         },
         "errorSources": {
           "$ref": "#/$defs/ErrorSources",
@@ -239,7 +239,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56)."
+          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named."
         },
         "count": {
           "type": "integer",
@@ -261,7 +261,7 @@
         },
         "dependencies": {
           "type": "array",
-          "description": "One entry per dependency this route touched. Replaces `postgres` (ADR 0011).",
+          "description": "One entry per dependency this route touched. Replaces `postgres`.",
           "maxItems": 64,
           "items": {
             "$ref": "#/$defs/Dependency"
@@ -331,7 +331,7 @@
     },
     "PostgresStats": {
       "title": "PostgresStats",
-      "description": "DEPRECATED since 0.4.0, use `dependencies` with kind `postgres` (ADR 0011). Still accepted, and translated at ingest, so agents on 0.2.x and 0.3.x keep working. Will be removed in v1. Its buckets are the same as Dependency's, declared there.",
+      "description": "DEPRECATED since 0.4.0, use `dependencies` with kind `postgres`. Still accepted, and translated at ingest, so agents on 0.2.x and 0.3.x keep working. Will be removed in v1. Its buckets are the same as Dependency's, declared there.",
       "type": "object",
       "additionalProperties": false,
       "required": ["queriesPerRequest", "totalMs", "max"],
@@ -360,7 +360,7 @@
     },
     "RuntimeHealth": {
       "title": "RuntimeHealth",
-      "description": "What the runtime itself was doing. Every field is optional and at least one has to be there: `product.md:251` says the protocol is independent of the language, and a Go runtime has garbage collection, a heap and a resident set but no event loop. Requiring the six of them meant it could either invent an event loop or send none of the three it does have. An empty object is not a reading, hence the minimum of one (gh-285).",
+      "description": "What the runtime itself was doing. Every field is optional and at least one has to be there: the protocol is independent of the language, and a Go runtime has garbage collection, a heap and a resident set but no event loop. Requiring the six of them meant it could either invent an event loop or send none of the three it does have. An empty object is not a reading, hence the minimum of one.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -417,7 +417,7 @@
     },
     "Dependency": {
       "title": "Dependency",
-      "description": "What one request did against one dependency, aggregated over the interval for this route. The same shape for every kind, so the cloud stores and compares them uniformly (ADR 0011).",
+      "description": "What one request did against one dependency, aggregated over the interval for this route. The same shape for every kind, so the cloud stores and compares them uniformly.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "target", "callsPerRequest", "totalMs", "max", "errors"],
@@ -467,7 +467,7 @@
     "Profile": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What each route normally does, sent once a minute rather than with every interval: a profile changes when the code changes, and at the aggregates' cadence it would not fit in the project's row budget (ADR 0017).",
+      "description": "What each route normally does, sent once a minute rather than with every interval: a profile changes when the code changes, and at the aggregates' cadence it would not fit in the project's row budget.",
       "required": ["start", "durationMs", "endpoints"],
       "properties": {
         "start": {
@@ -500,7 +500,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named (DT-56)."
+          "description": "Normalised route template, e.g. /products/:id, or a name that is not a route: (other), what the interval's cap on routes left out, or (unmatched), the requests that no route of the framework named."
         },
         "operations": {
           "type": "array",
@@ -514,7 +514,7 @@
     "Operation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One thing this route does, identified by a hash and labelled by an optional normalised text. The hash is the identity, so suppressing the text keeps the analysis whole (ADR 0017, invariant 5).",
+      "description": "One thing this route does, identified by a hash and labelled by an optional normalised text. The hash is the identity, so suppressing the text keeps the analysis whole.",
       "required": ["kind", "hash", "count", "totalMs"],
       "properties": {
         "kind": {
@@ -535,7 +535,7 @@
             "call": false,
             "command": false
           },
-          "description": "What kind of operation this is. Three are things the route ran: `query`, a query to a database; `call`, an outgoing HTTP call, identified by its method and its host; `command`, a Redis command, identified by its name and its server. The other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself (ERR-02). `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not; `x-error` says which values are errors, which is what a list of errors takes and the rest never reach (ERR-01)."
+          "description": "What kind of operation this is. Three are things the route ran: `query`, a query to a database; `call`, an outgoing HTTP call, identified by its method and its host; `command`, a Redis command, identified by its name and its server. The other three are errors, and which one it is says how the instrumentation came to see it: `error`, an instrumented operation failed; `framework`, the exception reached the framework's error path and was turned into a 5xx; `explicit`, the application handed it over itself. `x-since` says which minor first carries each value, which is how a reader tells a kind a sender cannot send from one it did not; `x-error` says which values are errors, which is what a list of errors takes and the rest never reach."
         },
         "hash": {
           "type": "string",
@@ -546,7 +546,7 @@
         "text": {
           "type": "string",
           "maxLength": 1024,
-          "description": "Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `find users` for a MongoDB command — its name and its collection, never the filter or the documents —, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument (invariant 5): the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none."
+          "description": "Normalised text, e.g. `SELECT id FROM products WHERE id = ?` for a query, `find users` for a MongoDB command — its name and its collection, never the filter or the documents —, `POST api.stripe.com` for a call and `HGETALL cache:6379` for a command. A call's and a command's are a word and the place it went — the method and the host, the command's name and its server — and never a path, a query string, a key or an argument: the schema refuses one with anything after the place, or a slash, a question mark or a hash in it. Optional: a user who would rather not send it keeps the whole analysis, only without the label, and a sender in minimal mode, or one withholding the name of the dependency, sends none."
         },
         "count": {
           "type": "integer",
@@ -573,7 +573,7 @@
         },
         "class": {
           "enum": ["select", "insert", "update", "delete", "other"],
-          "description": "What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: `product.md:104` says a query the normaliser does not understand travels «only as hash and class», and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest (gh-344)."
+          "description": "What kind of statement this is, when the sender could not normalise it safely. Its presence is the reason the text is absent: a query the normaliser does not understand travels only as hash and class, and this is the class. Never sent together with `text` — they are two answers to the same question. Our word and not the service's: it is decided from the first keyword, which is all that can be told without understanding the rest."
         }
       },
       "not": {
@@ -597,7 +597,7 @@
     "ObserverState": {
       "title": "ObserverState",
       "enum": ["on", "off", "unavailable"],
-      "description": "Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch (COB-01, invariant 14)."
+      "description": "Whether an observer is attached (`on`), was not asked for (`off`), or was asked for and could not attach (`unavailable`) — a driver that is not resolvable from the application's root, for instance. The third one is the point: without it, a service that is not being watched looks exactly like a service that has nothing to watch."
     },
     "Observers": {
       "title": "Observers",
@@ -644,7 +644,7 @@
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
-      "description": "What this sender is deliberately not sending, so that less arriving can be read as a choice rather than as a fault (invariant 14, COB-01). Counts and never names: the name of an excluded endpoint is exactly what the user asked not to send. The cloud cannot verify any of this and does not try — it is what the sender says, and it is shown as such.",
+      "description": "What this sender is deliberately not sending, so that less arriving can be read as a choice rather than as a fault. Counts and never names: the name of an excluded endpoint is exactly what the user asked not to send. The cloud cannot verify any of this and does not try — it is what the sender says, and it is shown as such.",
       "properties": {
         "freeText": {
           "type": "boolean",
@@ -668,7 +668,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "startedAt"],
-      "description": "What the instrumentation has to say about a capture the cloud asked it for. The order travels in the ingest response (ADR 0071) and the answer travels here, on the same cadence and at the same cost: a path of its own would be one more call per capture, and one more thing to authenticate, for a fact that fits in the batch that is already going (gh-378).",
+      "description": "What the instrumentation has to say about a capture the cloud asked it for. The order travels in the ingest response and the answer travels here, on the same cadence and at the same cost: a path of its own would be one more call per capture, and one more thing to authenticate, for a fact that fits in the batch that is already going.",
       "properties": {
         "id": {
           "type": "string",
@@ -678,7 +678,7 @@
         },
         "startedAt": {
           "type": "integer",
-          "description": "Unix milliseconds when observation **really** started, which CAP-01 keeps apart from when the capture was accepted."
+          "description": "Unix milliseconds when observation **really** started, which is kept apart from when the capture was accepted."
         }
       }
     },
@@ -687,23 +687,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "hash", "count"],
-      "description": "Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. `product.md:77` asks for «errors and exceptions», and these are the two the word «excepciones» names. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them (gh-341, ADR 0102).",
+      "description": "Something thrown outside any instrumented operation: an exception nobody caught, or a promise rejected with no `catch`. They live on the batch and not in the profile because they have **no route** — they happen outside a request's life, or after it ended — and filing them under a route that is not theirs would be worse than not having them.",
       "properties": {
         "kind": {
           "enum": ["uncaught", "unhandled-rejection", "framework", "explicit"],
           "x-since": { "uncaught": "0.7.0", "unhandled-rejection": "0.7.0", "framework": "0.9.0", "explicit": "0.9.0" },
-          "description": "How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all (ERR-02). `x-since` says which minor first carries each value."
+          "description": "How the process came to see it. `uncaught` and `unhandled-rejection` are two different failures with two different fixes, and counting them together hides which one is happening. `explicit` is an error the application handed over while no request was being served, and `framework` one that reached a framework's error path outside any observed request — a process that is not opening request contexts at all. `x-since` says which minor first carries each value."
         },
         "hash": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "description": "Stable identity of the signature, the same shape a query's or an operation error's has (ADR 0017)."
+          "description": "Stable identity of the signature, the same shape a query's or an operation error's has."
         },
         "text": {
           "type": "string",
           "maxLength": 512,
-          "description": "Type, sanitised message and stack signature. Optional and for the same reason as everywhere else: when nothing recognisable survives the sanitising, only the type and the signature travel (ADR 0084). Its absence is not the absence of an exception."
+          "description": "Type, sanitised message and stack signature. Optional and for the same reason as everywhere else: when nothing recognisable survives the sanitising, only the type and the signature travel. Its absence is not the absence of an exception."
         },
         "count": {
           "type": "integer",
@@ -713,7 +713,7 @@
         "total": {
           "type": "integer",
           "minimum": 1,
-          "description": "Since 0.9.0: how many times this signature has happened in this instance since it started, a running total every delivery of the signature carries again. It is what lets the cloud tell a delivery it already applied from one that happened again (gh-625): `total - count` is what the sender knows was applied, the cloud keeps the largest total it applied per instance and signature, and it counts only what this delivery adds beyond both — so a delivery sent again after its answer was lost, sent twice, or overtaken by a later one adds nothing, and one that never arrived is counted by the next. It never goes down while `instance.id` stays the same, which is why that id is generated once per process. Absent from every sender older than this, and from a signature past the number a sender keeps totals for: the cloud then counts `count` as delivered, and says so."
+          "description": "Since 0.9.0: how many times this signature has happened in this instance since it started, a running total every delivery of the signature carries again. It is what lets the cloud tell a delivery it already applied from one that happened again: `total - count` is what the sender knows was applied, the cloud keeps the largest total it applied per instance and signature, and it counts only what this delivery adds beyond both — so a delivery sent again after its answer was lost, sent twice, or overtaken by a later one adds nothing, and one that never arrived is counted by the next. It never goes down while `instance.id` stays the same, which is why that id is generated once per process. Absent from every sender older than this, and from a signature past the number a sender keeps totals for: the cloud then counts `count` as delivered, and says so."
         },
         "context": {
           "$ref": "#/$defs/ReportedContext"
@@ -726,19 +726,19 @@
       "maxProperties": 8,
       "propertyNames": { "maxLength": 32 },
       "additionalProperties": { "type": "string", "maxLength": 64 },
-      "description": "The structural context an application attached to an error it reported (ERR-02, since 0.9.0). Flat and small on purpose: what travels is the shape of the failure, never its contents (invariant 5). Every value has been through the same sanitising as an error message before it got here, so anything that looked like a value is already a `?`, and there is nothing per user in it (IMP-01). It is the context of the **first** occurrence of the signature in this window, because what travels is counted per signature and not per occurrence. Absent is the normal case: an error nobody attached a context to carries none."
+      "description": "The structural context an application attached to an error it reported (since 0.9.0). Flat and small on purpose: what travels is the shape of the failure, never its contents. Every value has been through the same sanitising as an error message before it got here, so anything that looked like a value is already a `?`, and there is nothing per user in it. It is the context of the **first** occurrence of the signature in this window, because what travels is counted per signature and not per occurrence. Absent is the normal case: an error nobody attached a context to carries none."
     },
     "LocalTrigger": {
       "type": "object",
       "title": "LocalTrigger",
       "additionalProperties": false,
       "required": ["signal", "observedAt"],
-      "description": "One local signal, sustained past its threshold. It asks for detail; it does not claim a cause (invariant 7).",
+      "description": "One local signal, sustained past its threshold. It asks for detail; it does not claim a cause.",
       "properties": {
         "signal": {
           "type": "string",
           "enum": ["event-loop-delay"],
-          "description": "Which signal fired. An enum and not free text: the cloud files findings by footprint, and a trigger type nobody can compare is a footprint that never matches. `product.md:114` names the absolute-threshold signals; this is the first of them."
+          "description": "Which signal fired. An enum and not free text: the cloud files findings by footprint, and a trigger type nobody can compare is a footprint that never matches. This is the first of the signals with an absolute threshold."
         },
         "observedAt": {
           "type": "integer",
@@ -758,7 +758,7 @@
         "intervals": {
           "type": "integer",
           "minimum": 1,
-          "description": "How many consecutive intervals it stayed over. More than one is what makes it sustained rather than a spike (`product.md:114`)."
+          "description": "How many consecutive intervals it stayed over. More than one is what makes it sustained rather than a spike."
         }
       }
     },
@@ -766,7 +766,7 @@
       "title": "AgentResources",
       "type": "object",
       "additionalProperties": false,
-      "description": "The instrumentation's own resources. Every field is optional and **absent is not zero**: an older sender says nothing, and a cloud that read that as «nothing was lost» would be inventing the one answer this exists to stop it inventing (invariant 14). The counters are differences since the previous batch, like everything else here; the two that are instants say so.",
+      "description": "The instrumentation's own resources. Every field is optional and **absent is not zero**: an older sender says nothing, and a cloud that read that as «nothing was lost» would be inventing the one answer this exists to stop it inventing. The counters are differences since the previous batch, like everything else here; the two that are instants say so.",
       "properties": {
         "droppedBatches": {
           "type": "integer",
@@ -791,7 +791,7 @@
         "droppedExceptions": {
           "type": "integer",
           "minimum": 0,
-          "description": "Exception events the instrumentation discarded because they did not fit in its caps of distinct signatures — the register's window, and the sender's accumulation while batches do not land — since the previous batch. An occurrence, never a signature: the sender cannot name what it did not admit without remembering it, and remembering is the growth the cap exists to stop. This is what happened and is gone, the same kind of number as droppedBatches, for the errors a process throws outside any request: a batch that says 32 and was handed 35 must not leave the other 3 to be read as errors that did not happen (COB-01, invariant 14)."
+          "description": "Exception events the instrumentation discarded because they did not fit in its caps of distinct signatures — the register's window, and the sender's accumulation while batches do not land — since the previous batch. An occurrence, never a signature: the sender cannot name what it did not admit without remembering it, and remembering is the growth the cap exists to stop. This is what happened and is gone, the same kind of number as droppedBatches, for the errors a process throws outside any request: a batch that says 32 and was handed 35 must not leave the other 3 to be read as errors that did not happen."
         },
         "bufferBytes": {
           "type": "integer",
@@ -801,12 +801,12 @@
         "hookMsPerRequest": {
           "type": "number",
           "minimum": 0,
-          "description": "Estimated milliseconds of the instrumentation's own hooks per request. **An estimate**, sampled, and named as one: it is what invariant 3 budgets, and reporting it as an exact measurement would claim a precision the sampling does not have."
+          "description": "Estimated milliseconds of the instrumentation's own hooks per request. **An estimate**, sampled, and named as one: it is what the instrumentation's overhead budget is measured against, and reporting it as an exact measurement would claim a precision the sampling does not have."
         },
         "shed": {
           "type": "string",
           "enum": ["nothing", "fine", "profile"],
-          "description": "What the instrumentation has given up because it was costing too much, cheapest loss first. `product.md:241` asks for both halves —«it throttles itself» and «records it as a loss of coverage»— and this is the second. An enum and not free text: it is ours, and it has to be comparable between senders."
+          "description": "What the instrumentation has given up because it was costing too much, cheapest loss first. The instrumentation throttles itself and records it as a loss of coverage: this is that record. An enum and not free text: it is ours, and it has to be comparable between senders."
         },
         "shedReason": {
           "type": "string",
