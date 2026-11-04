@@ -1,5 +1,12 @@
 # @downtrace/protocol
 
+## 0.13.1
+
+### Patch Changes
+
+- b6d69b3: The schemas' descriptions and the doc comments of the exports stand on their own: they no longer cite documents, decisions, tickets or issues a reader of the package cannot open. The contract does not change.
+- de95d27: The README is an overview again: how to validate a batch, what the wire answers, what a batch carries and how the protocol is versioned. What each field means is in the schema's descriptions, and what each minor added is in the CHANGELOG. The contract does not change.
+
 ## 0.13.0
 
 ### Minor Changes

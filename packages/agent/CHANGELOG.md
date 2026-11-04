@@ -1,5 +1,14 @@
 # @downtrace/agent
 
+## 0.20.1
+
+### Patch Changes
+
+- e92bd48: The README is short again: what the instrumentation observes, how to install and configure it, Next.js, what leaves your server, errors, guarantees and requirements. The reference it had grown into — each database, how routes are named, errors and how a process ends, `downtrace init` and `downtrace check` — is in `guide/`, published with the package and linked from the README. `DOWNTRACE_EXCLUDE_ENDPOINTS` and `DOWNTRACE_EXCLUDE_DEPENDENCIES` are in the table of variables at last.
+- Updated dependencies [b6d69b3]
+- Updated dependencies [de95d27]
+  - @downtrace/protocol@0.13.1
+
 ## 0.20.0
 
 ### Minor Changes
