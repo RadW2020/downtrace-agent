@@ -27,6 +27,8 @@ export function activate(result: ConfigResult): boolean {
   for (const warning of result.warnings) log.warn(warning);
   const agent = createAgent(result.config, { log, handleSignals: true });
   agent.start();
+  // A start that failed has said why and left nothing running: there is no instrumentation to remember (DT-168).
+  if (agent.stats.disabled) return false;
   // So an application that calls `process.exit()` can wait for it: that call fires nothing and waits for
   // nothing, and without this the last flush is simply cut (gh-383).
   remember(agent);

@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Agent } from "../src/agent.ts";
 import type { Logger } from "../src/log.ts";
 import { NODE_FLOOR, unsupportedNode } from "../src/node-floor.ts";
+import { AGENT_VERSION } from "../src/version.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 /**
@@ -14,7 +15,7 @@ import { testConfig } from "./support/agent-config.ts";
  * workspace failed the install of every other app, still on Node 18. The floor is enforced as the package loads
  * instead: one warning, and an instrumentation that does nothing.
  *
- * DT-164. The floor is a version, 18.19.0, and not a major: Node 18 before 18.19 lacks `import.meta.resolve` and
+ * DT-164. The floor is a version, 18.19.0, and not a major: Node 18 before 18.19 lacks
  * `diagnostics_channel.tracingChannel`, which the package calls (ADR 0257).
  *
  * The children here run a supported Node told it is an older one, which shows what the entry points decide. What
@@ -36,6 +37,26 @@ const BELOW = new RegExp(
 function claiming(version: string): string[] {
   const source = `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });`;
   return ["--import", `data:text/javascript,${encodeURIComponent(source)}`];
+}
+
+/**
+ * A preload that takes `import.meta.resolve` from every module of the package's source as it loads, as Node 20 before
+ * 20.6 has it: only behind a flag (DT-142). With `claiming`, a Node that says it is one of those and lacks what they
+ * lack. The line goes after a shebang, which has to stay first, and before everything else otherwise. `src` is there
+ * for the test that shows the preload works.
+ */
+function withoutImportMetaResolve(src: string = new URL("../src/", import.meta.url).href): string[] {
+  const hooks = `import { registerHooks } from "node:module";
+registerHooks({
+  load(url, context, next) {
+    const loaded = next(url, context);
+    if (!url.startsWith(${JSON.stringify(src)})) return loaded;
+    const text = typeof loaded.source === "string" ? loaded.source : Buffer.from(loaded.source).toString();
+    const line = "delete import.meta.resolve;\\n";
+    return { ...loaded, source: text.startsWith("#!") ? text.replace("\\n", "\\n" + line) : line + text };
+  },
+});`;
+  return ["--import", `data:text/javascript,${encodeURIComponent(hooks)}`];
 }
 
 /**
@@ -96,8 +117,8 @@ describe("the oldest Node the package runs on", () => {
   });
 
   // Node 19 is an odd release past its end of life, and is promised nothing (ADR 0257). It is turned away whole: before
-  // 19.9 it lacks `tracingChannel`, whose absence ends the application at start-up, and no 19 has
-  // `import.meta.resolve` without a flag. Staying off is the side on which nothing breaks.
+  // 19.9 it lacks `tracingChannel`, whose absence ends the application at start-up. Staying off is the side on which
+  // nothing breaks.
   // covers: RF-101, RF-121
   it("turns Node 19 away, every release of it", () => {
     for (const version of ["19.0.0", "19.8.1", "19.9.0", "19.9.0-pre"]) {
@@ -188,6 +209,47 @@ describe("downtrace on a Node below the floor", () => {
       expect(stderr.replace(/^downtrace: /, "").trim()).toMatch(BELOW);
     },
   );
+});
+
+describe("downtrace on Node 20 before 20.6, above the floor and without `import.meta.resolve`", () => {
+  // It ended in `TypeError: (intermediate value).resolve is not a function` and a stack trace, on every command:
+  // the command looked its own `register` entry up with `import.meta.resolve` before it read its arguments (DT-142).
+  const NODE_20_5 = [...claiming("20.5.1"), ...withoutImportMetaResolve()];
+
+  // covers: RF-101, RF-121
+  it("prints its version", async () => {
+    const { code, stdout, stderr } = await runNode([...NODE_20_5, cli, "--version"], childEnv());
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(stdout).toBe(`${AGENT_VERSION}\n`);
+  });
+
+  // covers: RF-121
+  it("prints its help", async () => {
+    const { code, stdout, stderr } = await runNode([...NODE_20_5, cli, "--help"], childEnv());
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(stdout).toContain("downtrace check");
+  });
+
+  // What makes the two above worth reading: the preload does take the function away, with a shebang and without.
+  it("runs where the preload leaves a module no `import.meta.resolve`", async () => {
+    // Its real path: the URL a module loads from is, and macOS keeps the temporary directory behind a symlink.
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dt-meta-")));
+    try {
+      const probe = "console.log(typeof import.meta.resolve);\n";
+      await writeFile(path.join(dir, "plain.mjs"), probe);
+      await writeFile(path.join(dir, "bin.mjs"), `#!/usr/bin/env node\n${probe}`);
+      const hooked = withoutImportMetaResolve(pathToFileURL(`${dir}${path.sep}`).href);
+      for (const file of ["plain.mjs", "bin.mjs"]) {
+        const { code, stdout, stderr } = await runNode([...hooked, path.join(dir, file)], childEnv());
+        expect(code, stderr).toBe(0);
+        expect(stdout, file).toBe("undefined\n");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("an agent the application starts itself, on a Node below the floor", () => {

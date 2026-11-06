@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { unsupportedNode } from "./node-floor.ts";
 
 /**
@@ -29,7 +31,9 @@ if (unsupported !== undefined) {
     cwd: process.cwd(),
     tmpRoot: tmpdir(),
     // The package's own `register` entry, wherever it is installed: `src/register.ts` here, `dist/register.js` published.
-    registerUrl: import.meta.resolve("@downtrace/agent/register"),
+    // Found as `require` finds it, which every supported Node can: Node 20 has `import.meta.resolve` without a flag
+    // only from 20.6, and before it every command ended in a stack trace (DT-142).
+    registerUrl: pathToFileURL(createRequire(import.meta.url).resolve("@downtrace/agent/register")).href,
     version: AGENT_VERSION,
     stdout: (text) => {
       process.stdout.write(text);

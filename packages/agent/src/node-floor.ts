@@ -2,10 +2,10 @@
  * The oldest Node.js this package runs on: the oldest one CI consumes the packed package on. This is the one place it
  * is stated in the code.
  *
- * A version and not a major (DT-164, ADR 0257): Node 18 has `import.meta.resolve` without a flag and
- * `diagnostics_channel.tracingChannel` only from 18.19.0, and the package calls both. Node 19, an odd release past its
- * end of life, is promised nothing, and is turned away whole: before 19.9 it lacks `tracingChannel`, whose absence
- * ends the application at start-up, and no 19 has `import.meta.resolve` without a flag.
+ * A version and not a major (DT-164, ADR 0257): Node 18 has `diagnostics_channel.tracingChannel` only from 18.19.0,
+ * and the package calls it. Node 19, an odd release past its end of life, is promised nothing, and is turned away
+ * whole: before 19.9 it lacks `tracingChannel`, whose absence ends the application at start-up. Nothing in the package
+ * calls `import.meta.resolve`, which Node 20 has without a flag only from 20.6 (DT-142).
  *
  * The package declares no `engines`, and on purpose: yarn 1 enforces it, and in a workspace whose other apps still
  * ran Node 18, adding the instrumentation to one app failed the install of all of them (DT-131). So the floor is

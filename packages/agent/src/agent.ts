@@ -604,6 +604,18 @@ export class Agent {
       return;
     }
     this.started = true;
+    // A throw from here would reach the application: `register` starts the instrumentation inside `--import`, before
+    // the application has run a line, and the process ended there (DT-168). What the start attached before the throw
+    // is detached, and the instrumentation stays off and says why, once (invariant 2).
+    try {
+      this.attachAll();
+    } catch (err) {
+      this.abandonStart(err);
+    }
+  }
+
+  /** What `start()` attaches, in order. */
+  private attachAll(): void {
     // Where the application's own modules resolve from: its entry where Node runs it — the realpath, unless the
     // process keeps the main module's symlinks — and not the symlinked binary it may have been started through
     // (DT-34). Once, here, at start-up: never in a request. It cannot throw (invariant 2).
@@ -1003,6 +1015,43 @@ export class Agent {
     if (this.stopping !== undefined) return this.stopping;
     if (!this.started) return Promise.resolve();
     this.started = false;
+    this.detach();
+    const stopping: Promise<void> = this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending } }).then(
+      () => undefined,
+    );
+    this.stopping = stopping;
+    const forget = (): void => {
+      this.stopping = undefined;
+      // Not before: an application that calls `shutdown()` and exits without awaiting it leaves while this drain
+      // is still in flight, and the way out is what writes what the drain had queued (DT-79).
+      process.removeListener("exit", this.onExit);
+    };
+    stopping.then(forget, forget);
+    return stopping;
+  }
+
+  /**
+   * A start that threw (DT-168). What it attached is detached as `stop()` detaches it, and nothing is flushed: nothing
+   * was recorded, and nothing may be sent. The records `armMounts` arms in express stay, as they stay after a stop:
+   * they write into weak maps, and the application sees nothing of them. The instrumentation stays off, and the one
+   * warning says why. It throws nothing, whatever the detach does.
+   */
+  private abandonStart(err: unknown): void {
+    this.started = false;
+    this.disabled = true;
+    delete this.agentInfo.observers;
+    let undone = "";
+    try {
+      this.detach();
+      process.removeListener("exit", this.onExit);
+    } catch (failure) {
+      undone = `, and detaching what it had attached failed: ${messageOf(failure)}`;
+    }
+    this.log.warn(`instrumentation disabled: the start failed: ${messageOf(err)}${undone}`);
+  }
+
+  /** Everything `start()` attaches, detached: what `stop()` does before its last flush. */
+  private detach(): void {
     process.removeListener("uncaughtExceptionMonitor", this.onThrown);
     diagnostics_channel.unsubscribe(REQUEST_START, this.onStart);
     diagnostics_channel.unsubscribe(RESPONSE_FINISH, this.onFinish);
@@ -1033,18 +1082,6 @@ export class Agent {
     this.runtime.stop();
     process.removeListener("beforeExit", this.onBeforeExit);
     for (const s of SIGNALS) process.removeListener(s, this.onSignal[s]);
-    const stopping: Promise<void> = this.flush({ timeoutMs: SHUTDOWN_FLUSH_MS, wayOut: { ending } }).then(
-      () => undefined,
-    );
-    this.stopping = stopping;
-    const forget = (): void => {
-      this.stopping = undefined;
-      // Not before: an application that calls `shutdown()` and exits without awaiting it leaves while this drain
-      // is still in flight, and the way out is what writes what the drain had queued (DT-79).
-      process.removeListener("exit", this.onExit);
-    };
-    stopping.then(forget, forget);
-    return stopping;
   }
 
   /** Closes the current interval and sends everything queued. */
@@ -1732,6 +1769,15 @@ function said(
 function described(err: unknown): string {
   try {
     return err instanceof Error ? `${err.stack ?? err.message}` : String(err);
+  } catch {
+    return "(a thrown value that cannot be described)";
+  }
+}
+
+/** An error's message, for a line of its own: `described` without the stack, and as careful. */
+function messageOf(err: unknown): string {
+  try {
+    return err instanceof Error ? err.message : String(err);
   } catch {
     return "(a thrown value that cannot be described)";
   }
