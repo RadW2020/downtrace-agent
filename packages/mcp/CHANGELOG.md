@@ -1,5 +1,12 @@
 # @downtrace/mcp
 
+## 0.3.2
+
+### Patch Changes
+
+- d9378ae: The deployed version is found on any deploy platform, with no configuration. After `DOWNTRACE_VERSION`, the instrumentation reads the variable a platform or a CI sets — the list grew from eight to thirty-four, `CODEBUILD_RESOLVED_SOURCE_VERSION`, `GITHUB_SHA`, `CI_COMMIT_SHA`, Coolify's `SOURCE_COMMIT` and Fly.io's image among them — then, on ECS, the digest of the container's image from the task metadata endpoint (`image:sha256:…`), and anywhere else a fingerprint of the code (`code:…`): a hash of its content, the same across restarts and instances of one build, and new with every build that changes it. A process says one version for its whole life: the first batch waits for the search, ten seconds at most, and nothing in it delays the application's start. With `DOWNTRACE_DEBUG`, one line says which source chose the version. The MCP server tells a coding agent that a version behind `image:` or `code:` is not a commit.
+- d58325c: The ingestion token, and the DSN that carries it, are public by design, like a Sentry DSN, and safe to commit, and the README says so in a section of its own: whoever holds it can send data to its project as its environment, spend its environment's rows a day, evidence a day and error signatures and the project's captures an hour, and read where it writes and which captures the cloud asks of that environment; it cannot read findings, reports, errors, evidence or pages, operate on anything, or write to another project or environment; and a new token for the environment stops the old one at once. `downtrace init` says the same in its text, and in `--json` as `token`. An access credential, `dtr_…`, is a secret, and the README of `@downtrace/mcp`, which reads one from a variable of the same name, says so.
+
 ## 0.3.1
 
 ### Patch Changes

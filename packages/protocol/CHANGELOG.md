@@ -1,5 +1,16 @@
 # @downtrace/protocol
 
+## 0.14.0
+
+### Minor Changes
+
+- 5d5eaa9: Protocol 0.14.0: the cloud says where an ingestion token writes, and nothing more. The answer to an accepted batch carries `destination`, the project's slug and the environment the batch landed in. `GET /v0/destination` (`DESTINATION_PATH`), with the token as a bearer, answers the same `Destination` without a batch and ingests nothing: a check of the token. Both are optional for a reader, and a cloud older than 0.14.0 leaves the first out and answers the second with 404.
+
+### Patch Changes
+
+- 7121aeb: `require()` works on every supported Node, 20.0 included: both packages ship a CommonJS build beside their ES modules, where before a Node older than 20.19, or a 22 older than 22.12, refused it with `ERR_REQUIRE_ESM`. A NestJS application compiled to CommonJS calls `init({ dsn })` from an instrument file its entry requires on its first line. In one process, a CommonJS copy and an ES module copy share one instrumentation.
+- 915c275: The package declares no `engines` any more. yarn 1 enforces it, and through `@downtrace/agent`, which depends on this package, it failed the install of every app of a workspace still on Node 18. The instrumentation checks the Node version it runs on itself.
+
 ## 0.13.1
 
 ### Patch Changes
