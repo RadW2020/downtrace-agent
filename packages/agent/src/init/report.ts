@@ -38,7 +38,7 @@ export const INGESTION_TOKEN = {
   safeToCommit: true,
   can: [
     "send data to its project, stored as its environment — batches, and evidence for the captures the cloud asks for — and so make Downtrace report what never happened",
-    "spend its environment's rows a day, which stops that environment alone, and the project's captures an hour, evidence a day and error signatures, which stop every environment until they refill",
+    "spend its environment's rows a day, evidence a day and error signatures, which stops that environment alone, and the project's captures an hour, which stop every environment until they refill",
     "read, in the answers to what it sends, the project and environment it writes to, and the routes and dependencies the cloud asks that environment to capture",
   ],
   cannot:

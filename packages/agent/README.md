@@ -171,7 +171,7 @@ It reads the token the instrumentation would, from `DOWNTRACE_DSN` or `DOWNTRACE
 The token in `DOWNTRACE_TOKEN` is public by design, like a Sentry DSN, and so is the DSN that carries it, in `DOWNTRACE_DSN` or in `init({ dsn })`: put either wherever your deployment can read it, your repository, your Dockerfile or your instrument file included. It belongs to one project and one environment, it only sends, and every other door of the cloud answers it as it answers no credential at all. Whoever holds it:
 
 - **can** send data to its project, stored as its environment — batches, and evidence for the captures the cloud asks for — and so make Downtrace report what never happened;
-- **can** spend its environment's rows a day, which stops that environment alone, and the project's captures an hour, evidence a day and error signatures, which stop every environment until they refill;
+- **can** spend its environment's rows a day, evidence a day and error signatures, which stops that environment alone, and the project's captures an hour, which stop every environment until they refill;
 - **can** read, in the answers to what it sends, the project and environment it writes to, and the routes and dependencies the cloud asks that environment to capture;
 - **cannot** read findings, reports, errors, evidence or pages, operate on anything, or write to another project or as another environment.
 
