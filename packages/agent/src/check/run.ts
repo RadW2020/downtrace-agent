@@ -497,42 +497,124 @@ async function cleanUp(made: Made, env: NodeJS.ProcessEnv): Promise<string[]> {
   return problems;
 }
 
+/**
+ * How the notes of a comparison name what each side is: the runs `check` made, or the two files `downtrace compare`
+ * was handed. And why requests may have no profile, which is not the same for a run that ended and a file a person
+ * may have read while its application was still running.
+ */
+export interface Wording {
+  /** What a side is, in «absent from …, not zero»: `the base run`, or the file's name. */
+  side: Readonly<Record<Side, string>>;
+  /** Its file, in «2 lines of … could not be read»: `the base run's file`, or the file's name. */
+  file: Readonly<Record<Side, string>>;
+  /** What follows requests that no profile covers. */
+  unprofiled: string;
+}
+
+/** What two tallies come to, however they were made. */
+export interface Judged {
+  routes: RouteResult[];
+  /** What the reader should keep in mind about the comparison, beyond the verdicts. Empty when there is a failure. */
+  notes: string[];
+  /** When no route could be evaluated: then nothing is said about any of them, and the routes say why. */
+  failure: (Failure & { code: "nothing-evaluated" }) | null;
+}
+
+/**
+ * The verdict over two tallies (LOC-01): `check`'s, over the two runs it made, and `downtrace compare`'s, over two
+ * files a person recorded however the project can. One implementation, so that the same evidence never gets two
+ * answers: the routes, by composition and never by latency (`compare.ts`), and no green result when no route could
+ * be evaluated.
+ */
+export function judge(
+  tallies: Readonly<Record<Side, RunTally>>,
+  context: { declared: readonly string[]; dependencies: ReadonlySet<string> | undefined; wording: Wording },
+): Judged {
+  const routes = compareRuns(tallies.base, tallies.change, context.declared);
+  const summary = summarize(routes);
+  if (summary.worse + summary.unchanged === 0) {
+    const lost = routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")));
+    return {
+      routes,
+      notes: [],
+      failure: {
+        code: "nothing-evaluated",
+        side: null,
+        message: "no route could be evaluated, so nothing is said about any of them",
+        advice: lost ? context.wording.unprofiled : null,
+        outputTail: null,
+      },
+    };
+  }
+  return { routes, notes: notesOf(tallies, routes, context.dependencies, context.wording), failure: null };
+}
+
+/** How `check` names its two sides. */
+const RUNS: Wording = {
+  side: { base: "the base run", change: "the change run" },
+  file: { base: "the base run's file", change: "the change run's file" },
+  unprofiled: UNPROFILED,
+};
+
 /** What the reader should keep in mind about this comparison, beyond the verdicts. */
 function notesOf(
-  tallies: Map<Side, RunTally>,
+  tallies: Readonly<Record<Side, RunTally>>,
   routes: readonly RouteResult[],
   dependencies: ReadonlySet<string> | undefined,
+  wording: Wording,
 ): string[] {
   const notes: string[] = [];
   for (const side of ["base", "change"] as const) {
-    const tally = tallies.get(side);
-    if (tally === undefined) continue;
-    const lost = [...tally.routes.values()].reduce((sum, route) => sum + route.unprofiledRequests, 0);
-    if (lost > 0) {
-      notes.push(
-        `On the ${side}, ${lost} request${lost === 1 ? "" : "s"} made calls that no profile covers: what each ` +
-          "route ran is counted over the requests a profile does cover. " +
-          UNPROFILED,
-      );
-    }
-    if (tally.malformed > 0) {
-      notes.push(
-        `${tally.malformed} line${tally.malformed === 1 ? "" : "s"} of the ${side} run's file could not be read and were left out.`,
-      );
-    }
-    for (const unseen of unseenObservers(tally.observers, dependencies)) {
-      const who =
-        unseen.packages.length > 0
-          ? `the project depends on ${unseen.packages.join(", ")} and the ${unseen.observer} observer found no driver`
-          : `the ${unseen.observer} observer was unavailable`;
-      notes.push(
-        `On the ${side}, ${who}: it could not be resolved from the application's entry, so what it would have seen is ` +
-          `absent from the ${side} run, not zero.`,
-      );
-    }
+    notes.push(
+      ...tallyNotes(
+        tallies[side],
+        { on: `On the ${side}, `, side: wording.side[side], file: wording.file[side], unprofiled: wording.unprofiled },
+        dependencies,
+      ),
+    );
   }
   if (routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")))) {
-    notes.push(`Some routes had requests and no profile. ${UNPROFILED}`);
+    notes.push(`Some routes had requests and no profile. ${wording.unprofiled}`);
+  }
+  return notes;
+}
+
+/**
+ * What to keep in mind about one tally: requests no profile covers, lines that could not be read, observers that could
+ * not see. `on` starts the sentences that are about one side of two (`On the base, `), and is empty where there is one
+ * file (`downtrace report`).
+ */
+export function tallyNotes(
+  tally: RunTally,
+  words: { on: string; side: string; file: string; unprofiled: string },
+  dependencies: ReadonlySet<string> | undefined,
+): string[] {
+  const sentence = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+  const notes: string[] = [];
+  const lost = [...tally.routes.values()].reduce((sum, route) => sum + route.unprofiledRequests, 0);
+  if (lost > 0) {
+    notes.push(
+      sentence(`${words.on}${lost} request${lost === 1 ? "" : "s"} made calls that no profile covers: `) +
+        "what each route ran is counted over the requests a profile does cover. " +
+        words.unprofiled,
+    );
+  }
+  if (tally.malformed > 0) {
+    notes.push(
+      `${tally.malformed} line${tally.malformed === 1 ? "" : "s"} of ${words.file} could not be read and ` +
+        `${tally.malformed === 1 ? "was" : "were"} left out.`,
+    );
+  }
+  for (const unseen of unseenObservers(tally.observers, dependencies)) {
+    const who =
+      unseen.packages.length > 0
+        ? `the project depends on ${unseen.packages.join(", ")} and the ${unseen.observer} observer found no driver`
+        : `the ${unseen.observer} observer was unavailable`;
+    notes.push(
+      sentence(`${words.on}${who}: `) +
+        "it could not be resolved from the application's entry, so what it would have seen is " +
+        `absent from ${words.side}, not zero.`,
+    );
   }
   return notes;
 }
@@ -736,23 +818,13 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
   if (base === undefined || change === undefined || made.sides.base === null || made.sides.change === null) {
     throw new CheckFailure("setup-failed", null, "a run is missing: this is a bug in check");
   }
-  const routes = compareRuns(base, change, [...declared]);
-  if (summarize(routes).worse + summarize(routes).unchanged === 0) {
-    const lost = routes.some((route) => route.reasons.some((reason) => reason.code.startsWith("no-profile")));
-    throw new CheckFailure(
-      "nothing-evaluated",
-      null,
-      "no route could be evaluated, so nothing is said about any of them",
-      {
-        ...(lost ? { advice: UNPROFILED } : {}),
-        routes,
-      },
-    );
+  const judged = judge(
+    { base, change },
+    { declared: [...declared], dependencies: options.dependencies, wording: RUNS },
+  );
+  if (judged.failure !== null) {
+    const { code, side, message, ...rest } = judged.failure;
+    throw new CheckFailure(code, side, message, { ...rest, routes: judged.routes });
   }
-  return compared({
-    base: made.sides.base,
-    change: made.sides.change,
-    routes,
-    notes: notesOf(tallies, routes, options.dependencies),
-  });
+  return compared({ base: made.sides.base, change: made.sides.change, routes: judged.routes, notes: judged.notes });
 }

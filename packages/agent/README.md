@@ -41,7 +41,20 @@ Worse (1)
 
 Nothing leaves the machine: the runs get no token and no URL. Durations are shown and never judged, since a test run is not production; the verdict comes from what each request ran — queries, outgoing calls, Redis commands — and how many times. A route the tests did not reach is said to be not evaluated, by name, and never unchanged. A coding agent reads the same result with `--json`.
 
-The whole of it: [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), which configures a project asking nothing and making no network request, and [`downtrace check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md). Production, with the cloud, starts below.
+No tests that reach your application over HTTP? Start it with `DOWNTRACE_INSPECT`, use it, stop it, and read what each route ran, the most queries per request first:
+
+```sh
+DOWNTRACE_INSPECT=./run.jsonl node --import @downtrace/agent/register app.js
+npx downtrace report run.jsonl                # each route: requests, queries per request, what repeats, the slowest
+npx downtrace compare base.jsonl run.jsonl    # check's verdict over two such files, recorded however you can
+```
+
+```
+  GET /orders   2 requests  ·  21 queries per request on average, median 21 to 50
+    repeated   select * from "users" where "id" = ?  [query 81ca38dfd955b40d]  20 per request
+```
+
+The whole of it: [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), which configures a project asking nothing and making no network request, [`downtrace check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md), and [`downtrace report` and `downtrace compare`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/report.md). Production, with the cloud, starts below.
 
 ## Install
 

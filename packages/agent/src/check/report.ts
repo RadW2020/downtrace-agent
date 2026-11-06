@@ -123,8 +123,11 @@ export function failed(parts: {
   };
 }
 
-/** The exit status: 0 nothing got worse, 1 something did, 2 there was no comparison. */
-export function exitCodeOf(report: CheckReport): 0 | 1 | 2 {
+/**
+ * The exit status: 0 nothing got worse, 1 something did, 2 there was no comparison. `downtrace compare` ends with the
+ * same, from its own report of the same verdict.
+ */
+export function exitCodeOf(report: Pick<CheckReport, "status" | "summary">): 0 | 1 | 2 {
   if (report.status === "failed") return 2;
   return (report.summary?.worse ?? 0) > 0 ? 1 : 0;
 }

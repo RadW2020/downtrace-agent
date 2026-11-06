@@ -47,7 +47,7 @@ describe("the command line of downtrace", () => {
     [["check", "--timeout", "0"], "--timeout wants a number of seconds above zero"],
     [["check", "--frobnicate"], "unknown option --frobnicate"],
     [["check", "npm", "test"], 'unexpected "npm": the test command goes after --'],
-    [["deploy"], 'unknown command "deploy": the ones there are are "check" and "init"'],
+    [["deploy"], 'unknown command "deploy": the ones there are are "check", "init", "report" and "compare"'],
     [["init", "--frobnicate"], "unknown option --frobnicate for init"],
     [["init", "src"], 'unexpected "src": init looks at the directory it runs in'],
   ])("says what is wrong with %j", (argv, message) => {
@@ -61,6 +61,20 @@ describe("the command line of downtrace", () => {
     expect(parseArgs(["init", "--json"])).toEqual({ kind: "init", json: true });
     expect(parseArgs(["init", "--help"])).toEqual({ kind: "help" });
     expect(USAGE).toContain("downtrace init [--json]");
+  });
+
+  it("reads report and compare, with --json anywhere, and their help", () => {
+    expect(parseArgs(["report", "run.jsonl"])).toEqual({ kind: "report", json: false, file: "run.jsonl" });
+    expect(parseArgs(["report", "run.jsonl", "--json"])).toEqual({ kind: "report", json: true, file: "run.jsonl" });
+    expect(parseArgs(["compare", "--json", "a.jsonl", "b.jsonl"])).toEqual({
+      kind: "compare",
+      json: true,
+      base: "a.jsonl",
+      change: "b.jsonl",
+    });
+    expect(parseArgs(["compare", "--help"])).toEqual({ kind: "help" });
+    expect(USAGE).toContain("downtrace report [--json] <file>");
+    expect(USAGE).toContain("downtrace compare [--json] <base file> <change file>");
   });
 
   it("documents every option it reads", () => {

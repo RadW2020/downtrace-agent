@@ -57,6 +57,19 @@ export function endpoint(
   };
 }
 
+/**
+ * A dependency an endpoint's requests reached: `buckets` is how many of them made how many calls to it — queries, for a
+ * database — in the protocol's buckets of calls per request (0, 1, 2, 3 to 5, 6 to 10, 11 to 20, 21 to 50, more).
+ */
+export function dependency(kind: Dependency["kind"], buckets: Dependency["callsPerRequest"], target = ""): Dependency {
+  return { kind, target, callsPerRequest: buckets, totalMs: 1, max: 1, errors: 0 };
+}
+
+/** The same endpoint, with the dependencies its requests reached. */
+export function reaching(made: Endpoint, ...dependencies: Dependency[]): Endpoint {
+  return { ...made, dependencies };
+}
+
 export function interval(start: number, durationMs: number, endpoints: Endpoint[]): Interval {
   return { start, durationMs, endpoints };
 }

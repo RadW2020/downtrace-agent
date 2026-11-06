@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
+import { CALLS_PER_REQUEST_BUCKETS_V0 } from "@downtrace/protocol";
 import { METHODS } from "../routes.ts";
 import { declaredRoute } from "./config.ts";
 
@@ -15,7 +16,16 @@ import { declaredRoute } from "./config.ts";
  * Everything in the file is `unknown` until it is read: it is written by another process, possibly cut in the
  * middle of a line by a runner that ended it, and a reader that trusted its shape would turn a torn line into a
  * crash. What cannot be read is counted and said (`malformed`), never skipped without a trace.
+ *
+ * `check` reads the files of its own runs with it, and `downtrace report` and `downtrace compare` read with it the
+ * files a person hands them (`inspection.ts`): one reader, so that the three never count the same file two ways.
  */
+
+/**
+ * The kinds of dependency whose calls are queries: a database's. The other two are outgoing HTTP calls and Redis
+ * commands.
+ */
+export const DATABASE_KINDS = ["postgres", "mysql", "sqlite", "mssql", "mongodb"] as const;
 
 /**
  * The kinds of operation whose composition the comparison judges: what a route ran. The other three kinds of the
@@ -55,6 +65,14 @@ export interface RouteTally {
   /** Sum of the requests' durations, in milliseconds. Data: nothing is judged by it. */
   durationMs: number;
   operations: Map<string, OperationTally>;
+  /**
+   * How many of its requests ran how many queries, in the protocol's buckets of calls per request (0, 1, 2, 3 to 5, 6
+   * to 10, 11 to 20, 21 to 50, more): what a median is read from, by `downtrace report`. From the intervals, so it
+   * counts requests no profile covers too. Null when, in some interval, its requests reached more than one database:
+   * each database has its own buckets, and how many queries one request ran in all is not in the file. Data: nothing
+   * is judged by it.
+   */
+  queriesPerRequest: number[] | null;
 }
 
 export interface RunTally {
@@ -122,7 +140,14 @@ interface RawWindow {
 interface RawInterval {
   start: number;
   durationMs: number;
-  endpoints: Array<{ method: string; route: string; count: number; durationMs: number; calls: boolean }>;
+  endpoints: Array<{
+    method: string;
+    route: string;
+    count: number;
+    durationMs: number;
+    calls: boolean;
+    queries: number[] | null;
+  }>;
 }
 
 function compositionKind(value: unknown): CompositionKind | undefined {
@@ -136,6 +161,38 @@ function madeCalls(dependencies: unknown): boolean {
     const buckets = isRecord(dependency) ? dependency.callsPerRequest : undefined;
     return Array.isArray(buckets) && buckets.some((n, i) => i > 0 && typeof n === "number" && n > 0);
   });
+}
+
+/** The buckets of calls per request, when they are the protocol's: as many as it has, and each a count. */
+function bucketsOf(value: unknown): number[] | undefined {
+  return Array.isArray(value) && value.length === CALLS_PER_REQUEST_BUCKETS_V0 && value.every(isCount)
+    ? [...value]
+    : undefined;
+}
+
+/**
+ * The requests of one endpoint of one interval by how many queries each ran, in the protocol's buckets; null when
+ * they reached more than one database. A database's buckets count the requests that reached it, so the endpoint's
+ * other requests ran none of its queries, and they are added to the first bucket. A database whose buckets cannot be
+ * read is added to `problems`, and read as one more database: what it ran is not known.
+ */
+function queriesOf(count: number, endpoint: Rec, problems: { count: number }): number[] | null {
+  const databases: number[][] = [];
+  let unknown = false;
+  for (const dependency of Array.isArray(endpoint.dependencies) ? endpoint.dependencies : []) {
+    if (!isRecord(dependency) || !DATABASE_KINDS.some((kind) => kind === dependency.kind)) continue;
+    const buckets = bucketsOf(dependency.callsPerRequest);
+    if (buckets === undefined) {
+      problems.count += 1;
+      unknown = true;
+    } else databases.push(buckets);
+  }
+  // Before protocol 0.4.0, Postgres's queries per request travelled in a field of their own.
+  const legacy = isRecord(endpoint.postgres) ? bucketsOf(endpoint.postgres.queriesPerRequest) : undefined;
+  if (databases.length === 0 && legacy !== undefined) databases.push(legacy);
+  if (unknown || databases.length > 1) return null;
+  const reached = databases[0]?.slice(1) ?? new Array<number>(CALLS_PER_REQUEST_BUCKETS_V0 - 1).fill(0);
+  return [Math.max(0, count - reached.reduce((sum, n) => sum + n, 0)), ...reached];
 }
 
 /** Reads one profile window; the number of entries it could not read is added to `problems`. */
@@ -199,6 +256,7 @@ function readInterval(interval: unknown, problems: { count: number }): RawInterv
       count: endpoint.count,
       durationMs: isCount(latency) ? latency : 0,
       calls: madeCalls(endpoint.dependencies),
+      queries: queriesOf(endpoint.count, endpoint, problems),
     });
   }
   return { start: interval.start, durationMs: interval.durationMs, endpoints };
@@ -223,6 +281,7 @@ function routeOf(routes: Map<string, RouteTally>, method: string, route: string)
       unprofiledRequests: 0,
       durationMs: 0,
       operations: new Map(),
+      queriesPerRequest: new Array<number>(CALLS_PER_REQUEST_BUCKETS_V0).fill(0),
     };
     routes.set(id, tally);
   }
@@ -266,6 +325,21 @@ export class RunReader {
       this.problems.count += 1;
       return;
     }
+    this.addBatch(value);
+  }
+
+  /**
+   * One line, already parsed: for a reader that says which line it could not read (`inspection.ts`). Returns how
+   * many things in it could not be read — the line itself, when it is not a batch, or entries of it — and 0 when all
+   * of it was.
+   */
+  addBatch(value: unknown): number {
+    const before = this.problems.count;
+    this.read(value);
+    return this.problems.count - before;
+  }
+
+  private read(value: unknown): void {
     const instance = isRecord(value) ? value.instance : undefined;
     if (!isRecord(value) || !isRecord(instance) || typeof instance.id !== "string") {
       this.problems.count += 1;
@@ -339,6 +413,7 @@ export class RunReader {
           requests += endpoint.count;
           if (covered || !endpoint.calls) route.profiledRequests += endpoint.count;
           else route.unprofiledRequests += endpoint.count;
+          route.queriesPerRequest = addBuckets(route.queriesPerRequest, endpoint.queries);
         }
       }
     }
@@ -352,6 +427,12 @@ export class RunReader {
       observers: observersOf([...this.processes.values()]),
     };
   }
+}
+
+/** Two counts of queries per request, bucket by bucket; unknown when either is. */
+function addBuckets(into: number[] | null, more: number[] | null): number[] | null {
+  if (into === null || more === null) return null;
+  return into.map((n, i) => n + (more[i] ?? 0));
 }
 
 /**

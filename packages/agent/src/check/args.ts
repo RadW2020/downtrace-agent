@@ -3,6 +3,8 @@
  *
  *     downtrace check [--base <ref>] [--json] [--config <file>] [--timeout <seconds>] [-- <test command>]
  *     downtrace init [--json]
+ *     downtrace report [--json] <file>
+ *     downtrace compare [--json] <base file> <change file>
  *
  * The test command comes after `--` so that its own flags are its own and never this one's.
  */
@@ -21,10 +23,14 @@ export type Parsed =
       command: string[];
     }
   | { kind: "init"; json: boolean }
+  | { kind: "report"; json: boolean; file: string }
+  | { kind: "compare"; json: boolean; base: string; change: string }
   | { kind: "error"; message: string };
 
 export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace init [--json]
+       downtrace report [--json] <file>
+       downtrace compare [--json] <base file> <change file>
 
 check runs the tests of the project on a base and on the working tree with the instrumentation writing locally,
 and compares them route by route, by composition: which queries, outgoing calls and Redis commands each request
@@ -49,6 +55,19 @@ Options of init:
 Exit status of init: 0 configured, 1 something could not be detected or done (it says what to do instead),
 2 a file it reads could not be read, and nothing was written.
 
+report reads a file DOWNTRACE_INSPECT wrote, and says for each route its requests, how many queries a request ran,
+the operations a request ran more than once and the slowest ones: the routes with the most queries per request first.
+It needs no account and no tests: start the application with DOWNTRACE_INSPECT=<file>, use it, and read the report.
+
+compare reads two such files, a base and a change recorded however the project can, and judges them as check judges
+its two runs: route by route, by composition, with the same verdicts and the same exit status.
+
+Options of report and compare:
+  --json               print the result as JSON, for a coding agent
+
+Exit status of report: 0 reported, 2 the file could not be read as one DOWNTRACE_INSPECT wrote (it says which line).
+Exit status of compare: the same as check's.
+
   -h, --help           this text
   -v, --version        the version
 `;
@@ -59,8 +78,12 @@ export function parseArgs(argv: readonly string[]): Parsed {
   if (first === undefined || first === "-h" || first === "--help" || first === "help") return { kind: "help" };
   if (first === "-v" || first === "--version" || first === "version") return { kind: "version" };
   if (first === "init") return parseInit(rest);
+  if (first === "report" || first === "compare") return parseFiles(first, rest);
   if (first !== "check") {
-    return { kind: "error", message: `unknown command "${first}": the ones there are are "check" and "init"` };
+    return {
+      kind: "error",
+      message: `unknown command "${first}": the ones there are are "check", "init", "report" and "compare"`,
+    };
   }
 
   let base: string | undefined;
@@ -115,6 +138,30 @@ function parseInit(rest: readonly string[]): Parsed {
     else return { kind: "error", message: `unexpected "${arg}": init looks at the directory it runs in` };
   }
   return { kind: "init", json };
+}
+
+/** Reads what comes after `downtrace report` or `downtrace compare`: `--json`, and the files, one or two. */
+function parseFiles(command: "report" | "compare", rest: readonly string[]): Parsed {
+  let json = false;
+  const files: string[] = [];
+  for (const arg of rest) {
+    if (arg === "-h" || arg === "--help") return { kind: "help" };
+    if (arg === "--json") json = true;
+    else if (arg.startsWith("-")) return { kind: "error", message: `unknown option ${arg} for ${command}` };
+    else files.push(arg);
+  }
+  if (command === "report") {
+    const [file] = files;
+    if (file === undefined || files.length !== 1) {
+      return { kind: "error", message: "report reads one file: downtrace report <file>" };
+    }
+    return { kind: "report", json, file };
+  }
+  const [base, change] = files;
+  if (base === undefined || change === undefined || files.length !== 2) {
+    return { kind: "error", message: "compare reads two files: downtrace compare <base file> <change file>" };
+  }
+  return { kind: "compare", json, base, change };
 }
 
 function splitOnce(text: string, separator: string): [string, string | undefined] {

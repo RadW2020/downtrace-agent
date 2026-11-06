@@ -3,10 +3,12 @@ import { join, relative, resolve } from "node:path";
 import { runInit } from "../init/command.ts";
 import { type PackageJson, parsePackageJson } from "../init/detect.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
+import { runCompare } from "./compare-command.ts";
 import { type CheckConfig, type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
 import { type FeedbackContext, feedbackFor } from "./feedback.ts";
 import { renderJson, renderText } from "./render.ts";
 import { type CheckReport, exitCodeOf, failed } from "./report.ts";
+import { runReport } from "./report-command.ts";
 import { DEFAULT_TIMEOUT_SECONDS, repositoryTop, runCheck } from "./run.ts";
 
 /** What the command needs from the process it runs in, passed in and not reached for. */
@@ -95,6 +97,19 @@ export async function runCli(deps: CliDeps): Promise<number> {
     return 2;
   }
   if (parsed.kind === "init") return runInit({ cwd: deps.cwd, json: parsed.json, stdout: deps.stdout });
+  if (parsed.kind === "report" || parsed.kind === "compare") {
+    try {
+      const read = { cwd: deps.cwd, json: parsed.json, stdout: deps.stdout };
+      const dependencies = (await projectPackage(resolve(deps.cwd)))?.dependencies;
+      return await (parsed.kind === "report"
+        ? runReport({ ...read, file: parsed.file, dependencies })
+        : runCompare({ ...read, base: parsed.base, change: parsed.change, dependencies }));
+    } catch (err) {
+      // What nobody expected still ends in 2, never in compare's 1 of a route that got worse, and with no stack.
+      deps.stderr(`downtrace ${parsed.kind}: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 2;
+    }
+  }
 
   const say = (report: CheckReport): number => {
     deps.stdout(parsed.json ? renderJson(report) : renderText(report));

@@ -1,4 +1,4 @@
-import type { DependencyResult, OperationResult, RouteResult } from "./compare.ts";
+import type { DependencyResult, OperationResult, RouteResult, Summary } from "./compare.ts";
 import type { CheckReport, SideReport } from "./report.ts";
 
 /** A number as a person reads it: whole when it is whole, two decimals at most when it is not. */
@@ -20,7 +20,7 @@ const MOVED: Record<OperationResult["change"], string> = {
   disappeared: "gone",
 };
 
-function plural(n: number, word: string, many = `${word}s`): string {
+export function plural(n: number, word: string, many = `${word}s`): string {
   return `${n} ${n === 1 ? word : many}`;
 }
 
@@ -112,7 +112,6 @@ export function renderText(report: CheckReport): string {
     return `${out.join("\n")}\n`;
   }
 
-  const summary = report.summary ?? { worse: 0, unchanged: 0, notEvaluated: 0 };
   out.push(
     `downtrace check: ${report.change?.ref ?? "working tree"} against ${report.base?.ref ?? "the base"}` +
       `${report.base?.commit ? ` (${report.base.commit.slice(0, 9)})` : ""}`,
@@ -120,15 +119,34 @@ export function renderText(report: CheckReport): string {
     side("base", report.base),
     side("change", report.change),
     "",
+    ...verdictLines(report.summary, report.routes),
   );
-  const evaluated = summary.worse + summary.unchanged;
-  out.push(
-    `${evaluated} of ${evaluated + summary.notEvaluated} routes evaluated: ${summary.worse} worse, ${summary.unchanged} unchanged.`,
-  );
+  for (const note of report.notes) out.push("", note);
+  out.push(...feedbackLines(report));
+  return `${out.join("\n")}\n`;
+}
 
-  const worse = report.routes.filter((route) => route.verdict === "worse");
-  const unchanged = report.routes.filter((route) => route.verdict === "unchanged");
-  const skipped = report.routes.filter((route) => route.verdict === "not-evaluated");
+/**
+ * The verdicts, route by route, in the three columns: what `check` says of its two runs and `downtrace compare` of its
+ * two files, in the same words, because it is the same verdict.
+ */
+export function verdictLines(summary: Summary | null, routes: readonly RouteResult[]): string[] {
+  const {
+    worse: worseCount,
+    unchanged: unchangedCount,
+    notEvaluated,
+  } = summary ?? {
+    worse: 0,
+    unchanged: 0,
+    notEvaluated: 0,
+  };
+  const evaluated = worseCount + unchangedCount;
+  const out = [
+    `${evaluated} of ${evaluated + notEvaluated} routes evaluated: ${worseCount} worse, ${unchangedCount} unchanged.`,
+  ];
+  const worse = routes.filter((route) => route.verdict === "worse");
+  const unchanged = routes.filter((route) => route.verdict === "unchanged");
+  const skipped = routes.filter((route) => route.verdict === "not-evaluated");
   if (worse.length > 0) {
     out.push("", `Worse (${worse.length})`);
     for (const route of worse) out.push(...evaluatedBlock(route));
@@ -144,9 +162,7 @@ export function renderText(report: CheckReport): string {
       for (const reason of route.reasons) out.push(`    ${reason.message}`);
     }
   }
-  for (const note of report.notes) out.push("", note);
-  out.push(...feedbackLines(report));
-  return `${out.join("\n")}\n`;
+  return out;
 }
 
 /** The report as a coding agent reads it. */

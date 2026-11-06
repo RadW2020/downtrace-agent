@@ -1,8 +1,18 @@
-import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
+import { AGGREGATES_SCHEMA_V0, DEPENDENCY_KINDS_V0, type Endpoint } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
-import { identify, readDeclared, readRun } from "../src/check/read.ts";
-import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint } from "./support/check-batches.ts";
+import { DATABASE_KINDS, identify, RunReader, readDeclared, readRun } from "../src/check/read.ts";
+import {
+  batch,
+  dependency,
+  endpoint,
+  fileOf,
+  interval,
+  operation,
+  profile,
+  profileEndpoint,
+  reaching,
+} from "./support/check-batches.ts";
 
 /**
  * What a run left behind, read back. The file is written by every process the run started, so a route is in many
@@ -139,6 +149,86 @@ describe("reading the file of a run", () => {
     const one = batch("one", { intervals: answered, observers: { pg: "on" } });
     const other = batch("other", { intervals: answered, observers: { pg: "unavailable" } });
     expect(readRun(fileOf(one, other)).observers).toEqual({ pg: "on/unavailable" });
+  });
+});
+
+describe("how many queries each request ran, from the intervals", () => {
+  const read = (...endpoints: Parameters<typeof interval>[2]) =>
+    readRun(fileOf(batch("a", { intervals: [interval(1000, 1000, endpoints)] }))).routes.get("GET /p");
+
+  it("takes a database's buckets, and counts the requests that did not reach it as running no query", () => {
+    // Six requests: three ran 3 to 5 queries, one ran 1, and two never reached the database.
+    const route = read(reaching(endpoint("GET", "/p", 6), dependency("postgres", [0, 1, 0, 3, 0, 0, 0, 0])));
+    expect(route?.queriesPerRequest).toEqual([2, 1, 0, 3, 0, 0, 0, 0]);
+  });
+
+  it("counts every request in the first bucket when none reached a database, or only an outgoing host did", () => {
+    expect(read(endpoint("GET", "/p", 4))?.queriesPerRequest).toEqual([4, 0, 0, 0, 0, 0, 0, 0]);
+    const called = reaching(endpoint("GET", "/p", 4), dependency("http", [0, 0, 0, 0, 0, 4, 0, 0], "api.example.com"));
+    expect(read(called)?.queriesPerRequest).toEqual([4, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("adds the buckets of every interval and every process", () => {
+    const route = readRun(
+      fileOf(
+        batch("a", {
+          intervals: [
+            interval(1000, 1000, [reaching(endpoint("GET", "/p", 2), dependency("sqlite", [0, 2, 0, 0, 0, 0, 0, 0]))]),
+          ],
+        }),
+        batch("b", {
+          intervals: [
+            interval(1000, 1000, [reaching(endpoint("GET", "/p", 3), dependency("sqlite", [0, 0, 0, 0, 0, 0, 3, 0]))]),
+          ],
+        }),
+      ),
+    ).routes.get("GET /p");
+    expect(route?.queriesPerRequest).toEqual([0, 2, 0, 0, 0, 0, 3, 0]);
+  });
+
+  it("does not know them when the requests of an interval reached two databases, whose queries cannot be added", () => {
+    const two = reaching(
+      endpoint("GET", "/p", 2),
+      dependency("postgres", [0, 2, 0, 0, 0, 0, 0, 0], "db-a:5432"),
+      dependency("postgres", [0, 2, 0, 0, 0, 0, 0, 0], "db-b:5432"),
+    );
+    expect(read(two)?.queriesPerRequest).toBeNull();
+  });
+
+  it("reads the field Postgres's queries travelled in before protocol 0.4.0", () => {
+    const legacy: Endpoint = {
+      ...endpoint("GET", "/p", 3),
+      postgres: { queriesPerRequest: [0, 0, 3, 0, 0, 0, 0, 0], totalMs: 1, max: 1 },
+    };
+    expect(read(legacy)?.queriesPerRequest).toEqual([0, 0, 3, 0, 0, 0, 0, 0]);
+  });
+
+  it("counts buckets it cannot read, and does not guess a median from them", () => {
+    const reader = new RunReader();
+    const broken = { ...dependency("mysql", [0, 0, 0, 0, 0, 0, 0, 0]), callsPerRequest: [1, 2] as never };
+    const problems = reader.addBatch(
+      batch("a", { intervals: [interval(1000, 1000, [reaching(endpoint("GET", "/p", 3), broken)])] }),
+    );
+    expect(problems).toBe(1);
+    const run = reader.finish();
+    expect(run.malformed).toBe(1);
+    expect(run.routes.get("GET /p")?.queriesPerRequest).toBeNull();
+  });
+
+  it("knows a database by every kind of the protocol that is not an outgoing call or a Redis command", () => {
+    expect([...DATABASE_KINDS].sort()).toEqual(
+      DEPENDENCY_KINDS_V0.filter((kind) => kind !== "http" && kind !== "redis").sort(),
+    );
+  });
+});
+
+describe("reading a line already parsed", () => {
+  it("says how much of it could not be read: nothing, the line, or entries of it", () => {
+    const reader = new RunReader();
+    expect(reader.addBatch(batch("a", { intervals: [interval(1000, 1000, [endpoint("GET", "/p", 1)])] }))).toBe(0);
+    expect(reader.addBatch({ protocol: "0.13.0" })).toBe(1);
+    expect(reader.addBatch(batch("a", { intervals: [{ start: "soon" } as never, { start: 2000 } as never] }))).toBe(2);
+    expect(reader.finish()).toMatchObject({ batches: 2, malformed: 3, requests: 1 });
   });
 });
 

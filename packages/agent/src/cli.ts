@@ -4,8 +4,8 @@ import { runCli } from "./check/command.ts";
 import { AGENT_VERSION } from "./version.ts";
 
 /**
- * `downtrace`: the command of this package. It has two subcommands: `check`, which compares two runs of the
- * project's tests before a deploy, and `init`, which writes what `check` and a pruning build need to know.
+ * `downtrace`: the command of this package. `check` compares two runs of the project's tests before a deploy, `init`
+ * writes what `check` and a pruning build need to know, and `report` and `compare` read files `DOWNTRACE_INSPECT` wrote.
  *
  * Everything it reads from the process it runs in is read here, once, and handed on; the rest of it only returns
  * a status. A signal stops the runs, takes the temporary worktree away and ends with the status that says no
