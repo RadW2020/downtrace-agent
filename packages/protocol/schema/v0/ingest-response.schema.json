@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://downtrace.io/schema/v0/ingest-response.schema.json",
   "title": "IngestResponse",
-  "description": "What the cloud answers to POST /v0/aggregates. Described here, and not left as an implementation detail, because since protocol 0.7.0 it carries instructions: the captures the cloud is waiting for. It follows the same rules as the batch — fields are only ever added, each addition bumps the minor, and a published minor is accepted for ever — with one difference in who owes what. An agent that does not read this body must behave exactly as it did before, so every field here is something an agent may ignore.",
+  "description": "What the cloud answers to POST /v0/aggregates. Described here, and not left as an implementation detail, because since protocol 0.7.0 it carries instructions: the captures the cloud is waiting for. It follows the same rules as the batch — fields are only ever added, each addition bumps the minor, and a published minor is accepted for ever — with one difference in who owes what. An agent that does not read this body must behave exactly as it did before, so every field here is something an agent may ignore. `Destination`, below, is also the whole answer to a check of the token that carries no batch.",
   "type": "object",
   "additionalProperties": false,
   "required": ["accepted", "inserted"],
@@ -17,6 +17,7 @@
       "minimum": 0,
       "description": "How many rows were new. Lower than `accepted` when a batch is re-sent: ingest is idempotent."
     },
+    "destination": { "$ref": "#/$defs/Destination" },
     "captures": {
       "type": "array",
       "maxItems": 16,
@@ -64,6 +65,28 @@
           "type": "string",
           "format": "date-time",
           "description": "After this instant the cloud stops waiting. An instrumentation that reads a stale response must not start a capture past it: the cloud will refuse the evidence, and a capture nobody is waiting for spends the fine register for nothing."
+        }
+      }
+    },
+    "Destination": {
+      "type": "object",
+      "title": "Destination",
+      "additionalProperties": false,
+      "required": ["project"],
+      "x-destination-path": "/v0/destination",
+      "description": "Where an ingestion token writes: the project and the environment the token itself names, and nothing else, because an ingestion token reads nothing. Since 0.14.0, two answers carry it. The answer to an accepted batch says where the batch landed, as `destination`: an older cloud leaves it out, and a reader takes its absence as «not said», never as «nowhere». And a GET of `x-destination-path`, with the token as a bearer, answers 200 with one, or 401 for a token the cloud does not know: it checks the token without a batch, and ingests nothing.",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The slug of the project the token belongs to."
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The environment the data lands in, which is the one the token names. A token that names none, minted before tokens were bound to an environment, writes to whichever one each batch declares in `deploy.environment`: the answer to a batch then names that one, and the answer to a check leaves it out."
         }
       }
     }

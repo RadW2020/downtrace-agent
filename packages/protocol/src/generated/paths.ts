@@ -10,3 +10,6 @@ export const CAPTURE_EVIDENCE_PATH = "/v0/captures/{id}/evidence";
 export function captureEvidencePath(id: string): string {
   return CAPTURE_EVIDENCE_PATH.replace("{id}", encodeURIComponent(id));
 }
+
+/** Path that answers, to a GET with the token, the `Destination` it writes to: a check that sends no batch. */
+export const DESTINATION_PATH = "/v0/destination";

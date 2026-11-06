@@ -152,6 +152,13 @@ const evidencePathTemplate = evidence["x-evidence-path"];
 if (typeof evidencePathTemplate !== "string" || !evidencePathTemplate.includes("{id}")) {
   throw new Error("schema: x-evidence-path missing, or does not carry the capture's {id}");
 }
+// And the check of a token that carries no batch, beside the `Destination` it answers.
+const destinationPath = (response.$defs as Record<string, Record<string, unknown>> | undefined)?.Destination?.[
+  "x-destination-path"
+];
+if (typeof destinationPath !== "string" || !destinationPath.startsWith("/")) {
+  throw new Error("ingest-response schema: $defs.Destination.x-destination-path missing or invalid");
+}
 await writeFile(
   `${outDir}paths.ts`,
   `${header}
@@ -165,6 +172,9 @@ export const CAPTURE_EVIDENCE_PATH = ${JSON.stringify(evidencePathTemplate)};
 export function captureEvidencePath(id: string): string {
   return CAPTURE_EVIDENCE_PATH.replace("{id}", encodeURIComponent(id));
 }
+
+/** Path that answers, to a GET with the token, the \`Destination\` it writes to: a check that sends no batch. */
+export const DESTINATION_PATH = ${JSON.stringify(destinationPath)};
 `,
 );
 

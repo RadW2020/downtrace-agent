@@ -30,13 +30,15 @@ if (!isBatch(body)) throw new Error(ajv.errorsText(isBatch.errors));
 
 | Status | Meaning |
 |---|---|
-| 202 | Accepted. The body is an `IngestResponse`, which may list captures the cloud is waiting for. A sender that ignores the body still works, and simply never takes a capture. |
+| 202 | Accepted. The body is an `IngestResponse`: where the batch landed (`destination`, since 0.14.0), and the captures the cloud is waiting for, if any. A sender that ignores the body still works, and simply never takes a capture. |
 | 400 | Invalid, or a batch that carries nothing at all. The body says why. |
 | 401 | Bad token. |
 | 413 | Body too large. |
 | 429 | Rate limit or daily budget. |
 
 The evidence of a capture goes to `POST {DOWNTRACE_URL}/v0/captures/{id}/evidence` (`captureEvidencePath(id)`) as a `CaptureEvidence`, with the same token.
+
+To check a token without sending data, `GET {DOWNTRACE_URL}/v0/destination` (`DESTINATION_PATH`) with the same header. It answers 200 with a `Destination`, the project and the environment the token writes to and nothing else, or 401 for a token the cloud does not know; it ingests nothing. A cloud older than 0.14.0 answers 404.
 
 ## What a batch carries
 
@@ -60,7 +62,7 @@ What each field means is in its `description` in the schema, which the generated
 
 - **The package version is the protocol version.** `@downtrace/protocol@0.N.x` speaks protocol `0.N`, and CI refuses a release where the two disagree. A patch changes the package, never the contract.
 - **Fields are only added, and always optional.** Each addition is a minor, and `protocol` is an enum of every published minor, so the cloud keeps accepting older senders. Removing or renaming a field, or moving a bucket bound, would be a new major on a new path.
-- **The schema carries its own constants** as annotations: the bucket bounds (`x-latency-boundaries-ms`, `x-calls-per-request-boundaries`), the paths (`x-ingest-path`, `x-evidence-path`), the first minor that carries each kind of operation and exception (`x-since`) and which kinds are errors (`x-error`).
+- **The schema carries its own constants** as annotations: the bucket bounds (`x-latency-boundaries-ms`, `x-calls-per-request-boundaries`), the paths (`x-ingest-path`, `x-evidence-path`, `x-destination-path`), the first minor that carries each kind of operation and exception (`x-since`) and which kinds are errors (`x-error`).
 
 What each minor added is in the [CHANGELOG](https://github.com/RadW2020/downtrace-agent/blob/main/packages/protocol/CHANGELOG.md).
 
@@ -69,11 +71,11 @@ What each minor added is in the [CHANGELOG](https://github.com/RadW2020/downtrac
 | Path | What |
 |---|---|
 | `schema/v0/aggregates.schema.json` | What a sender sends, `AggregatesBatch`. Everything else derives from it. |
-| `schema/v0/ingest-response.schema.json` | What the cloud answers, `IngestResponse`. |
+| `schema/v0/ingest-response.schema.json` | What the cloud answers, `IngestResponse`, and where a token writes, `Destination`. |
 | `schema/v0/capture-evidence.schema.json` | What a sender returns for a capture, `CaptureEvidence`. |
 | `schema/v0/fixtures/{valid,invalid}/` | Examples every implementation must accept and reject. |
 
-Exports: the three schemas (`AGGREGATES_SCHEMA_V0`, `INGEST_RESPONSE_SCHEMA_V0`, `CAPTURE_EVIDENCE_SCHEMA_V0`), the versions (`PROTOCOL_VERSION`, `ACCEPTED_PROTOCOL_VERSIONS_V0`), the paths (`AGGREGATES_PATH`, `CAPTURE_EVIDENCE_PATH`, `captureEvidencePath()`), the buckets (`LATENCY_BOUNDARIES_V0`, `latencyBucket()`, `CALLS_PER_REQUEST_BOUNDARIES_V0`, `callsPerRequestBucket()`, …) and the type of every object in the schemas.
+Exports: the three schemas (`AGGREGATES_SCHEMA_V0`, `INGEST_RESPONSE_SCHEMA_V0`, `CAPTURE_EVIDENCE_SCHEMA_V0`), the versions (`PROTOCOL_VERSION`, `ACCEPTED_PROTOCOL_VERSIONS_V0`), the paths (`AGGREGATES_PATH`, `CAPTURE_EVIDENCE_PATH`, `captureEvidencePath()`, `DESTINATION_PATH`), the buckets (`LATENCY_BOUNDARIES_V0`, `latencyBucket()`, `CALLS_PER_REQUEST_BOUNDARIES_V0`, `callsPerRequestBucket()`, …) and the type of every object in the schemas.
 
 ## Source
 
