@@ -1,9 +1,15 @@
+import { spawn } from "node:child_process";
+import diagnostics_channel from "node:diagnostics_channel";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AGGREGATES_PATH, AGGREGATES_SCHEMA_V0, type AggregatesBatch, type Interval } from "@downtrace/protocol";
 import Hapi from "@hapi/hapi";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent } from "../src/agent.ts";
 import { currentContext } from "../src/context.ts";
 import { attachHapi, hapiRouterOf, patchHapiRequest } from "../src/hapi.ts";
@@ -60,6 +66,15 @@ async function hit(url: string, path: string, method = "GET"): Promise<number> {
   const res = await fetch(url + path, { method });
   await res.arrayBuffer();
   return res.status;
+}
+
+/**
+ * What Node 18.19 to 22.3 announce on the `module.require` channel: nothing. Node still announces there, and the
+ * instrumentation is handed a channel of another name, on which nothing is ever announced, whichever Node this runs.
+ */
+const UNANNOUNCED = "downtrace.test.unannounced";
+function announcingNothing(name: string): string {
+  return name === "module.require" ? UNANNOUNCED : name;
 }
 
 /**
@@ -184,62 +199,85 @@ describe("a Hapi application is named by its templates", () => {
 });
 
 /**
- * DT-165. Node announces what modules require only from Node 22, and with `--import` the instrumentation starts before
- * the application loads Hapi: on Node 18.19 and 20 nothing patched Hapi's request class, and a Hapi application was
- * named by the heuristic, `/users/ana` as itself. Here the class is in a module cache the test hands the agent, and was
- * never required: a load nobody announced, which is what Hapi's is before Node 22, on whichever Node this runs.
+ * DT-165 and DT-175. Node announces what modules require only from Node 22.4, and with `--import` the instrumentation
+ * starts before the application loads Hapi. Before 22.4 nothing patched Hapi's request class: a Hapi application was
+ * named by the heuristic, `/users/ana` as itself; and then only from the first request Node's server received, which a
+ * suite that only injects never makes, so on Node 18.19 it wrote no route at all.
+ *
+ * The application here is a process of its own, started with the register entry and a Node that announces nothing on
+ * that channel, as Node 18.19 to 22.3 announce nothing; it imports Hapi after the start, and calls it.
  */
-describe("a Hapi loaded after the instrumentation started, which nothing announced", () => {
-  // covers: RF-121
-  it("is patched from the first request, before Hapi builds it, and every request is named by its template", async () => {
-    const sink = await startSink();
-    // Hapi's `lib/request.js`, as far as the instrumentation reads it: `_lookup` matches a route, `_execute` runs the
-    // lifecycle and answers.
-    class Request {
-      raw: { req: object; res: http.ServerResponse };
-      route: { path: string } | undefined;
-      _core = { router: {} };
-      constructor(req: object, res: http.ServerResponse) {
-        this.raw = { req, res };
-      }
-      _lookup(): void {
-        this.route = { path: "/users/{id}" };
-      }
-      _execute(): void {
-        this._lookup();
-        this.raw.res.writeHead(200).end("user");
-      }
-    }
-    const original = Request.prototype._lookup;
-    const moduleCache = new Proxy({} as Record<string, unknown>, {
-      get: (_cache, file) =>
-        typeof file === "string" && file.replaceAll("\\", "/").endsWith("/@hapi/hapi/lib/request.js")
-          ? { exports: Request }
-          : undefined,
-    });
-    const agent = createAgent(
-      testConfig(sink.url, { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set() }),
-      { log: quiet, moduleCache },
-    );
-    agent.start();
-    const server = http.createServer((req, res) => new Request(req, res)._execute());
-    server.listen(0, "127.0.0.1");
-    await new Promise<void>((r) => server.once("listening", r));
-    cleanups.push(
-      sink.close,
-      () => agent.stop(),
-      () => new Promise<void>((r) => server.close(() => r())),
-    );
-    expect(Request.prototype._lookup, "nothing is patched at start-up, before the application loads Hapi").toBe(
-      original,
-    );
+describe("a Hapi the application loads after the start, on a Node that announces no module loads", () => {
+  const register = fileURLToPath(new URL("../src/register.ts", import.meta.url));
+  const unannounced = `import dc from "node:diagnostics_channel";
+const tracingChannel = dc.tracingChannel;
+dc.tracingChannel = (name) => tracingChannel(name === "module.require" ? ${JSON.stringify(UNANNOUNCED)} : name);`;
+  const application = (call: string): string => `import Hapi from "@hapi/hapi";
+const server = Hapi.server({ port: 0, host: "127.0.0.1" });
+server.route({ method: "GET", path: "/users/{id}", handler: (request) => ({ id: request.params.id }) });
+${call}
+for (const path of ["/users/ana", "/users/42"]) {
+  const status = await ask(path);
+  if (status !== 200) throw new Error(path + " answered " + status);
+}
+await server.stop();`;
+  const CALLS = {
+    "only injects, as Hapi's guide and Lab do": `await server.initialize();
+const ask = async (path) => (await server.inject(path)).statusCode;`,
+    "calls it through Node's server": `await server.start();
+const ask = async (path) => {
+  const res = await fetch(server.info.uri + path);
+  await res.arrayBuffer();
+  return res.status;
+};`,
+  };
 
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    expect(await hit(url, "/users/ana")).toBe(200);
-    expect(await hit(url, "/users/42")).toBe(200);
-    expect(await agent.flushNow()).toBe(true);
-    expect(routesOf(sink.batches[0])).toEqual({ "GET /users/{id}": 2 });
-    expect(JSON.stringify(sink.batches)).not.toContain("ana");
+  function run(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; err: string }> {
+    return new Promise((resolve, reject) => {
+      // From this package, which has Hapi: an `-e` application resolves from the working directory.
+      const child = spawn(process.execPath, args, { cwd: fileURLToPath(new URL("..", import.meta.url)), env });
+      let err = "";
+      child.stderr.on("data", (chunk) => {
+        err += chunk;
+      });
+      child.on("error", reject);
+      child.on("exit", (code) => resolve({ code, err }));
+    });
+  }
+
+  // covers: RF-121
+  it.each(Object.entries(CALLS))("names each request by its template when the suite %s", async (_how, call) => {
+    const dir = mkdtempSync(join(tmpdir(), "downtrace-hapi-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const inspect = join(dir, "run.jsonl");
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith("DOWNTRACE_") || key === "NODE_OPTIONS") delete env[key];
+    const child = await run(
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(unannounced)}`,
+        "--import",
+        register,
+        "--input-type=module",
+        "-e",
+        application(call),
+      ],
+      { ...env, DOWNTRACE_INSPECT: inspect },
+    );
+    expect(child.code, child.err).toBe(0);
+    expect(child.err).not.toContain("[downtrace]");
+    const batches = existsSync(inspect)
+      ? readFileSync(inspect, "utf8")
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => JSON.parse(line) as AggregatesBatch)
+      : [];
+    const written: Record<string, number> = {};
+    for (const batch of batches) {
+      for (const [route, count] of Object.entries(routesOf(batch))) written[route] = (written[route] ?? 0) + count;
+    }
+    expect(written).toEqual({ "GET /users/{id}": 2 });
+    expect(JSON.stringify(batches)).not.toContain("ana");
   });
 });
 
@@ -257,6 +295,7 @@ describe("attachHapi, when the instrumentation's own doors fail or it stopped", 
     const broken = new Error("the doors broke");
     const stop = attachHapi({
       from: import.meta.filename,
+      log: quiet,
       internalError: (err) => failures.push(err),
       unannounced: {
         announced: () => false,
@@ -276,11 +315,41 @@ describe("attachHapi, when the instrumentation's own doors fail or it stopped", 
   });
 
   /**
+   * DT-175. Where Node announces no module loads, the start loads Hapi's request class itself. A Hapi whose class
+   * cannot be loaded is one the application meets as it loads Hapi, and nothing of the instrumentation's own.
+   */
+  // covers: RF-121
+  it("starts as without Hapi when its request class throws as the start loads it, on a Node that announces no loads (invariant 2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "downtrace-hapi-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const lib = join(dir, "node_modules", "@hapi", "hapi", "lib");
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(join(lib, "..", "package.json"), JSON.stringify({ name: "@hapi/hapi", main: "lib/index.js" }));
+    writeFileSync(join(lib, "index.js"), "");
+    writeFileSync(join(lib, "request.js"), 'throw new Error("a broken install");');
+    const tracingChannel = diagnostics_channel.tracingChannel;
+    const spy = vi
+      .spyOn(diagnostics_channel, "tracingChannel")
+      .mockImplementation((name) => tracingChannel(announcingNothing(String(name))));
+    cleanups.push(() => spy.mockRestore());
+    const failures: unknown[] = [];
+    const said: string[] = [];
+    const stop = attachHapi({
+      from: join(dir, "app.js"),
+      log: { warn: (line) => said.push(line), debug: (line) => said.push(line) },
+      internalError: (err) => failures.push(err),
+    });
+    cleanups.push(stop);
+    expect(failures).toEqual([]);
+    expect(said).toEqual([expect.stringMatching(/^hapi: .*request\.js not loaded: Error: a broken install$/)]);
+  });
+
+  /**
    * ESC-18: `check` names a route no test called only from the routes the application declares. A Hapi server keeps
    * them in its router, plugins' included, and a request it answered — matched or not — says which server that was.
    */
   it("declares the routes of the server that answered for check: one per method, as a request gets it, and none for every method", async () => {
-    const stop = attachHapi({ from: import.meta.filename, internalError: () => {} });
+    const stop = attachHapi({ from: import.meta.filename, log: quiet, internalError: () => {} });
     cleanups.push(stop);
     const app = Hapi.server();
     app.route({ method: "GET", path: "/users/{id}", handler: () => "user" });
@@ -342,6 +411,7 @@ describe("attachHapi, when the instrumentation's own doors fail or it stopped", 
     const opened: object[] = [];
     const stop = attachHapi({
       from: import.meta.filename,
+      log: quiet,
       internalError: () => {},
       unannounced: { announced: () => false, started: (request) => opened.push(request), finished: () => {} },
     });

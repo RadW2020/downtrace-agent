@@ -106,7 +106,7 @@ describe("createDeclaredRoutes", () => {
   });
 
   it("writes the routes of a Hapi server that answered a request, injected or not", async () => {
-    const stop = attachHapi({ from: import.meta.filename, internalError: () => {} });
+    const stop = attachHapi({ from: import.meta.filename, log: quiet, internalError: () => {} });
     const app = Hapi.server();
     app.route({ method: "GET", path: "/users/{id}", handler: () => "user" });
     app.route({ method: "POST", path: "/users", handler: () => "made" });

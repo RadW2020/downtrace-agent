@@ -36,7 +36,7 @@ import { Excluded } from "./exclude.ts";
 import { attachFastify, type Unannounced } from "./fastify.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
-import { attachHapi, attachLoadedHapi } from "./hapi.ts";
+import { attachHapi } from "./hapi.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { type Armed, armedTogether, whenLoaded } from "./instrument/arm.ts";
@@ -651,8 +651,9 @@ export class Agent {
     this.stopFastify = attachFastify({ internalError: (err) => this.internalError(err), unannounced });
     // Hono's routers are given their routes at the first match and keep them, so their files are loaded and wrapped
     // now, before it (`hono.ts`, ADR 0236). A request made with `app.request()` goes through the same two doors.
-    // Hapi's request class, as Hapi loads it: a suite that only injects makes no request Node announces (`hapi.ts`).
-    this.stopHapi = attachHapi({ from, internalError: (err) => this.internalError(err), unannounced });
+    // Hapi's request class, as Hapi loads it, or now where Node does not announce the load: a suite that only injects
+    // makes no request Node announces (`hapi.ts`, DT-175).
+    this.stopHapi = attachHapi({ from, log: this.log, internalError: (err) => this.internalError(err), unannounced });
     this.stopHono = attachHono({
       from,
       log: this.log,
@@ -661,11 +662,10 @@ export class Agent {
     });
     // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
     // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
-    // one read of the cache, once. So does Hapi's request class before Node 22, which announces no load (DT-165).
+    // one read of the cache, once.
     this.koaAttach = () => {
       const cache = this.moduleCache ?? createRequire(entry).cache;
       attachKoa({ cache, log: this.log, internalError: (err) => this.internalError(err) });
-      attachLoadedHapi(cache);
     };
     const on = this.config.instrument;
     // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
