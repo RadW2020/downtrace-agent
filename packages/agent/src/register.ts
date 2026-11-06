@@ -1,24 +1,16 @@
 /**
- * Entry point users load with `node --import @downtrace/agent/register`.
+ * Entry point users load with `node --import @downtrace/agent/register`, or import from code of their own.
  *
- * Reads DOWNTRACE_TOKEN / DOWNTRACE_URL (and friends) from the environment and
- * starts the agent. Without them it says so once and does nothing else: an
- * installed but unconfigured agent must never affect the application.
+ * It checks the Node it runs on before the rest of the package is loaded: only the check and the logger are, and
+ * neither imports anything. Below the floor it says so once and does nothing else, as it does without a token
+ * (DT-131). What starts the instrumentation is imported only after the check, and dynamically: a static import is
+ * evaluated before this module's body, and a syntax or an API the old runtime lacks would fail there, before any
+ * check could run. The await is what makes `--import` wait for the start, so the instrumentation is in place
+ * before the application loads, as before.
  */
-import { createAgent } from "./agent.ts";
-import { configFromEnv } from "./config.ts";
 import { createLogger } from "./log.ts";
-import { remember } from "./registered.ts";
+import { unsupportedNode } from "./node-floor.ts";
 
-const result = configFromEnv();
-if (result.ok) {
-  const log = createLogger(result.config.debug);
-  for (const warning of result.warnings) log.warn(warning);
-  const agent = createAgent(result.config, { log, handleSignals: true });
-  agent.start();
-  // So an application that calls `process.exit()` can wait for it: that call fires nothing and waits for
-  // nothing, and without this the last flush is simply cut (gh-383).
-  remember(agent);
-} else {
-  createLogger(false).warn(`instrumentation disabled: ${result.reason}`);
-}
+const unsupported = unsupportedNode(process.versions.node);
+if (unsupported === undefined) await import("./start.ts");
+else createLogger(false).warn(`instrumentation disabled: ${unsupported}`);

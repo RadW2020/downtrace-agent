@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { INSTRUMENTS } from "../src/config.ts";
 import { guidePages } from "./support/documentation.ts";
 
 /**
@@ -60,6 +61,22 @@ const pages = async (): Promise<string[]> => ["README.md", ...(await guidePages(
 describe("the documentation", () => {
   it("keeps the README short enough to be read", async () => {
     expect(Buffer.byteLength(await read("README.md"))).toBeLessThan(README_MAX_BYTES);
+  });
+
+  it("lists in its table of observers every one DOWNTRACE_INSTRUMENT switches, and only those", async () => {
+    // The sentence over the table said «six things» while the table had nine rows. The sentence carries no number
+    // now, and the table is counted against the source.
+    const readme = (await read("README.md")).split("\n");
+    const start = readme.findIndex((line) => line.startsWith("It observes"));
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rows: string[] = [];
+    for (const line of readme.slice(start + 1)) {
+      if (rows.length > 0 && !line.startsWith("|")) break;
+      const name = /^\| `([a-z]+)` \|/.exec(line)?.[1];
+      if (name !== undefined) rows.push(name);
+    }
+    expect(readme[start]).not.toMatch(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\b/);
+    expect([...rows].sort()).toEqual([...INSTRUMENTS].sort());
   });
 
   it("leads from the README to every page of guide/", async () => {

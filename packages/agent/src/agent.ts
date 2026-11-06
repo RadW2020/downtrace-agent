@@ -63,6 +63,7 @@ import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
 import { armExpress, armMounts } from "./mounts.ts";
+import { unsupportedNode } from "./node-floor.ts";
 import { OverheadMeter, Sheddable, type SheddableLevel, shedReasonOf } from "./overhead.ts";
 import { PrearmRegister } from "./prearm.ts";
 import { ProfileAggregator } from "./profile.ts";
@@ -142,6 +143,8 @@ export interface AgentDeps {
    * the wiring is exercised without waiting for the production cadence.
    */
   loopTickMs?: number;
+  /** The Node the agent runs on, `process.versions.node` unless a test says it is an older one (DT-131). */
+  nodeVersion?: string | undefined;
 }
 
 export interface AgentStats {
@@ -197,6 +200,7 @@ export class Agent {
   private readonly pgModule: unknown;
   private readonly mysqlModule: unknown;
   private readonly moduleCache: Readonly<Record<string, unknown>> | undefined;
+  private readonly nodeVersion: string;
   /** Every instant this agent produces. See `AgentDeps.now`: one clock, not two (gh-538). */
   private readonly now: () => number;
   private readonly log: Logger;
@@ -374,6 +378,7 @@ export class Agent {
     this.pgModule = deps.pgModule;
     this.mysqlModule = deps.mysqlModule;
     this.moduleCache = deps.moduleCache;
+    this.nodeVersion = deps.nodeVersion ?? process.versions.node;
     this.now = deps.now ?? defaultNow;
     this.excludedEndpoints = new Excluded([...config.excludeEndpoints]);
     this.excludedDependencies = new Excluded([...config.excludeDependencies]);
@@ -559,6 +564,14 @@ export class Agent {
 
   start(): void {
     if (this.started || this.disabled) return;
+    // An application that starts the agent itself, on a Node below the floor, gets what `register` gives it: one
+    // warning, and nothing attached (DT-131).
+    const unsupported = unsupportedNode(this.nodeVersion);
+    if (unsupported !== undefined) {
+      this.disabled = true;
+      this.log.warn(`instrumentation disabled: ${unsupported}`);
+      return;
+    }
     this.started = true;
     // Where the application's own modules resolve from: its entry where Node runs it — the realpath, unless the
     // process keeps the main module's symlinks — and not the symlinked binary it may have been started through

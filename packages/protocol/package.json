@@ -37,9 +37,6 @@
     "protocol",
     "json-schema"
   ],
-  "engines": {
-    "node": ">=20"
-  },
   "publishConfig": {
     "access": "public",
     "main": "./dist/index.js",
