@@ -333,8 +333,8 @@ application has: a query is counted by the copy it went through, once.
 The instrumentation runs from Node 18.19.0 ([requirements](../README.md#requirements)), and there it observes what it
 observes on Node 24, for every driver version that itself runs on 18.19. Each version below was run on Node 18.19.0
 and on Node 24, imported and required where it can be both, with a query that succeeds and one that fails, against
-the packed package: both Nodes wrote the same dependency, target, queries and error. A newer version asks for the Node
-its `package.json` declares.
+the packed package, and the MySQL drivers against MariaDB 11.4: both Nodes wrote the same dependency, target, queries
+and error. A newer version asks for the Node its `package.json` declares.
 
 | Driver | Run on Node 18.19.0 | Newer versions |
 |---|---|---|
@@ -342,6 +342,13 @@ its `package.json` declares.
 | postgres.js (`postgres`) | 3.4.9 | 4 declares Node 18, and is not observed, on any Node |
 | Neon's driver (`@neondatabase/serverless`) | 0.10.4 and 1.2.0, given a global `crypto` (below) | 1.0 and later declare Node 19 |
 | Prisma | 3.15.2, 4.16.2, 5.22.0 and 6.19.3 on its own engine; 6.19.3 with `@prisma/adapter-pg` | 7 needs Node 20.19, 22.12 or 24 |
+| `mysql2` | 3.24.6 | |
+| `mysql` (mysqljs) | 2.18.1 | |
+| `mariadb` | 3.4.8 | 3.5.1 and 3.5.2 declare Node 18 and run there only imported, and from 18.20: their modules are ES modules, which Node 18 cannot require, and they import with import attributes, which 18.19 does not read. 3.5.3 and later declare Node 20 |
+| `better-sqlite3` | 11.10.0 | 12 declares Node 20, 22, 23 or 24; 13 declares Node 22 |
+| `libsql` | 0.5.29 | |
+| `@libsql/client` | 0.18.0, on a file | |
+| `sqlite3` | 5.1.7 | 6 declares Node 20.17 |
 
 **Neon's driver does not run on Node 18 by itself**, in either version: it signs in with `crypto.getRandomValues` from
 the global `crypto`, which Node has without a flag from 19, and on 18 the process ends at the first query. Set it
