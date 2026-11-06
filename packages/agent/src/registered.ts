@@ -1,31 +1,46 @@
 import type { Agent } from "./agent.ts";
 
 /**
- * The agent that `--import @downtrace/agent/register` started, so an application that is about to leave can
- * wait for it.
+ * The agent that `--import @downtrace/agent/register`, or `init()`, started, so an application that is about to leave
+ * can wait for it.
  *
- * This is module state, and this package says dependencies are passed explicitly and nothing is reached
+ * This is process state, and this package says dependencies are passed explicitly and nothing is reached
  * for. The exception is argued in the ADR and the short version is: `--import` runs **before** the
  * application exists, so there is no call chain to pass the agent along. The application cannot receive
  * what was created before it. Either it can reach the instrumentation by name, or an application that calls
  * `process.exit()` silently loses its last interval, its profile window and any capture evidence — which is
  * what was happening (gh-383).
  *
- * Two variables, both touched by this module only: the agent, and the drain under way beside it. Nothing
+ * Two values, both touched by this module only: the agent, and the drain under way beside it. Nothing
  * else in the package touches them: the agent itself takes everything it needs as arguments, and this
  * module knows nothing about what an agent does.
+ *
+ * They live under a key of the process's, and not in this module, because a process can hold two copies of the
+ * package (DT-133): the one `downtrace check` loads with `--import` and the application's own, or a CommonJS and an
+ * ES module copy. Each copy is a module of its own, and with the state in it, `init()` in one did not see the
+ * instrumentation the other had started, and started a second. A symbol is not a global by name.
  */
-let running: Agent | undefined;
-/**
- * The drain `shutdown()` is under way, beside the agent it started. A second call that finds it returns it:
- * the second caller is the one about to `process.exit()`, and a promise that settles in the instant cuts
- * the first drain's last batch with the process (gh-690). Forgotten when it settles.
- */
-let draining: Promise<void> | undefined;
+const SLOT = Symbol.for("@downtrace/agent.registered");
 
-/** Remembers the agent the entry point started. Called once, by `register.ts`. */
+interface Registered {
+  running: Agent | undefined;
+  /**
+   * The drain `shutdown()` is under way, beside the agent it started. A second call that finds it returns it:
+   * the second caller is the one about to `process.exit()`, and a promise that settles in the instant cuts
+   * the first drain's last batch with the process (gh-690). Forgotten when it settles.
+   */
+  draining: Promise<void> | undefined;
+}
+
+function state(): Registered {
+  const process_ = globalThis as { [SLOT]?: Registered };
+  process_[SLOT] ??= { running: undefined, draining: undefined };
+  return process_[SLOT];
+}
+
+/** Remembers the agent the entry point started. Called once, by `register` or `init()`. */
 export function remember(agent: Agent): void {
-  running = agent;
+  state().running = agent;
 }
 
 /**
@@ -38,7 +53,7 @@ export function remember(agent: Agent): void {
  * rather than fail.
  */
 export function registered(): Agent | undefined {
-  return running;
+  return state().running;
 }
 
 /**
@@ -59,19 +74,20 @@ export function registered(): Agent | undefined {
  * with an error from its telemetry.
  */
 export async function shutdown(): Promise<void> {
-  if (draining !== undefined) return draining;
-  const agent = running;
-  running = undefined;
+  const registered_ = state();
+  if (registered_.draining !== undefined) return registered_.draining;
+  const agent = registered_.running;
+  registered_.running = undefined;
   if (!agent) return;
-  draining = (async () => {
+  registered_.draining = (async () => {
     try {
       await agent.stop();
     } catch {
       // Deliberately swallowed, and the only place in this package where that is right: the application is
       // leaving, this is the last thing it does, and there is nobody left to tell.
     } finally {
-      draining = undefined;
+      registered_.draining = undefined;
     }
   })();
-  await draining;
+  await registered_.draining;
 }

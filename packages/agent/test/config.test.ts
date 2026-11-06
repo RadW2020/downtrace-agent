@@ -17,7 +17,11 @@ import { PROFILE_WINDOW_MS } from "../src/profile.ts";
 
 describe("configFromEnv", () => {
   it("is disabled without token or url, with a precise reason", () => {
-    expect(configFromEnv({})).toEqual({ ok: false, reason: "DOWNTRACE_TOKEN and DOWNTRACE_URL are not set" });
+    // The DSN is named first since DT-133: it is the one string that connects (RF-104).
+    expect(configFromEnv({})).toEqual({
+      ok: false,
+      reason: "DOWNTRACE_DSN is not set, nor DOWNTRACE_TOKEN and DOWNTRACE_URL",
+    });
     expect(configFromEnv({ DOWNTRACE_URL: "http://x" })).toEqual({ ok: false, reason: "DOWNTRACE_TOKEN is not set" });
     expect(configFromEnv({ DOWNTRACE_TOKEN: "t" })).toEqual({ ok: false, reason: "DOWNTRACE_URL is not set" });
     expect(configFromEnv({ DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "ftp://x" }).ok).toBe(false);

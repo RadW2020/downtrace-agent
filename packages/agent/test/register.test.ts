@@ -10,6 +10,7 @@ describe("register entry point", () => {
       return true;
     }) as typeof process.stderr.write;
     try {
+      delete process.env.DOWNTRACE_DSN;
       delete process.env.DOWNTRACE_TOKEN;
       delete process.env.DOWNTRACE_URL;
       await import("../src/register.ts");
@@ -17,7 +18,9 @@ describe("register entry point", () => {
       process.stderr.write = orig;
     }
     expect(lines.filter((l) => l.includes("[downtrace]"))).toHaveLength(1);
-    expect(lines[0]).toMatch(/instrumentation disabled: DOWNTRACE_TOKEN and DOWNTRACE_URL are not set/);
+    expect(lines[0]).toMatch(
+      /instrumentation disabled: DOWNTRACE_DSN is not set, nor DOWNTRACE_TOKEN and DOWNTRACE_URL/,
+    );
     expect(Object.keys(globalThis).sort()).toEqual(before);
   });
 });

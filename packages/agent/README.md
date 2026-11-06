@@ -63,16 +63,27 @@ npm install @downtrace/agent
 ```
 
 ```sh
-DOWNTRACE_TOKEN=dt_… DOWNTRACE_URL=https://your-downtrace-cloud \
+DOWNTRACE_DSN=https://dt_…@your-downtrace-cloud \
   node --import @downtrace/agent/register server.js
 # or, without touching the start command:
 NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 ```
 
+Or from your code, where neither the start command nor the environment can be changed: an instrument file loaded before anything else, `node --import ./instrument.mjs server.js`.
+
+```js
+// instrument.mjs
+import { init } from "@downtrace/agent";
+init({ dsn: "https://dt_…@your-downtrace-cloud", env: "staging" });
+```
+
+Each variable below is an option of `init()`, by its name in camelCase without the prefix (`DOWNTRACE_INTERVAL_MS` is `intervalMs`, `DOWNTRACE_ENV` is `env`). An option given wins; one left out is read from its variable. A second `init()`, or one after `--import @downtrace/agent/register` started the instrumentation, changes nothing and says so.
+
 | Variable | Required | What it is |
 |---|---|---|
-| `DOWNTRACE_TOKEN` | yes | The ingest token for this project **and environment** |
-| `DOWNTRACE_URL` | yes | Base URL of the cloud, `http://` or `https://`; trailing slashes are ignored |
+| `DOWNTRACE_DSN` | yes, or the two below | The cloud's URL with the ingest token as its user, `https://dt_…@your-downtrace-cloud`: one string that connects. It wins over the two below |
+| `DOWNTRACE_TOKEN` | without a DSN | The ingest token for this project **and environment** |
+| `DOWNTRACE_URL` | without a DSN | Base URL of the cloud, `http://` or `https://`; trailing slashes are ignored |
 | `DOWNTRACE_ENV` | no | Environment; falls back to `NODE_ENV`, then `production`. The token's environment is what decides where the data lands (below) |
 | `DOWNTRACE_VERSION` | no | Deployed version or commit. Unset, it is looked for in this order: the variable your platform or CI sets (`VERCEL_GIT_COMMIT_SHA`, `CODEBUILD_RESOLVED_SOURCE_VERSION`, `GITHUB_SHA` and [the rest](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/src/config.ts)), then on ECS the image's digest (`image:sha256:…`), then a fingerprint of your code (`code:…`); `unknown` only if none answers. [How](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version) |
 | `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
@@ -89,7 +100,7 @@ NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 
 An ingest token belongs to one environment, and **that** is the environment everything sent with it is stored as, whatever `DOWNTRACE_ENV` says. If the two disagree, the data still lands — going blind over a mislabelled deploy would be worse than the wrong label — and the project's page shows the instance as declaring something else, which is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the batch declare.
 
-Without `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with a `DOWNTRACE_URL` that is not `http(s)://`) the instrumentation prints one warning and does nothing else: it loads none of your dependencies and changes none of them. So you can add it to a deployment before you have a token: nothing changes until both exist.
+Without a DSN, or `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with one that is not `http(s)://`), the instrumentation prints one warning and does nothing else: it loads none of your dependencies and changes none of them. So you can add it to a deployment before you have a token: nothing changes until it has one.
 
 ## If your build prunes dependencies it cannot see
 

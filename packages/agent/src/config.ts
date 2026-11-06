@@ -204,30 +204,263 @@ const UNRESOLVED = "HEAD";
 /** The ECS task metadata endpoints, the current one first. */
 const ECS_METADATA_ENV_VARS = ["ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI"] as const;
 
+/**
+ * The instrumentation's settings: for each, the option `init()` takes and the variable the environment gives it in
+ * (DT-133, RF-103). One list, so that every variable has its option and both mean the same: an option is written as its
+ * variable's text and read by the same code below. The variables only `downtrace check` sets (`DOWNTRACE_CHECK_…`) are
+ * its plumbing, not settings, and have no option.
+ */
+export const SETTINGS = {
+  dsn: { variable: "DOWNTRACE_DSN", kind: "text" },
+  token: { variable: "DOWNTRACE_TOKEN", kind: "text" },
+  url: { variable: "DOWNTRACE_URL", kind: "text" },
+  env: { variable: "DOWNTRACE_ENV", kind: "text" },
+  version: { variable: "DOWNTRACE_VERSION", kind: "text" },
+  debug: { variable: "DOWNTRACE_DEBUG", kind: "flag" },
+  intervalMs: { variable: "DOWNTRACE_INTERVAL_MS", kind: "number" },
+  profileMs: { variable: "DOWNTRACE_PROFILE_MS", kind: "number" },
+  instrument: { variable: "DOWNTRACE_INSTRUMENT", kind: "list" },
+  minimal: { variable: "DOWNTRACE_MINIMAL", kind: "flag" },
+  queryText: { variable: "DOWNTRACE_QUERY_TEXT", kind: "onoff" },
+  excludeEndpoints: { variable: "DOWNTRACE_EXCLUDE_ENDPOINTS", kind: "list" },
+  excludeDependencies: { variable: "DOWNTRACE_EXCLUDE_DEPENDENCIES", kind: "list" },
+  inspect: { variable: "DOWNTRACE_INSPECT", kind: "text" },
+  shed: { variable: "DOWNTRACE_SHED", kind: "text" },
+  pgDepth: { variable: "DOWNTRACE_PG_DEPTH", kind: "text" },
+} as const satisfies Record<string, { variable: `DOWNTRACE_${string}`; kind: Kind }>;
+
+/** How an option is written: a string, a boolean (`onoff` is the one whose variable says `off`), a number, a list. */
+type Kind = "text" | "flag" | "onoff" | "number" | "list";
+interface KindValue {
+  text: string;
+  flag: boolean;
+  onoff: boolean;
+  number: number;
+  list: string | readonly string[];
+}
+export type Setting = keyof typeof SETTINGS;
+
+/** What `init()` takes: any of the settings, each optional; one left out is its variable's. */
+export type InitOptions = { [K in Setting]?: KindValue[(typeof SETTINGS)[K]["kind"]] | undefined };
+
+const EXPECTED: Record<Kind, string> = {
+  text: "a string",
+  flag: "true or false",
+  onoff: "true or false",
+  number: "a number",
+  list: "a string or a list of strings",
+};
+
+/**
+ * An option as its variable's text: undefined when it is left out — absent, `undefined`, `null` or blank, as a blank
+ * variable is unset — and null when it is not of its kind.
+ */
+function textOf(kind: Kind, value: unknown): string | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  let text: string | null;
+  switch (kind) {
+    case "text":
+      text = typeof value === "string" ? value : null;
+      break;
+    case "flag":
+      text = typeof value === "boolean" ? String(value) : null;
+      break;
+    case "onoff":
+      text = typeof value === "boolean" ? (value ? "on" : "off") : null;
+      break;
+    case "number":
+      text = typeof value === "number" && Number.isFinite(value) ? String(value) : null;
+      break;
+    case "list":
+      if (typeof value === "string") text = value;
+      else text = Array.isArray(value) && value.every((v) => typeof v === "string") ? value.join(",") : null;
+      break;
+  }
+  return text !== null && text.trim() === "" ? undefined : text;
+}
+
+/** The settings the code gave, each as its variable's text. */
+type Given = Partial<Record<Setting, string>>;
+
+/** The three that connect: a DSN, or a token and a URL. One given in code of the wrong kind leaves nothing to start. */
+const CONNECTION: readonly Setting[] = ["dsn", "token", "url"];
+
+/** Whether neither the code nor the environment gives any of the three that connect: then inspecting needs none. */
+function nothingToConnect(given: Given, env: NodeJS.ProcessEnv): boolean {
+  return CONNECTION.every((setting) => given[setting] === undefined && !env[SETTINGS[setting].variable]?.trim());
+}
+
+/**
+ * The configuration `init(options)` starts with: the options it was given, and the environment for what they leave out
+ * (RF-103). `options` is the application's, unchecked: what is not of its kind is said and left to the variable, except
+ * a connection, which is refused rather than taken from somewhere the code did not mean.
+ */
+export function configFromCode(
+  options: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  execArgv: readonly string[] = process.execArgv,
+): ConfigResult {
+  if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options))) {
+    return { ok: false, reason: "init() takes an object of options" };
+  }
+  const options_ = (options ?? {}) as Record<string, unknown>;
+  const warnings: string[] = [];
+  for (const name of Object.keys(options_)) {
+    if (!Object.hasOwn(SETTINGS, name)) warnings.push(`init() has no option ${name}; it is ignored`);
+  }
+  const given: Given = {};
+  for (const [name, { kind }] of Object.entries(SETTINGS) as Array<[Setting, { kind: Kind }]>) {
+    const text = textOf(kind, options_[name]);
+    if (text === null) {
+      const problem = `init()'s ${name} must be ${EXPECTED[kind]}`;
+      if (CONNECTION.includes(name)) return { ok: false, reason: problem };
+      warnings.push(`${problem}; it is ignored`);
+    } else if (text !== undefined) {
+      given[name] = text;
+    }
+  }
+  const result = configFrom({ given, fromCode: true, env, execArgv });
+  if (result.ok) result.warnings.unshift(...warnings);
+  return result;
+}
+
 export function configFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   execArgv: readonly string[] = process.execArgv,
 ): ConfigResult {
-  const token = env.DOWNTRACE_TOKEN?.trim() ?? "";
-  const rawUrl = env.DOWNTRACE_URL?.trim() ?? "";
-  const inspect = env.DOWNTRACE_INSPECT?.trim();
+  return configFrom({ given: {}, fromCode: false, env, execArgv });
+}
+
+/**
+ * A token and a URL, from the code or the environment, or why there are none. In each, a DSN gives both; the code's
+ * token or URL wins over the environment's, which fills what the code left out.
+ */
+type Connection = { ok: true; token: string; url: string } | { ok: false; reason: string };
+interface Half {
+  token?: string | undefined;
+  url?: string | undefined;
+  /** Where the URL was given, as the start-up's line names it. */
+  urlFrom?: string | undefined;
+}
+
+function connectionOf(given: Given, env: NodeJS.ProcessEnv, fromCode: boolean): Connection {
+  const code = halfOf({ dsn: given.dsn, token: given.token, url: given.url, names: CODE_NAMES });
+  if ("reason" in code) return { ok: false, reason: code.reason };
+  let environment: Half = {};
+  if (code.token === undefined || code.url === undefined) {
+    const read = halfOf({
+      dsn: env[SETTINGS.dsn.variable],
+      token: env[SETTINGS.token.variable],
+      url: env[SETTINGS.url.variable],
+      names: ENV_NAMES,
+    });
+    if ("reason" in read) return { ok: false, reason: read.reason };
+    environment = read;
+  }
+  const token = code.token ?? environment.token;
+  const url = code.url ?? environment.url;
+  const urlFrom = code.url !== undefined ? code.urlFrom : environment.urlFrom;
+  const nothing = fromCode ? "init() was given no dsn, and " : "";
+  const no = (what: "token" | "url") => (fromCode ? `init() was given no dsn or ${what}, and ` : "");
+  if (token === undefined && url === undefined) {
+    return { ok: false, reason: `${nothing}DOWNTRACE_DSN is not set, nor DOWNTRACE_TOKEN and DOWNTRACE_URL` };
+  }
+  if (token === undefined) return { ok: false, reason: `${no("token")}DOWNTRACE_TOKEN is not set` };
+  if (url === undefined) return { ok: false, reason: `${no("url")}DOWNTRACE_URL is not set` };
+  if (!/^https?:\/\//.test(url)) return { ok: false, reason: `${urlFrom} must start with http:// or https://` };
+  if (carriesCredentials(url)) {
+    return {
+      ok: false,
+      reason: `${urlFrom} carries credentials, which fetch refuses in a URL: a URL with the token in it is a DSN, for dsn or DOWNTRACE_DSN`,
+    };
+  }
+  return { ok: true, token, url: url.replace(/\/+$/, "") };
+}
+
+const CODE_NAMES = { dsn: "init()'s dsn", url: "init()'s url" };
+const ENV_NAMES = { dsn: SETTINGS.dsn.variable, url: SETTINGS.url.variable };
+
+/** One side's token and URL: from its DSN when it has one, or else from its token and URL, each trimmed and blank as unset. */
+function halfOf(side: {
+  dsn: string | undefined;
+  token: string | undefined;
+  url: string | undefined;
+  names: { dsn: string; url: string };
+}): Half | { reason: string } {
+  const dsn = side.dsn?.trim();
+  if (dsn) {
+    const split = splitDsn(dsn, side.names.dsn);
+    return "reason" in split ? split : { ...split, urlFrom: side.names.dsn };
+  }
+  return { token: side.token?.trim() || undefined, url: side.url?.trim() || undefined, urlFrom: side.names.url };
+}
+
+const DSN_SHAPE = "it is https://<token>@<host>";
+
+/**
+ * A DSN split into the cloud's URL and the ingestion token: `https://dt_…@downtrace.example.com` (RF-104). The token is
+ * the URL's user, and the URL keeps the scheme, the host, the port and the path, and never the token: Node's `fetch`
+ * refuses a URL with credentials. What is wrong is said by `name`, the option or the variable, and the text itself is
+ * never echoed, because it carries the token.
+ */
+export function splitDsn(dsn: string, name: string): { token: string; url: string } | { reason: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(dsn);
+  } catch {
+    return { reason: `${name} is not a URL: ${DSN_SHAPE}` };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { reason: `${name} must start with http:// or https://` };
+  }
+  if (parsed.username === "") return { reason: `${name} carries no token: ${DSN_SHAPE}` };
+  if (parsed.password !== "") return { reason: `${name} carries a password, which a DSN does not: ${DSN_SHAPE}` };
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return { reason: `${name} carries a query or a fragment, which a DSN does not: ${DSN_SHAPE}` };
+  }
+  let token: string;
+  try {
+    token = decodeURIComponent(parsed.username);
+  } catch {
+    return { reason: `${name}'s token is not valid percent-encoding` };
+  }
+  return { token, url: `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "") };
+}
+
+/** Whether a URL carries a user or a password. One that does not parse carries none that `fetch` would refuse. */
+function carriesCredentials(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.username !== "" || parsed.password !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reads the configuration once, at start-up: each setting from what the code gave, and from its variable when the code
+ * gave nothing (RF-103). `fromCode` says whether `init()` is asking, which the reasons name.
+ */
+function configFrom(input: {
+  given: Given;
+  fromCode: boolean;
+  env: NodeJS.ProcessEnv;
+  execArgv: readonly string[];
+}): ConfigResult {
+  const { given, env, execArgv } = input;
+  const read = (setting: Setting): string | undefined => given[setting] ?? env[SETTINGS[setting].variable];
+  const inspect = read("inspect")?.trim();
   const checkRoutes = env.DOWNTRACE_CHECK_ROUTES?.trim();
   const checkProject = env.DOWNTRACE_CHECK_PROJECT?.trim();
+  const connection = connectionOf(given, env, input.fromCode);
   // Inspecting without a cloud is the path that matters: install, set one variable, run the application, read the
   // file — before handing anything to anyone. Half a cloud is still a mistake worth naming, inspection or not.
-  const inspectOnly = inspect !== undefined && inspect !== "" && token === "" && rawUrl === "";
-  if (!inspectOnly) {
-    if (token === "" && rawUrl === "") return { ok: false, reason: "DOWNTRACE_TOKEN and DOWNTRACE_URL are not set" };
-    if (token === "") return { ok: false, reason: "DOWNTRACE_TOKEN is not set" };
-    if (rawUrl === "") return { ok: false, reason: "DOWNTRACE_URL is not set" };
-    if (!/^https?:\/\//.test(rawUrl)) {
-      return { ok: false, reason: "DOWNTRACE_URL must start with http:// or https://" };
-    }
-  }
+  const inspectOnly = inspect !== undefined && inspect !== "" && nothingToConnect(given, env);
+  if (!connection.ok && !inspectOnly) return connection;
 
-  const interval = Number(env.DOWNTRACE_INTERVAL_MS);
+  const interval = Number(read("intervalMs"));
   const intervalMs = Number.isInteger(interval) && interval >= MIN_INTERVAL_MS ? interval : DEFAULT_INTERVAL_MS;
-  const profile = Number(env.DOWNTRACE_PROFILE_MS);
+  const profile = Number(read("profileMs"));
   const warnings: string[] = [];
   // Shortening it multiplies the profile rows in proportion, and those count against the project's daily
   // budget (invariant 8). The floor is not a number chosen here: it is the interval, because below it the
@@ -244,27 +477,33 @@ export function configFromEnv(
       );
     }
   }
-  const named = versionFromEnv(env);
+  // The version the code names wins over every variable of the chain, and says so where the start-up names the source.
+  const named =
+    given.version !== undefined
+      ? { version: clamp(given.version, 128), from: "init({ version })" }
+      : versionFromEnv(env);
+  const debug = read("debug");
+  const minimal = read("minimal");
   return {
     ok: true,
     config: {
-      token,
-      url: rawUrl.replace(/\/+$/, ""),
-      environment: clamp(env.DOWNTRACE_ENV ?? env.NODE_ENV ?? "production", 64),
+      token: connection.ok ? connection.token : "",
+      url: connection.ok ? connection.url : "",
+      environment: clamp(read("env") ?? env.NODE_ENV ?? "production", 64),
       version: named?.version ?? "unknown",
       versionFrom: named?.from,
       ecsMetadataUri: ecsMetadataUri(env),
-      debug: env.DOWNTRACE_DEBUG === "1" || env.DOWNTRACE_DEBUG === "true",
+      debug: debug === "1" || debug === "true",
       intervalMs,
       profileMs,
-      instrument: parseInstruments(env.DOWNTRACE_INSTRUMENT),
-      queryText: env.DOWNTRACE_QUERY_TEXT?.trim().toLowerCase() !== "off",
-      minimal: env.DOWNTRACE_MINIMAL === "1" || env.DOWNTRACE_MINIMAL?.trim().toLowerCase() === "true",
-      shed: parseShed(env.DOWNTRACE_SHED),
-      pgDepth: parsePgDepth(env.DOWNTRACE_PG_DEPTH),
+      instrument: parseInstruments(read("instrument")),
+      queryText: read("queryText")?.trim().toLowerCase() !== "off",
+      minimal: minimal === "1" || minimal?.trim().toLowerCase() === "true",
+      shed: parseShed(read("shed")),
+      pgDepth: parsePgDepth(read("pgDepth")),
       preserveSymlinksMain: preservesSymlinksMain(execArgv, env.NODE_OPTIONS),
-      excludeEndpoints: patternsOf(env.DOWNTRACE_EXCLUDE_ENDPOINTS),
-      excludeDependencies: patternsOf(env.DOWNTRACE_EXCLUDE_DEPENDENCIES),
+      excludeEndpoints: patternsOf(read("excludeEndpoints")),
+      excludeDependencies: patternsOf(read("excludeDependencies")),
       inspect: inspect === "" ? undefined : inspect,
       checkRoutes: checkRoutes === "" ? undefined : checkRoutes,
       checkProject: checkProject !== undefined && isAbsolute(checkProject) ? checkProject : undefined,

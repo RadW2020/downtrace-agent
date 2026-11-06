@@ -1,3 +1,5 @@
+// What an instrument file calls, loaded before anything else: the instrumentation started from code (DT-133).
+export { init } from "./activate.ts";
 export { Agent, type AgentDeps, type AgentStats, createAgent, type ReportedError } from "./agent.ts";
 export { DEFAULT_MAX_ROUTES, IntervalAggregator, type Recorder } from "./aggregator.ts";
 export {
@@ -11,7 +13,14 @@ export {
   DEFAULT_ROUTES,
   DEFAULT_SECONDS,
 } from "./coarse.ts";
-export { type AgentConfig, type ConfigResult, configFromEnv, DEFAULT_INTERVAL_MS, detectVersion } from "./config.ts";
+export {
+  type AgentConfig,
+  type ConfigResult,
+  configFromEnv,
+  DEFAULT_INTERVAL_MS,
+  detectVersion,
+  type InitOptions,
+} from "./config.ts";
 export {
   DEFAULT_DEPENDENCY_LABELS,
   DEFAULT_FINGERPRINT_LABELS,

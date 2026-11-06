@@ -1,24 +1,11 @@
 /**
  * What `register` runs once it knows the Node is one the package runs on.
  *
- * Reads DOWNTRACE_TOKEN / DOWNTRACE_URL (and friends) from the environment and
- * starts the agent. Without them it says so once and does nothing else: an
- * installed but unconfigured agent must never affect the application.
+ * Reads DOWNTRACE_DSN, or DOWNTRACE_TOKEN and DOWNTRACE_URL (and friends), from the environment and starts the
+ * instrumentation. Without them it says so once and does nothing else: an installed but unconfigured
+ * instrumentation must never affect the application.
  */
-import { createAgent } from "./agent.ts";
+import { activate } from "./activate.ts";
 import { configFromEnv } from "./config.ts";
-import { createLogger } from "./log.ts";
-import { remember } from "./registered.ts";
 
-const result = configFromEnv();
-if (result.ok) {
-  const log = createLogger(result.config.debug);
-  for (const warning of result.warnings) log.warn(warning);
-  const agent = createAgent(result.config, { log, handleSignals: true });
-  agent.start();
-  // So an application that calls `process.exit()` can wait for it: that call fires nothing and waits for
-  // nothing, and without this the last flush is simply cut (gh-383).
-  remember(agent);
-} else {
-  createLogger(false).warn(`instrumentation disabled: ${result.reason}`);
-}
+activate(configFromEnv());
