@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { runInit } from "../init/command.ts";
 import { type PackageJson, parsePackageJson } from "../init/detect.ts";
+import { runVerify } from "../verify.ts";
 import { type Parsed, parseArgs, USAGE } from "./args.ts";
 import { runCompare } from "./compare-command.ts";
 import { type CheckConfig, type ConfigResult, EMPTY_CONFIG, findConfig, parseConfig, shellJoin } from "./config.ts";
@@ -97,6 +98,10 @@ export async function runCli(deps: CliDeps): Promise<number> {
     return 2;
   }
   if (parsed.kind === "init") return runInit({ cwd: deps.cwd, json: parsed.json, stdout: deps.stdout });
+  if (parsed.kind === "verify") {
+    const { dsn, token, url } = parsed;
+    return runVerify({ dsn, token, url, env: deps.env, stdout: deps.stdout, stderr: deps.stderr, signal: deps.signal });
+  }
   if (parsed.kind === "report" || parsed.kind === "compare") {
     try {
       const read = { cwd: deps.cwd, json: parsed.json, stdout: deps.stdout };

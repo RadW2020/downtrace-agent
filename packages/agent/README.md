@@ -102,6 +102,22 @@ An ingest token belongs to one environment, and **that** is the environment ever
 
 Without a DSN, or `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` (or with one that is not `http(s)://`), the instrumentation prints one warning and does nothing else: it loads none of your dependencies and changes none of them. So you can add it to a deployment before you have a token: nothing changes until it has one.
 
+To know it works, read stderr. When the cloud accepts the first batch, one line says where it landed, debug or not:
+
+```
+[downtrace] connected: shop-api / staging
+```
+
+A cloud that does not say where answers with `connected: the cloud accepted the first batch`. A token the cloud refuses is said once, and never echoed. With `DOWNTRACE_DEBUG=1` the start names the drivers it found, `drivers found: pg, mysql`: each is wrapped at its first use, once your application has loaded it, and its own `instrumented` line comes only then.
+
+Before you deploy, check the token without sending any data:
+
+```sh
+npx downtrace verify    # downtrace verify: the token writes to shop-api / staging
+```
+
+It reads the token the instrumentation would, from `DOWNTRACE_DSN` or `DOWNTRACE_TOKEN` and `DOWNTRACE_URL`; `--dsn <dsn>`, or `--token <token>` with `--url <url>`, checks another. It never prints the token. Exit 0: the token writes where it says · 1: the cloud refused it · 2: nothing could be checked (no token, a cloud it cannot reach or that does not answer in ten seconds, or any other answer), and it says which.
+
 ## If your build prunes dependencies it cannot see
 
 `--import` loads the instrumentation from the command line, so **nothing in your code imports it**. Bundlers that ship only what is imported — Next.js `output: "standalone"`, and anything else that copies "only what is used" — leave it out, and the container dies at boot with `Error: Cannot find package '@downtrace/agent'`.
@@ -205,7 +221,7 @@ Node.js 20 or newer; the built package is exercised on Node 20, 22 and 24 in CI.
 
 Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`. See [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
 
-The drivers are the ones your application loads, resolved from its entry: see [where the drivers are found](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#where-the-drivers-are-found). A driver that is not found is reported, and `DOWNTRACE_DEBUG=1` says which at start-up.
+The drivers are the ones your application loads, resolved from its entry: see [where the drivers are found](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#where-the-drivers-are-found). A driver that is not found is reported, and `DOWNTRACE_DEBUG=1` says at start-up which were found and which were not.
 
 ## Documentation
 

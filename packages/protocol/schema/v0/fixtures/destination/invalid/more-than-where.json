@@ -1,1 +1,1 @@
-{ "project": "nidus-api", "environment": "staging", "name": "Nidus API" }
+{ "project": "shop-api", "environment": "staging", "name": "Shop API" }

@@ -5,6 +5,7 @@
  *     downtrace init [--json]
  *     downtrace report [--json] <file>
  *     downtrace compare [--json] <base file> <change file>
+ *     downtrace verify [--dsn <dsn> | --token <token> --url <url>]
  *
  * The test command comes after `--` so that its own flags are its own and never this one's.
  */
@@ -25,12 +26,14 @@ export type Parsed =
   | { kind: "init"; json: boolean }
   | { kind: "report"; json: boolean; file: string }
   | { kind: "compare"; json: boolean; base: string; change: string }
+  | { kind: "verify"; dsn: string | undefined; token: string | undefined; url: string | undefined }
   | { kind: "error"; message: string };
 
 export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace init [--json]
        downtrace report [--json] <file>
        downtrace compare [--json] <base file> <change file>
+       downtrace verify [--dsn <dsn> | --token <token> --url <url>]
 
 check runs the tests of the project on a base and on the working tree with the instrumentation writing locally,
 and compares them route by route, by composition: which queries, outgoing calls and Redis commands each request
@@ -68,6 +71,18 @@ Options of report and compare:
 Exit status of report: 0 reported, 2 the file could not be read as one DOWNTRACE_INSPECT wrote (it says which line).
 Exit status of compare: the same as check's.
 
+verify asks the cloud where a token writes, and says the project and the environment. It sends no data. The token
+is the one the instrumentation would use, DOWNTRACE_DSN or DOWNTRACE_TOKEN and DOWNTRACE_URL, unless a flag gives
+another; it is never printed.
+
+Options of verify:
+  --dsn <dsn>          the DSN to check, instead of the environment's
+  --token <token>      the token to check, with --url, instead of the environment's
+  --url <url>          the cloud to ask, with --token
+
+Exit status of verify: 0 the token writes where it says, 1 the cloud refused the token, 2 nothing could be checked
+(no token, a cloud that cannot be reached or does not answer in time, or any other answer; it says which).
+
   -h, --help           this text
   -v, --version        the version
 `;
@@ -79,10 +94,11 @@ export function parseArgs(argv: readonly string[]): Parsed {
   if (first === "-v" || first === "--version" || first === "version") return { kind: "version" };
   if (first === "init") return parseInit(rest);
   if (first === "report" || first === "compare") return parseFiles(first, rest);
+  if (first === "verify") return parseVerify(rest);
   if (first !== "check") {
     return {
       kind: "error",
-      message: `unknown command "${first}": the ones there are are "check", "init", "report" and "compare"`,
+      message: `unknown command "${first}": the ones there are are "check", "init", "report", "compare" and "verify"`,
     };
   }
 
@@ -138,6 +154,36 @@ function parseInit(rest: readonly string[]): Parsed {
     else return { kind: "error", message: `unexpected "${arg}": init looks at the directory it runs in` };
   }
   return { kind: "init", json };
+}
+
+/** Reads what comes after `downtrace verify`: a DSN, or a token and a URL, or nothing, and then the environment says. */
+function parseVerify(rest: readonly string[]): Parsed {
+  const given: { dsn?: string; token?: string; url?: string } = {};
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i] ?? "";
+    if (arg === "-h" || arg === "--help") return { kind: "help" };
+    const [name = "", inline] = arg.startsWith("--") ? splitOnce(arg, "=") : [arg, undefined];
+    if (name === "--dsn" || name === "--token" || name === "--url") {
+      let value = inline;
+      if (value === undefined) {
+        i += 1;
+        value = rest[i];
+      }
+      if (value === undefined || value === "") return { kind: "error", message: `${name} needs a value` };
+      given[name.slice(2) as "dsn" | "token" | "url"] = value;
+      continue;
+    }
+    if (arg.startsWith("-")) return { kind: "error", message: `unknown option ${arg} for verify` };
+    return { kind: "error", message: `unexpected "${arg}": verify reads the token from the environment or its flags` };
+  }
+  const { dsn, token, url } = given;
+  if (dsn !== undefined && (token !== undefined || url !== undefined)) {
+    return { kind: "error", message: "verify takes --dsn, or --token and --url, not both" };
+  }
+  if ((token === undefined) !== (url === undefined)) {
+    return { kind: "error", message: "--token and --url go together: one names the token, the other the cloud" };
+  }
+  return { kind: "verify", dsn, token, url };
 }
 
 /** Reads what comes after `downtrace report` or `downtrace compare`: `--json`, and the files, one or two. */

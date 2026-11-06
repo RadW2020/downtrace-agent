@@ -151,8 +151,8 @@ describe("the destination", () => {
   });
 
   it("is a type a reader can hold without the rest of the answer", () => {
-    const bound: Destination = { project: "nidus-api", environment: "staging" };
-    const unbound: Destination = { project: "nidus-api" };
+    const bound: Destination = { project: "shop-api", environment: "staging" };
+    const unbound: Destination = { project: "shop-api" };
     expect(validateDestination(bound) && validateDestination(unbound)).toBe(true);
   });
 

@@ -1,4 +1,4 @@
-import type { CaptureEvidence } from "@downtrace/protocol";
+import type { CaptureEvidence, Destination } from "@downtrace/protocol";
 import {
   AGGREGATES_PATH,
   type AgentInfo,
@@ -7,6 +7,7 @@ import {
   type CaptureProgress,
   captureEvidencePath,
   type DeployInfo,
+  INGEST_RESPONSE_SCHEMA_V0,
   type InstanceInfo,
   type Interval,
   type LocalTrigger,
@@ -111,6 +112,54 @@ export function capturesIn(body: string): PendingCapture[] {
   return out;
 }
 
+/** The longest name a `Destination` carries, read from the schema rather than copied. */
+const DESTINATION_NAME_MAX = INGEST_RESPONSE_SCHEMA_V0.$defs.Destination.properties.project.maxLength;
+
+/**
+ * A name the answer gives that this side can print on the application's stderr: a string of the schema's length, with
+ * no control character, which would write to the terminal of whoever reads the log rather than name anything.
+ */
+function printable(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= DESTINATION_NAME_MAX && !/\p{Cc}/u.test(value)
+  );
+}
+
+/**
+ * A `Destination` the cloud sent, as this side can print it, or nothing: the answer to a batch carries one, and the
+ * answer to `downtrace verify`'s check is one (protocol 0.14.0). External input, so every field is checked.
+ */
+export function destinationOf(value: unknown): Destination | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  // `as` at the boundary and nowhere else, as for the captures: each field is checked before it is used.
+  const { project, environment } = value as Record<string, unknown>;
+  if (!printable(project)) return undefined;
+  if (environment === undefined) return { project };
+  return printable(environment) ? { project, environment } : undefined;
+}
+
+/**
+ * Where the answer to a batch says it landed, or nothing: from an older cloud, which does not say it, and from an
+ * answer that does not say it in a shape this side can print. Never an error: the batch landed.
+ */
+export function destinationIn(body: string): Destination | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  return destinationOf((parsed as { destination?: unknown } | null)?.destination);
+}
+
+/** The line that says the first batch landed: where, when the cloud said it, and only that it did when not. */
+function connectedLine(where: Destination | undefined): string {
+  if (where === undefined) return "connected: the cloud accepted the first batch";
+  return where.environment === undefined
+    ? `connected: ${where.project}`
+    : `connected: ${where.project} / ${where.environment}`;
+}
+
 export const DEFAULT_MAX_QUEUED = 6;
 /** As many capture reports as the answer may carry orders. Bounded on both sides of the same channel. */
 const MAX_CAPTURE_REPORTS = 16;
@@ -196,6 +245,8 @@ export class Sender {
   private triggers: LocalTrigger[] = [];
   private inflight = false;
   private warnedAuth = false;
+  /** Whether the line that says the first batch landed was written: once per process (RF-118). */
+  private saidConnected = false;
   /**
    * The way the process is leaving, once a drain has declared it, and until this sender dies with it (gh-617).
    *
@@ -379,10 +430,27 @@ export class Sender {
   /** Called with the capture starts a batch actually delivered, so they are not delivered twice. */
   onReported: ((ids: string[]) => void) | undefined;
 
-  /** Reads the answer's orders. Never throws into the flush: the batch already landed. */
-  private async handOverCaptures(res: Response): Promise<void> {
+  /**
+   * Reads the answer to a batch that landed, once, and never throws into the flush: the batch already landed.
+   *
+   * The first answer says where the data lands, on a line written whether debug is on or not, because the first
+   * question after installing is whether it works (RF-118). `warn` is the logger's one line that debug does not gate;
+   * this is not a warning, and the logger has no level in between. Then the answer's orders, when somebody listens.
+   */
+  private async readAnswer(res: Response): Promise<void> {
+    if (this.saidConnected && !this.onCaptures) return;
+    let body = "";
     try {
-      const pending = capturesIn(await res.text());
+      body = await res.text();
+    } catch (err) {
+      this.opts.log.debug(`could not read the answer: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!this.saidConnected) {
+      this.saidConnected = true;
+      this.opts.log.warn(connectedLine(destinationIn(body)));
+    }
+    try {
+      const pending = capturesIn(body);
       if (pending.length > 0) this.onCaptures?.(pending);
     } catch (err) {
       this.opts.log.debug(`could not read the answer: ${err instanceof Error ? err.message : String(err)}`);
@@ -609,9 +677,9 @@ export class Sender {
         this.onReported?.(reported);
         this.opts.log.debug(`sent ${intervals.length} interval(s)`);
         // The other half of the control channel (ADR 0071): the answer carries what the cloud wants
-        // captured. Read after the batch is accounted for, and never allowed to unaccount it — the batch
-        // arrived, whatever the body says (gh-379).
-        if (this.onCaptures) await this.handOverCaptures(res);
+        // captured, and the first one where the data landed. Read after the batch is accounted for, and never
+        // allowed to unaccount it — the batch arrived, whatever the body says (gh-379).
+        await this.readAnswer(res);
         return true;
       }
       if (REJECTED.has(res.status)) {

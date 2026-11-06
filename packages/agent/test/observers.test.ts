@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { Agent } from "../src/agent.ts";
+import { Agent, DRIVERLESS, driversFoundLine } from "../src/agent.ts";
 import { type AgentConfig, INSTRUMENTS, type Instrument } from "../src/config.ts";
-import type { Logger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import { testConfig } from "./support/agent-config.ts";
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
@@ -80,5 +80,63 @@ describe("what the batch says it is observing", () => {
     } finally {
       void agent.stop();
     }
+  });
+});
+
+/**
+ * A driver is wrapped when the application loads it, not at the start (ADR 0209), so its «instrumented» line comes
+ * late, and on a fresh process its absence looks like a failure (a pilot integration). Under `DOWNTRACE_DEBUG` the
+ * start says what it found, and that.
+ */
+describe("the drivers the start found, under DOWNTRACE_DEBUG", () => {
+  const drivers = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name));
+
+  /** The lines an agent writes at its start, with debug on or off. */
+  function started(instrument: Instrument[], debug: boolean, deps: Record<string, unknown> = {}): string[] {
+    const lines: string[] = [];
+    const agent = new Agent(config(instrument), { log: createLogger(debug, (line) => lines.push(line)), ...deps });
+    agent.start();
+    void agent.stop();
+    return lines.filter((line) => line.includes("drivers found"));
+  }
+
+  // covers: RF-120
+  it("names every driver switch that found its driver, and says when it is wrapped", () => {
+    for (const name of drivers) {
+      const line = driversFoundLine({ [name]: "on" }, new Set(drivers));
+      expect(line, name).toBe(
+        `drivers found: ${name}; each is wrapped at its first use, once the application has loaded it, and says "instrumented" then`,
+      );
+    }
+    expect(driversFoundLine({ pg: "on", mysql: "on", prisma: "on" }, new Set(drivers))).toMatch(
+      /^drivers found: pg, mysql, prisma; /,
+    );
+  });
+
+  // covers: RF-120
+  it("says it found none, and of which, when none resolved", () => {
+    expect(driversFoundLine({ pg: "unavailable" }, new Set(drivers))).toBe(
+      `drivers found: none, of ${drivers.join(", ")}`,
+    );
+    expect(driversFoundLine({ pg: "off", mysql: "off" }, new Set())).toBe(
+      "drivers found: none, and DOWNTRACE_INSTRUMENT looks for none",
+    );
+  });
+
+  it("never names a switch that needs no driver", () => {
+    expect(driversFoundLine({ http: "on", redis: "on", runtime: "on" }, new Set(INSTRUMENTS))).toMatch(
+      /^drivers found: none, of /,
+    );
+  });
+
+  // covers: RF-120
+  it("is one line of the start, with debug on, and none with it off", () => {
+    expect(started(["pg", "http"], true, { pgModule: { notAClient: true } })).toEqual([
+      "[downtrace] drivers found: none, of pg",
+    ]);
+    expect(started(["http", "redis"], true)).toEqual([
+      "[downtrace] drivers found: none, and DOWNTRACE_INSTRUMENT looks for none",
+    ]);
+    expect(started(["pg", "http"], false, { pgModule: { notAClient: true } })).toEqual([]);
   });
 });

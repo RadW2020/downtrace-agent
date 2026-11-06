@@ -17,7 +17,7 @@ import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CallFingerprints } from "./calls.ts";
 import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
 import { CoarseRegister } from "./coarse.ts";
-import type { AgentConfig } from "./config.ts";
+import { type AgentConfig, INSTRUMENTS, type Instrument } from "./config.ts";
 import {
   currentContext,
   type DependencyWork,
@@ -951,6 +951,9 @@ export class Agent {
       this.loopTimer.unref();
     }
     this.agentInfo.observers = observers;
+    // What the start found, said before any driver says it was wrapped: that comes at the first use, which on a
+    // fresh process looks like nothing happened (RF-120).
+    this.log.debug(driversFoundLine(observers, on));
     // The other half of the control channel: the orders come back in the answer to a batch (ADR 0071), and
     // until now nobody was listening. Every instance obeys — none can know what the others are doing — and
     // the cloud gathers their evidence while the capture waits, with a `409` for what arrives after (ADR 0221).
@@ -1680,6 +1683,24 @@ async function settledWithin(these: Promise<unknown>[], deadline: AbortSignal): 
   });
   await Promise.race([Promise.allSettled(these), timedOut]);
   deadline.removeEventListener("abort", passed);
+}
+
+/** The switches that need no driver: Node publishes what they observe on its channels, or measures it itself. */
+export const DRIVERLESS: ReadonlySet<Instrument> = new Set(["http", "redis", "runtime"]);
+
+/**
+ * The line the start writes under `DOWNTRACE_DEBUG` (RF-120): the switches whose driver resolved, and that each is
+ * wrapped at its first use and says so then (ADR 0209, 0246); or that none did, and of which. A driver's own
+ * «instrumented» line comes only once the application loads it, and before then its absence reads as a failure.
+ */
+export function driversFoundLine(observers: Observers, asked: ReadonlySet<Instrument>): string {
+  const lookedFor = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name) && asked.has(name));
+  const found = lookedFor.filter((name) => observers[name] === "on");
+  if (found.length > 0) {
+    return `drivers found: ${found.join(", ")}; each is wrapped at its first use, once the application has loaded it, and says "instrumented" then`;
+  }
+  if (lookedFor.length === 0) return "drivers found: none, and DOWNTRACE_INSTRUMENT looks for none";
+  return `drivers found: none, of ${lookedFor.join(", ")}`;
 }
 
 /**

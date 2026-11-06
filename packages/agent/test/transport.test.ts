@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import { IntervalAggregator } from "../src/aggregator.ts";
 import { type DependencyWork, dependencyKey, type OperationWork } from "../src/context.ts";
 import type { CountedException } from "../src/exceptions.ts";
-import type { Logger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import { ProfileAggregator } from "../src/profile.ts";
 import { DEFAULT_MAX_QUEUED, type PendingCapture, Sender } from "../src/transport.ts";
 
@@ -1128,5 +1128,134 @@ describe("Sender, saying how the process is leaving", () => {
     // Nothing else is queued: the ending is still unsaid, and on its own it goes out.
     expect(await s.flush()).toBe(true);
     expect(calls[1]?.body).toMatchObject({ ending: "exit", intervals: [] });
+  });
+});
+
+/**
+ * The first question after installing is whether it works (RF-118, RF-119). In a pilot integration the answer took
+ * reading the source: an accepted batch logged nothing, and the token was checked by posting `{}` by hand.
+ */
+describe("Sender, saying that data arrives", () => {
+  const TOKEN = "dt_0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  /** A sender whose cloud answers each batch in turn, logging as the instrumentation does with debug off. */
+  function answering(answers: Array<{ status: number; body?: string } | Error>, opts: { debug?: boolean } = {}) {
+    const lines: string[] = [];
+    const fetchImpl = (async () => {
+      const next = answers.shift() ?? { status: 202 };
+      if (next instanceof Error) throw next;
+      return new Response(next.body ?? null, { status: next.status });
+    }) as unknown as typeof fetch;
+    const s = new Sender({
+      url: "http://cloud.test",
+      token: TOKEN,
+      agent: { name: "@downtrace/agent", version: "0.0.0", runtime: "node", runtimeVersion: "v24" },
+      instance: { id: "i", hostname: "h", pid: 1 },
+      deploy: { version: "v", environment: "staging" },
+      log: createLogger(opts.debug ?? false, (line) => lines.push(line)),
+      fetchImpl,
+      now: () => 1_000_000,
+    });
+    return { s, lines };
+  }
+  const landed = (destination: unknown) =>
+    JSON.stringify({ accepted: 1, inserted: 1, ...(destination === undefined ? {} : { destination }) });
+
+  // covers: RF-118
+  it("says once, with debug off, where the first accepted batch landed", async () => {
+    const { s, lines } = answering([
+      { status: 202, body: landed({ project: "shop-api", environment: "staging" }) },
+      { status: 202, body: landed({ project: "shop-api", environment: "staging" }) },
+    ]);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    s.enqueue(interval(2));
+    expect(await s.flush()).toBe(true);
+    expect(lines).toEqual(["[downtrace] connected: shop-api / staging"]);
+  });
+
+  // covers: RF-118
+  it("says the cloud accepted it, and names nothing, when the answer does not say where", async () => {
+    // A cloud older than protocol 0.14.0, whose answer has no `destination`.
+    const { s, lines } = answering([{ status: 202, body: landed(undefined) }]);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(lines).toEqual(["[downtrace] connected: the cloud accepted the first batch"]);
+  });
+
+  // covers: RF-118
+  it("names nothing it cannot read as a project and an environment", async () => {
+    // What the cloud answers is external input: an answer that is not one, or a name that would write control
+    // characters to the application's stderr, names nothing.
+    for (const body of [
+      "not json",
+      "",
+      landed({ project: 7, environment: "staging" }),
+      landed({ project: "shop-api\u001b[2J", environment: "staging" }),
+      landed({ project: "x".repeat(65), environment: "staging" }),
+      landed({ project: "", environment: "staging" }),
+      landed("shop-api / staging"),
+    ]) {
+      const { s, lines } = answering([{ status: 202, body }]);
+      s.enqueue(interval(1));
+      expect(await s.flush()).toBe(true);
+      expect(lines, body).toEqual(["[downtrace] connected: the cloud accepted the first batch"]);
+    }
+  });
+
+  // covers: RF-118
+  it("names the project alone when the answer names no environment", async () => {
+    const { s, lines } = answering([{ status: 202, body: landed({ project: "shop-api" }) }]);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(lines).toEqual(["[downtrace] connected: shop-api"]);
+  });
+
+  // covers: RF-118
+  it("waits for a batch that lands: a refused, failed or unreachable one says nothing of the kind", async () => {
+    const { s, lines } = answering([
+      { status: 500 },
+      new Error("connect ECONNREFUSED"),
+      { status: 429 },
+      { status: 202, body: landed({ project: "shop-api", environment: "staging" }) },
+    ]);
+    s.enqueue(interval(1));
+    for (let i = 0; i < 3; i++) expect(await s.flush()).toBe(false);
+    expect(lines.filter((l) => l.includes("connected"))).toEqual([]);
+    expect(await s.flush()).toBe(true);
+    expect(lines.filter((l) => l.includes("connected"))).toEqual(["[downtrace] connected: shop-api / staging"]);
+  });
+
+  // covers: RF-118
+  it("still hands over the captures the same answer asks for", async () => {
+    const { s, lines } = answering([
+      {
+        status: 202,
+        body: JSON.stringify({
+          accepted: 1,
+          inserted: 1,
+          destination: { project: "shop-api", environment: "staging" },
+          captures: [{ id: "cap-1", windowSeconds: 30, expiresAt: "2099-01-01T00:00:00Z" }],
+        }),
+      },
+    ]);
+    const asked: PendingCapture[][] = [];
+    s.onCaptures = (pending) => asked.push(pending);
+    s.enqueue(interval(1));
+    expect(await s.flush()).toBe(true);
+    expect(asked.map((p) => p.map((c) => c.id))).toEqual([["cap-1"]]);
+    expect(lines).toEqual(["[downtrace] connected: shop-api / staging"]);
+  });
+
+  // covers: RF-119
+  it("says once that the token was refused, and the token is in no line", async () => {
+    const { s, lines } = answering([{ status: 401 }, { status: 401 }, { status: 401 }], { debug: true });
+    s.enqueue(interval(1));
+    for (let i = 0; i < 3; i++) expect(await s.flush()).toBe(false);
+    // With debug on, each retry also says what the cloud answered; the line that says the token was refused is one.
+    expect(lines.filter((l) => /rejected|refused/.test(l))).toHaveLength(1);
+    expect(lines.find((l) => /rejected|refused/.test(l))).toMatch(/TOKEN.*401|401.*TOKEN/);
+    expect(lines.filter((l) => l.includes(TOKEN) || l.includes(TOKEN.slice(3)))).toEqual([]);
+    expect(lines.filter((l) => l.includes("connected"))).toEqual([]);
   });
 });
