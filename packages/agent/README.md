@@ -80,7 +80,7 @@ import "./instrument";
 import { NestFactory } from "@nestjs/core";
 ```
 
-TypeScript turns that line into the entry's first `require`, so the instrumentation is in place before Nest builds Express and your database pool. It works on every Node from 20.
+TypeScript turns that line into the entry's first `require`, so the instrumentation is in place before Nest builds Express and your database pool. It works on every supported Node.
 
 ### Express
 
@@ -280,7 +280,7 @@ app.use(expressErrorHandler());
 
 Node.js 18.19.0 or newer, other than Node 19, an odd release past its end of life; the built package is exercised on Node 18.19.0, 20.5.1, 20, 22 and 24 in CI. The package declares no Node version to its package manager, so adding it never fails the install of a workspace whose other apps run an older Node. On an older Node, and on 19, the instrumentation prints one warning and does nothing else, and `downtrace` says so in one line and exits with 2.
 
-Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`. See [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
+Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4, on Node 18 in the versions that run there; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`. See [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
 
 The drivers are the ones your application loads, resolved from its entry: see [where the drivers are found](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#where-the-drivers-are-found). A driver that is not found is reported, and `DOWNTRACE_DEBUG=1` says at start-up which were found and which were not.
 

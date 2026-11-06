@@ -99,11 +99,13 @@ itself.
 **Hapi** routes (21) are named by the path of the route Hapi matched, as it was registered, a plugin's prefix included
 and with Hapi's own braces: `/api/orders/{id?}` for every order, as Next.js keeps its brackets. Hapi routes a request
 in its request class, which it does not export, and the instrumentation wraps it as Hapi's own modules require it — at
-load, from Node 22, whether the application imported Hapi or required it. What Hapi's `notFound` answered is
+load, from Node 22, whether the application imported Hapi or required it. Before Node 22, which does not announce what
+modules require, it wraps it from the first request the server receives, before Hapi builds it, and a Hapi loaded after
+that is named by the heuristic. What Hapi's `notFound` answered is
 `(unmatched)`, and no part of the path travels. A request made with **`server.inject()`** — how Hapi's guide and Lab
 call an application — is observed as one the server received, as Fastify's `inject()` is: by its template, with what
-it ran, apart from the code that injected it. On Node 20, which does not announce what modules require, a Hapi loaded
-after the instrumentation started is named by the heuristic, and its injected requests are not seen. Under `check`, a
+it ran, apart from the code that injected it; before Node 22, only once the server has received a request, so a suite
+that only injects is not seen there. Under `check`, a
 Hapi server that answered a request declares its routes, its plugins' included and in the same form, so a route no
 test called is named `not-called`; a route for every method (`*`) has no single name and is not.
 
@@ -125,6 +127,21 @@ ESM copy, is after the wrappers are in in practice and not by construction.
 A request can carry the template of more than one framework — a Next.js custom server behind Express answers with Express's
 catch-all route, a Koa application called from an Express route — and the innermost one names it: Next.js, then Koa, then
 Hono, then Fastify, then Express.
+
+## On Node 18
+
+From Node 18.19, every framework above names its routes as it does on the newest Node, in each version of it that runs
+there. CI starts the same application, a route with a parameter and one that fails, on each framework from the packed
+package with `--import`, on Node 18.19.0 and on Node 24, and both name the same routes: Express 4.22 and 5.3, NestJS
+10.4, Fastify 4.29 and 5.12, Koa 2.16 with `@koa/router` 12 (Strapi 5's) and Koa 3.3 with `@koa/router` and
+`koa-router` 13.1, Hapi 21.4, Hono 4.13 on `@hono/node-server` 1.19, and Next.js 15.5. These ask for a newer Node:
+
+| Version | Needs | The last for Node 18 |
+| --- | --- | --- |
+| Next.js 16 | Node 20.9 | 15.5 |
+| NestJS 11 | Node 20 | 10.4 |
+| `@koa/router` and `koa-router` 14 | Node 20 | 13.1 |
+| `@hono/node-server` 2 | Node 20 | 1.19 |
 
 ## What is wrapped
 

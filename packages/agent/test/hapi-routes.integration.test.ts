@@ -183,6 +183,66 @@ describe("a Hapi application is named by its templates", () => {
   });
 });
 
+/**
+ * DT-165. Node announces what modules require only from Node 22, and with `--import` the instrumentation starts before
+ * the application loads Hapi: on Node 18.19 and 20 nothing patched Hapi's request class, and a Hapi application was
+ * named by the heuristic, `/users/ana` as itself. Here the class is in a module cache the test hands the agent, and was
+ * never required: a load nobody announced, which is what Hapi's is before Node 22, on whichever Node this runs.
+ */
+describe("a Hapi loaded after the instrumentation started, which nothing announced", () => {
+  // covers: RF-121
+  it("is patched from the first request, before Hapi builds it, and every request is named by its template", async () => {
+    const sink = await startSink();
+    // Hapi's `lib/request.js`, as far as the instrumentation reads it: `_lookup` matches a route, `_execute` runs the
+    // lifecycle and answers.
+    class Request {
+      raw: { req: object; res: http.ServerResponse };
+      route: { path: string } | undefined;
+      _core = { router: {} };
+      constructor(req: object, res: http.ServerResponse) {
+        this.raw = { req, res };
+      }
+      _lookup(): void {
+        this.route = { path: "/users/{id}" };
+      }
+      _execute(): void {
+        this._lookup();
+        this.raw.res.writeHead(200).end("user");
+      }
+    }
+    const original = Request.prototype._lookup;
+    const moduleCache = new Proxy({} as Record<string, unknown>, {
+      get: (_cache, file) =>
+        typeof file === "string" && file.replaceAll("\\", "/").endsWith("/@hapi/hapi/lib/request.js")
+          ? { exports: Request }
+          : undefined,
+    });
+    const agent = createAgent(
+      testConfig(sink.url, { environment: "test", version: "t1", intervalMs: 60_000, instrument: new Set() }),
+      { log: quiet, moduleCache },
+    );
+    agent.start();
+    const server = http.createServer((req, res) => new Request(req, res)._execute());
+    server.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    cleanups.push(
+      sink.close,
+      () => agent.stop(),
+      () => new Promise<void>((r) => server.close(() => r())),
+    );
+    expect(Request.prototype._lookup, "nothing is patched at start-up, before the application loads Hapi").toBe(
+      original,
+    );
+
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    expect(await hit(url, "/users/ana")).toBe(200);
+    expect(await hit(url, "/users/42")).toBe(200);
+    expect(await agent.flushNow()).toBe(true);
+    expect(routesOf(sink.batches[0])).toEqual({ "GET /users/{id}": 2 });
+    expect(JSON.stringify(sink.batches)).not.toContain("ana");
+  });
+});
+
 describe("attachHapi, when the instrumentation's own doors fail or it stopped", () => {
   async function server() {
     const app = Hapi.server();

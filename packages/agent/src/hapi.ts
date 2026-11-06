@@ -38,6 +38,8 @@ const known = new WeakSet<object>();
 interface Listener {
   internalError: (err: unknown) => void;
   unannounced: Unannounced | undefined;
+  /** The files of Hapi's request class the application resolves: found at start-up, looked up at the first request. */
+  files: readonly string[];
 }
 
 /**
@@ -209,20 +211,25 @@ function isHapiRequest(file: string): boolean {
  * Patches Hapi's `Request` as Hapi loads it, and at once a Hapi the application loaded already. Hapi's own modules
  * require it by a relative name, through `require`, whether the application imported Hapi or required it — which Node
  * announces on its `module.require` channel, from Node 22; an application's `import` of Hapi itself is not announced.
- * Returns what stops opening requests; the wrappers stay with the class, and once stopped they only name.
+ * Before Node 22 the first request patches it (`attachLoadedHapi`). Returns what stops opening requests; the wrappers
+ * stay with the class, and once stopped they only name.
  */
 export function attachHapi(deps: AttachHapiDeps): () => void {
-  const mine: Listener = { internalError: deps.internalError, unannounced: deps.unannounced };
-  listening = mine;
+  const files: string[] = [];
+  let cache: NodeRequire["cache"] | undefined;
   for (const base of basesOf(deps.from)) {
     try {
       const require = createRequire(base);
-      const loaded = require.cache[path.join(path.dirname(require.resolve("@hapi/hapi")), "request.js")];
-      if (loaded !== undefined) patchHapiRequest(loaded.exports);
+      cache = require.cache;
+      const file = path.join(path.dirname(require.resolve("@hapi/hapi")), "request.js");
+      if (!files.includes(file)) files.push(file);
     } catch {
       // Most applications do not have Hapi.
     }
   }
+  const mine: Listener = { internalError: deps.internalError, unannounced: deps.unannounced, files };
+  listening = mine;
+  if (cache !== undefined) attachLoadedHapi(cache);
   const channel = diagnostics_channel.tracingChannel("module.require");
   const handlers = {
     start: () => {},
@@ -246,4 +253,25 @@ export function attachHapi(deps: AttachHapiDeps): () => void {
     channel.unsubscribe(handlers);
     if (listening === mine) listening = undefined;
   };
+}
+
+/**
+ * Patches Hapi's request class where the module cache holds it: the Hapi the application loaded by now, from the files
+ * the start resolved. The start calls it for a Hapi loaded before it, and the first request for one loaded after it,
+ * which before Node 22 nothing announces — every Hapi, with `--import` (DT-165). By the first request the application
+ * has loaded Hapi, and Node announces a request before its server hands it to Hapi, so the class is patched before
+ * Hapi builds the first request. A Hapi loaded later than that is named by the heuristic. A property read per file
+ * and no I/O (invariant 1); it never throws (invariant 2).
+ */
+export function attachLoadedHapi(cache: Readonly<Record<string, unknown>>): void {
+  const deps = listening;
+  if (deps === undefined) return;
+  for (const file of deps.files) {
+    try {
+      const loaded = cache[file] as { exports?: unknown } | undefined;
+      if (loaded !== undefined) patchHapiRequest(loaded.exports);
+    } catch (err) {
+      deps.internalError(err);
+    }
+  }
 }

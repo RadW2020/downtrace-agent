@@ -36,7 +36,7 @@ import { Excluded } from "./exclude.ts";
 import { attachFastify, type Unannounced } from "./fastify.ts";
 import { type FineOperation, FineRegister } from "./fine.ts";
 import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./fingerprint.ts";
-import { attachHapi } from "./hapi.ts";
+import { attachHapi, attachLoadedHapi } from "./hapi.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
 import { type Armed, armedTogether, whenLoaded } from "./instrument/arm.ts";
@@ -661,13 +661,11 @@ export class Agent {
     });
     // Koa's route templates need Koa in the module cache, which it is not yet: nothing is loaded at start-up,
     // and the wrapper goes in from the first request (`attachKoa`, ADR 0209). An application without Koa pays
-    // one read of the cache, once.
+    // one read of the cache, once. So does Hapi's request class before Node 22, which announces no load (DT-165).
     this.koaAttach = () => {
-      attachKoa({
-        cache: this.moduleCache ?? createRequire(entry).cache,
-        log: this.log,
-        internalError: (err) => this.internalError(err),
-      });
+      const cache = this.moduleCache ?? createRequire(entry).cache;
+      attachKoa({ cache, log: this.log, internalError: (err) => this.internalError(err) });
+      attachLoadedHapi(cache);
     };
     const on = this.config.instrument;
     // What is being watched, and what is not, said out loud (gh-180, COB-01). `off` is «not asked for»,
