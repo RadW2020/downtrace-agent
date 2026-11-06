@@ -135,6 +135,33 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     expect(settings.filter((name) => !VARIABLES.has(name))).toEqual([]);
   });
 
+  /** The rows of the first table of `page` whose header starts with `| Option | Variable |`, as [option, variable]. */
+  async function settingsTable(page: string): Promise<Array<[string, string]>> {
+    const lines = (await read(page)).split("\n");
+    const start = lines.findIndex((line) => line.startsWith("| Option | Variable |"));
+    expect(start, page).toBeGreaterThanOrEqual(0);
+    const rows: Array<[string, string]> = [];
+    for (const line of lines.slice(start + 2)) {
+      const row = /^\| `([A-Za-z]+)` \| `(DOWNTRACE_[A-Z_]+)` \|/.exec(line);
+      if (row === null) break;
+      rows.push([row[1] ?? "", row[2] ?? ""]);
+    }
+    return rows;
+  }
+
+  // covers: RF-103
+  it("lists every setting in the guide's table, by its option and its variable", async () => {
+    const rows = await settingsTable("../guide/configuration.md");
+    const expected = Object.entries(SETTINGS).map(([option, { variable }]): [string, string] => [option, variable]);
+    expect([...rows].sort()).toEqual([...expected].sort());
+  });
+
+  it("shows in the README's table only what a user sets to get started", async () => {
+    const rows = await settingsTable("../README.md");
+    expect(rows.map(([option]) => option)).toEqual(["dsn", "env", "version", "inspect"]);
+    for (const [option, variable] of rows) expect(SETTINGS[option as keyof typeof SETTINGS].variable).toBe(variable);
+  });
+
   it("names each variable once", () => {
     expect(VARIABLES.size).toBe(Object.keys(SETTINGS).length);
   });

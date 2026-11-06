@@ -16,6 +16,8 @@ export const MISSING_CODES = [
   "not-installed",
   "instrumentation-exists",
   "module-resolution",
+  "no-entry",
+  "no-start-script",
 ] as const;
 export type MissingCode = (typeof MISSING_CODES)[number];
 
@@ -66,6 +68,12 @@ export interface InitReport {
   failure: InitFailure | null;
   /** What to run next, spelled for whether the project has this package installed. */
   next: string | null;
+  /**
+   * The instrument file that starts the instrumentation in production, and what loads it (RF-106): the entry whose
+   * first line loads it, or the script whose `node` imports it. `skipped` says why there is none on purpose. Null for
+   * a Next.js application, whose hook is the one above, and when there was nothing to look at.
+   */
+  instrument: { file: string | null; loadedBy: string | null; skipped: string | null } | null;
 }
 
 export function exitCodeOfInit(report: InitReport): number {
@@ -104,6 +112,12 @@ export function renderInitText(report: InitReport): string {
     if (found.unobserved.length > 0) lines.push(row("not observed", found.unobserved.join(", ")));
     lines.push(row("test script", found.testScript ?? "none found"));
     if (found.bundler === "next-standalone") lines.push(row("build", 'Next.js with output: "standalone"'));
+    const instrument = report.instrument;
+    if (instrument?.skipped) lines.push(row("production", `not instrumented: ${instrument.skipped}`));
+    else if (instrument?.file) {
+      const by = instrument.loadedBy === null ? "not loaded yet" : `loaded by ${instrument.loadedBy}`;
+      lines.push(row("production", `${instrument.file}, ${by}`));
+    }
     lines.push(row("check runs", report.command ?? "nothing yet"));
   }
 

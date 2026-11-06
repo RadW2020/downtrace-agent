@@ -60,7 +60,71 @@ The whole of it: [`downtrace init`](https://github.com/RadW2020/downtrace-agent/
 
 ```sh
 npm install @downtrace/agent
+npx downtrace init    # writes the instrument file and the line that loads it
 ```
+
+The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN: the cloud's URL with your ingest token as its user, `https://dt_…@your-downtrace-cloud`. [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md) writes what the recipes below show. As written, the file reads `DOWNTRACE_DSN` from the environment and does nothing without it; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
+
+### NestJS, compiled to CommonJS
+
+```ts
+// src/instrument.ts
+import { init } from "@downtrace/agent";
+
+init({ dsn: process.env.DOWNTRACE_DSN });
+```
+
+```ts
+// src/main.ts: the first line, before anything else
+import "./instrument";
+import { NestFactory } from "@nestjs/core";
+```
+
+TypeScript turns that line into the entry's first `require`, so the instrumentation is in place before Nest builds Express and your database pool. It works on every Node from 20.
+
+### Express
+
+```js
+// instrument.js, beside your entry
+const { init } = require("@downtrace/agent");
+
+init({ dsn: process.env.DOWNTRACE_DSN });
+```
+
+```js
+// server.js: the first line
+require("./instrument");
+const express = require("express");
+```
+
+### Fastify
+
+The same `instrument.js`, required by the entry's first line, before Fastify creates its instance:
+
+```js
+// app.js: the first line
+require("./instrument");
+const fastify = require("fastify")();
+```
+
+### ES modules
+
+```js
+// instrument.mjs
+import { init } from "@downtrace/agent";
+
+init({ dsn: process.env.DOWNTRACE_DSN });
+```
+
+```sh
+node --import ./instrument.mjs server.js
+```
+
+An ES module's imports are all loaded before its first line runs, so `node` loads the file itself: in your start script, your Dockerfile's `CMD`, or `NODE_OPTIONS="--import ./instrument.mjs"`.
+
+### Without touching the code
+
+Where you can set the start command or the environment, no instrument file is needed:
 
 ```sh
 DOWNTRACE_DSN=https://dt_…@your-downtrace-cloud \
@@ -69,34 +133,18 @@ DOWNTRACE_DSN=https://dt_…@your-downtrace-cloud \
 NODE_OPTIONS="--import @downtrace/agent/register" node server.js
 ```
 
-Or from your code, where neither the start command nor the environment can be changed: an instrument file loaded before anything else, `node --import ./instrument.mjs server.js`.
+### Configuration
 
-```js
-// instrument.mjs
-import { init } from "@downtrace/agent";
-init({ dsn: "https://dt_…@your-downtrace-cloud", env: "staging" });
-```
+Each setting is an option of `init()` and a variable of the environment: an option given wins, and one left out is read from its variable. What gets you started:
 
-Each variable below is an option of `init()`, by its name in camelCase without the prefix (`DOWNTRACE_INTERVAL_MS` is `intervalMs`, `DOWNTRACE_ENV` is `env`). An option given wins; one left out is read from its variable. A second `init()`, or one after `--import @downtrace/agent/register` started the instrumentation, changes nothing and says so.
-
-| Variable | Required | What it is |
+| Option | Variable | What it is |
 |---|---|---|
-| `DOWNTRACE_DSN` | yes, or the two below | The cloud's URL with the ingest token as its user, `https://dt_…@your-downtrace-cloud`: one string that connects. It wins over the two below |
-| `DOWNTRACE_TOKEN` | without a DSN | The ingest token for this project **and environment** |
-| `DOWNTRACE_URL` | without a DSN | Base URL of the cloud, `http://` or `https://`; trailing slashes are ignored |
-| `DOWNTRACE_ENV` | no | Environment; falls back to `NODE_ENV`, then `production`. The token's environment is what decides where the data lands (below) |
-| `DOWNTRACE_VERSION` | no | Deployed version or commit. Unset, it is looked for in this order: the variable your platform or CI sets (`VERCEL_GIT_COMMIT_SHA`, `CODEBUILD_RESOLVED_SOURCE_VERSION`, `GITHUB_SHA` and [the rest](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/src/config.ts)), then on ECS the image's digest (`image:sha256:…`), then a fingerprint of your code (`code:…`); `unknown` only if none answers. [How](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version) |
-| `DOWNTRACE_DEBUG` | no | `1` or `true` to log the instrumentation's own activity to stderr |
-| `DOWNTRACE_INTERVAL_MS` | no | Aggregation interval in ms (min 1000; default 10000; anything else falls back to the default) |
-| `DOWNTRACE_PROFILE_MS` | no | How long a profile window stays open, in ms (default 60000; never below `DOWNTRACE_INTERVAL_MS`, and never above two and a half minutes minus the interval — [why](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#what-each-route-normally-runs)). Shortening it multiplies the profile rows in proportion, and those count against the project's daily budget |
-| `DOWNTRACE_INSTRUMENT` | no | Which observers run: `all` (default), `none`, or a list like `pg,mysql,sqlite,mongodb,prisma,http,redis,runtime` |
-| `DOWNTRACE_MINIMAL` | no | `1` to send no free text at all (below) |
-| `DOWNTRACE_QUERY_TEXT` | no | `off` to send query fingerprints without their normalised text. The hash is the identity, so the analysis is unchanged |
-| `DOWNTRACE_EXCLUDE_ENDPOINTS` | no | Route templates not to observe at all, comma-separated; `*` stands for any run of characters and the whole template has to match (`/admin/*`). The cloud is told how many are missing, never which |
-| `DOWNTRACE_EXCLUDE_DEPENDENCIES` | no | Dependency targets not to observe at all, the same way (`api.stripe.com`) |
-| `DOWNTRACE_INSPECT` | no | `stderr` or a file path: writes every batch exactly as it would be sent. With it set, `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` become optional |
-| `DOWNTRACE_SHED` | no | `nothing` (default), `fine` or `profile`: the least the instrumentation gives up, whatever its own meter measures. The benchmark's switch; leave it alone in production |
-| `DOWNTRACE_PG_DEPTH` | no | `full` (default), `context` or `wrapper`: how much of the Postgres observer's attribution runs. The benchmark's switch; leave it alone in production |
+| `dsn` | `DOWNTRACE_DSN` | The cloud's URL with the ingest token as its user: one string that connects. Or, apart, `token` and `url` (`DOWNTRACE_TOKEN`, `DOWNTRACE_URL`) |
+| `env` | `DOWNTRACE_ENV` | Environment; falls back to `NODE_ENV`, then `production`. The token's environment is what decides where the data lands (below) |
+| `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found with no configuration: the variable your platform or CI sets, the image's digest on ECS, or a fingerprint of your code ([how](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version)) |
+| `inspect` | `DOWNTRACE_INSPECT` | `stderr` or a file path: writes every batch exactly as it would be sent, and needs no DSN ([below](#see-exactly-what-would-leave-your-server)) |
+
+The rest — debug, the interval, the profile, which observers run, minimal mode, query text, exclusions, the benchmark's switches — and what a late `init()` loses are in [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md). A second `init()`, or one after `--import @downtrace/agent/register` started the instrumentation, changes nothing and says so.
 
 An ingest token belongs to one environment, and **that** is the environment everything sent with it is stored as, whatever `DOWNTRACE_ENV` says. If the two disagree, the data still lands — going blind over a mislabelled deploy would be worse than the wrong label — and the project's page shows the instance as declaring something else, which is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the batch declare.
 
@@ -227,6 +275,7 @@ The drivers are the ones your application loads, resolved from its entry: see [w
 
 The reference pages live beside this README, in `guide/` of the package:
 
+- [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md) — every setting, as an option of `init()` and a variable, and what a late `init()` loses
 - [What leaves your server](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md) — every field, the profile, captures, reference samples, minimal mode
 - [Databases](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md) — Postgres, Neon, postgres.js, MySQL, SQL Server, SQLite, MongoDB and Prisma, driver by driver
 - [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md) — each framework, the heuristic, and what is wrapped

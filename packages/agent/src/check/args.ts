@@ -49,7 +49,8 @@ The test command is what comes after "--", or "check.command" of downtrace.json.
 Exit status of check: 0 no route got worse, 1 at least one did, 2 no comparison could be made.
 
 init looks at the project in this directory (package.json, its lockfile, next.config, tsconfig.json) and writes
-downtrace.json with its test command, and the instrumentation.ts a Next.js build with output "standalone" needs.
+downtrace.json with its test command, the instrumentation.ts a Next.js build with output "standalone" needs, and,
+where @downtrace/agent is a dependency, the instrument file that starts it in production and the line that loads it.
 It asks nothing and makes no network request. Run it again at any time: what is there already is kept.
 
 Options of init:

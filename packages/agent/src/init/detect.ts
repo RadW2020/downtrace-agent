@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { shellJoin } from "../check/config.ts";
 
 /**
@@ -250,6 +250,12 @@ export const REGISTER_SPECIFIER = `${AGENT_PACKAGE}/register`;
 export interface PackageJson {
   /** Every package in `dependencies`, `devDependencies` and `optionalDependencies`. */
   dependencies: Set<string>;
+  /** The packages production installs: those in `dependencies` and `optionalDependencies`, not `devDependencies`. */
+  production: Set<string>;
+  /** `"type": "module"`: its `.js` files are ES modules. */
+  esm: boolean;
+  /** The `main` field, as written. */
+  main: string | undefined;
   /** The range each of them is declared with, as written. */
   ranges: Map<string, string>;
   scripts: Record<string, string>;
@@ -275,6 +281,7 @@ export function parsePackageJson(text: string, source: string): PackageResult {
   if (!isRecord(value)) return fail("it must be a JSON object");
 
   const dependencies = new Set<string>();
+  const production = new Set<string>();
   const ranges = new Map<string, string>();
   for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
     const listed = value[field];
@@ -282,6 +289,7 @@ export function parsePackageJson(text: string, source: string): PackageResult {
     if (!isRecord(listed)) return fail(`"${field}" must be an object`);
     for (const [name, range] of Object.entries(listed)) {
       dependencies.add(name);
+      if (field !== "devDependencies") production.add(name);
       if (typeof range === "string") ranges.set(name, range);
     }
   }
@@ -298,7 +306,11 @@ export function parsePackageJson(text: string, source: string): PackageResult {
   if (packageManager !== undefined && typeof packageManager !== "string") {
     return fail('"packageManager" must be a string');
   }
-  return { ok: true, pkg: { dependencies, ranges, scripts, packageManager } };
+  const main = typeof value.main === "string" ? value.main : undefined;
+  return {
+    ok: true,
+    pkg: { dependencies, production, esm: value.type === "module", main, ranges, scripts, packageManager },
+  };
 }
 
 /** The script to run as the test command, or undefined when there is none. */
@@ -364,6 +376,93 @@ export interface Detection {
   repository: boolean;
   /** Present when the project is a Next.js build that prunes what nothing imports. */
   next: NextBuild | undefined;
+  /** Where the instrument file goes and what loads it; undefined for Next.js, which has its own hook (RF-106). */
+  instrument: InstrumentLayout | undefined;
+}
+
+/**
+ * Where `init` puts the instrument file, and what loads it before anything else (RF-106):
+ *
+ * - `entry`: CommonJS. The file beside the entry, and a line that loads it as the entry's first: the entry of a NestJS
+ *   application as `nest-cli.json` names it (`src/main.ts` by default), compiled to CommonJS; or else the file the
+ *   start script runs, or `main`, when it is JavaScript, or TypeScript run as it is (`ts-node`, `tsx`).
+ * - `flag`: ES modules, whose imports are all loaded before the entry's first line runs. `instrument.mjs` at the root,
+ *   and `--import ./instrument.mjs` in the script that starts the application with `node`, when one does.
+ * - `unknown`: no entry to edit: none found, or a compiled one, whose source cannot be told from here.
+ * - `skipped`: `@downtrace/agent` is not a production dependency, and an entry that required it would fail to start
+ *   where only those are installed. Nothing is written, and nothing is missing: `check` needs none of it.
+ */
+export type InstrumentLayout =
+  | { kind: "entry"; entry: string; file: string; language: "typescript" | "commonjs" }
+  | { kind: "flag"; file: string; script: string | undefined }
+  | { kind: "unknown"; reason: string }
+  | { kind: "skipped"; reason: string };
+
+/** The scripts that start an ES module application, in the order they are looked at for a `node` to add `--import` to. */
+export const START_SCRIPTS = ["start", "start:prod"] as const;
+
+/** What runs a file the way `node` does, as a start script names it. */
+const RUNNERS = ["node", "nodemon", "ts-node", "tsx"];
+
+/** The flags of `node` that take the next word as their value. */
+const VALUED_FLAGS = [
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+  "--env-file",
+  "-C",
+  "--conditions",
+];
+
+/** The file a start script runs: the first word after the runner that is not a flag or a flag's value. */
+export function scriptEntry(script: string): string | undefined {
+  const words = script.trim().split(/\s+/);
+  if (!RUNNERS.includes(words[0] ?? "")) return undefined;
+  for (let i = 1; i < words.length; i += 1) {
+    const word = words[i] ?? "";
+    if (VALUED_FLAGS.includes(word)) i += 1;
+    else if (!word.startsWith("-")) return word;
+  }
+  return undefined;
+}
+
+/** Where the instrument file goes in the project in `dir`, when it is not a Next.js application. */
+async function instrumentLayout(dir: string, pkg: PackageJson): Promise<InstrumentLayout> {
+  if (!pkg.production.has(AGENT_PACKAGE)) {
+    return {
+      kind: "skipped",
+      reason: `${AGENT_PACKAGE} is not a dependency of the project, only a dev dependency or none, and production installs neither`,
+    };
+  }
+  if (pkg.esm) {
+    const script = START_SCRIPTS.find((name) => /^\s*node\s/.test(pkg.scripts[name] ?? ""));
+    return { kind: "flag", file: "instrument.mjs", script };
+  }
+  if (pkg.dependencies.has("@nestjs/core")) {
+    const cli = await readIfThere(join(dir, "nest-cli.json"));
+    const sourceRoot = (cli && /"sourceRoot"\s*:\s*"([^"]+)"/.exec(cli)?.[1]) || "src";
+    const entryFile = (cli && /"entryFile"\s*:\s*"([^"]+)"/.exec(cli)?.[1]) || "main";
+    const entry = posix.join(sourceRoot, `${entryFile}.ts`);
+    if (!(await exists(join(dir, entry)))) return { kind: "unknown", reason: `the NestJS entry ${entry} is not there` };
+    return { kind: "entry", entry, file: posix.join(sourceRoot, "instrument.ts"), language: "typescript" };
+  }
+  const named = START_SCRIPTS.map((name) => scriptEntry(pkg.scripts[name] ?? "")).find((file) => file !== undefined);
+  const candidate = named ?? pkg.main;
+  if (candidate === undefined) return { kind: "unknown", reason: "neither a start script nor main names the entry" };
+  const entry = posix.normalize(candidate);
+  // Not `.mts`: an ES module starts with `--import` (RF-102), and its imports need the extension this line leaves out.
+  const typescript = /\.c?ts$/.test(entry);
+  if (!typescript && !/\.c?js$/.test(entry))
+    return { kind: "unknown", reason: `the entry ${entry} is not a file it can edit` };
+  // A JavaScript entry in a TypeScript project is what the compiler wrote: an edit there is lost on the next build.
+  if (!typescript && (await exists(join(dir, "tsconfig.json")))) {
+    return { kind: "unknown", reason: `the entry ${entry} is compiled from TypeScript, whose source it cannot tell` };
+  }
+  if (!(await exists(join(dir, entry)))) return { kind: "unknown", reason: `the entry ${entry} is not there` };
+  const file = posix.join(posix.dirname(entry), typescript ? "instrument.ts" : "instrument.js");
+  return { kind: "entry", entry, file, language: typescript ? "typescript" : "commonjs" };
 }
 
 /** Reads a file of the project, or undefined when it is not there. */
@@ -489,5 +588,6 @@ export async function detect(dir: string, pkg: PackageJson): Promise<Detection> 
     installed: pkg.dependencies.has(AGENT_PACKAGE),
     repository: top !== undefined,
     next: pkg.dependencies.has("next") ? await nextBuild(dir) : undefined,
+    instrument: pkg.dependencies.has("next") ? undefined : await instrumentLayout(dir, pkg),
   };
 }

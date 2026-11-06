@@ -6,13 +6,26 @@ import {
   type Detection,
   detect,
   FRAMEWORK_PACKAGES,
+  type InstrumentLayout,
+  type PackageJson,
   type PackageManager,
   parsePackageJson,
   REGISTER_SPECIFIER,
   readIfThere,
+  START_SCRIPTS,
   TEST_SCRIPTS,
 } from "./detect.ts";
-import { INSTRUMENTATION_FILE, planConfig } from "./files.ts";
+import {
+  IMPORT_FLAG,
+  INSTRUMENTATION_FILE,
+  instrumentFile,
+  loadingLine,
+  loadsInstrument,
+  planConfig,
+  withFirstLine,
+  withImportFlag,
+  withScript,
+} from "./files.ts";
 import {
   exitCodeOfInit,
   type FileAction,
@@ -65,8 +78,95 @@ function report(project: string, rest: Partial<InitReport>): InitReport {
     missing: [],
     failure: null,
     next: null,
+    instrument: null,
     ...rest,
   };
+}
+
+/** A file to write: created only where there is none, or replaced. */
+interface Write {
+  path: string;
+  text: string;
+  create: boolean;
+}
+
+/** What the instrument file needs (RF-106): what to write, what is there already, what is left to the person. */
+interface InstrumentPlan {
+  writes: Write[];
+  unchanged: string[];
+  missing: Missing[];
+  instrument: InitReport["instrument"];
+}
+
+const ENTRY_ADVICE =
+  `Write instrument.js beside the file the application starts from (instrument.ts in TypeScript, beside its source): ` +
+  `const { init } = require("${AGENT_PACKAGE}"); init({ dsn: process.env.DOWNTRACE_DSN }); — and load it on that ` +
+  `file's first line: require("./instrument"); in JavaScript, import "./instrument"; in TypeScript.`;
+
+const FLAG_ADVICE =
+  `Start the application with node ${IMPORT_FLAG} <entry>: in the start script, a Dockerfile's CMD, or ` +
+  `NODE_OPTIONS="${IMPORT_FLAG}". An ES module's imports are all loaded before its first line runs, so node loads it.`;
+
+/**
+ * Plans the instrument file and the line that loads it, from where `detect` put them. The file comes first among the
+ * writes, so that an entry is never left loading a file that is not there; what is there already is the person's.
+ */
+async function planInstrument(
+  dir: string,
+  layout: InstrumentLayout | undefined,
+  pkg: { text: string; parsed: PackageJson },
+): Promise<InstrumentPlan> {
+  const plan: InstrumentPlan = { writes: [], unchanged: [], missing: [], instrument: null };
+  if (layout === undefined) return plan;
+  if (layout.kind === "skipped") {
+    plan.instrument = { file: null, loadedBy: null, skipped: layout.reason };
+    return plan;
+  }
+  if (layout.kind === "unknown") {
+    const message = `init cannot tell where to load the instrument file from: ${layout.reason}`;
+    plan.missing.push({ code: "no-entry", message, advice: ENTRY_ADVICE });
+    plan.instrument = { file: null, loadedBy: null, skipped: null };
+    return plan;
+  }
+  const language = layout.kind === "flag" ? "esm" : layout.language;
+  if ((await readIfThere(join(dir, layout.file))) === undefined) {
+    plan.writes.push({ path: layout.file, text: instrumentFile(language), create: true });
+  } else {
+    plan.unchanged.push(layout.file);
+  }
+  plan.instrument = { file: layout.file, loadedBy: null, skipped: null };
+
+  if (layout.kind === "entry") {
+    // `detect` saw it; read now, and written back with the line only if nothing loads the file yet.
+    const text = (await readIfThere(join(dir, layout.entry))) ?? "";
+    if (loadsInstrument(text)) plan.unchanged.push(layout.entry);
+    else
+      plan.writes.push({ path: layout.entry, text: withFirstLine(text, loadingLine(layout.language)), create: false });
+    plan.instrument.loadedBy = layout.entry;
+    return plan;
+  }
+
+  const name = layout.script;
+  const body = name === undefined ? undefined : pkg.parsed.scripts[name];
+  if (name === undefined || body === undefined) {
+    const message = `no script of package.json starts the application with node (${START_SCRIPTS.join(", ")})`;
+    plan.missing.push({ code: "no-start-script", message, advice: FLAG_ADVICE });
+    return plan;
+  }
+  if (body.includes("./instrument.mjs")) {
+    plan.unchanged.push("package.json");
+  } else {
+    const flagged = withImportFlag(body);
+    const text = flagged === undefined ? undefined : withScript(pkg.text, name, body, flagged);
+    if (text === undefined) {
+      const message = `the script ${name} of package.json is not written in a way init can edit for sure`;
+      plan.missing.push({ code: "no-start-script", message, advice: FLAG_ADVICE });
+      return plan;
+    }
+    plan.writes.push({ path: "package.json", text, create: false });
+  }
+  plan.instrument.loadedBy = `scripts.${name}`;
+  return plan;
 }
 
 const failed = (project: string, failure: InitFailure): InitReport => report(project, { status: "failed", failure });
@@ -166,7 +266,7 @@ async function configure(dir: string): Promise<InitReport> {
   }
 
   const files: Array<{ path: string; action: FileAction }> = [];
-  const writes: Array<{ path: string; text: string; create: boolean }> = [];
+  const writes: Write[] = [];
   if (plan.kind === "create" || plan.kind === "update") {
     writes.push({ path: CONFIG_FILE, text: plan.text, create: plan.kind === "create" });
   } else if (plan.kind === "keep") {
@@ -208,6 +308,11 @@ async function configure(dir: string): Promise<InitReport> {
     }
   }
 
+  const instrument = await planInstrument(dir, found.instrument, { text: pkgText, parsed: parsed.pkg });
+  writes.push(...instrument.writes);
+  for (const path of instrument.unchanged) files.push({ path, action: "unchanged" });
+  missing.push(...instrument.missing);
+
   for (const write of writes) {
     // A file created here is one that was not there when init looked: `wx` refuses to replace one that appeared since.
     await writeFile(join(dir, write.path), write.text, { flag: write.create ? "wx" : "w" });
@@ -229,5 +334,6 @@ async function configure(dir: string): Promise<InitReport> {
     files,
     missing,
     next: command === undefined ? null : `${npx(found)} check`,
+    instrument: instrument.instrument,
   });
 }
