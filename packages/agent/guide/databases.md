@@ -328,6 +328,34 @@ root, and with npm a `pg` of yours that the adapter's version range does not tak
 instrumentation also resolves the `pg` that `@prisma/adapter-pg` resolves, without loading it, and patches it when the
 application has: a query is counted by the copy it went through, once.
 
+## On Node 18
+
+The instrumentation runs from Node 18.19.0 ([requirements](../README.md#requirements)), and there it observes what it
+observes on Node 24, for every driver version that itself runs on 18.19. Each version below was run on Node 18.19.0
+and on Node 24, imported and required where it can be both, with a query that succeeds and one that fails, against
+the packed package: both Nodes wrote the same dependency, target, queries and error. A newer version asks for the Node
+its `package.json` declares.
+
+| Driver | Run on Node 18.19.0 | Newer versions |
+|---|---|---|
+| `pg` | 8.23.1 | |
+| postgres.js (`postgres`) | 3.4.9 | 4 declares Node 18, and is not observed, on any Node |
+| Neon's driver (`@neondatabase/serverless`) | 0.10.4 and 1.2.0, given a global `crypto` (below) | 1.0 and later declare Node 19 |
+| Prisma | 3.15.2, 4.16.2, 5.22.0 and 6.19.3 on its own engine; 6.19.3 with `@prisma/adapter-pg` | 7 needs Node 20.19, 22.12 or 24 |
+
+**Neon's driver does not run on Node 18 by itself**, in either version: it signs in with `crypto.getRandomValues` from
+the global `crypto`, which Node has without a flag from 19, and on 18 the process ends at the first query. Set it
+before the driver loads — under ES modules, from a module of its own imported first, because imports run before the
+code that follows them:
+
+```js
+// webcrypto.cjs
+globalThis.crypto ??= require("node:crypto").webcrypto;
+```
+
+Before Node 22 there is no global `WebSocket` either, and the driver takes the one you give it,
+`neonConfig.webSocketConstructor = ws`, as its own documentation says.
+
 ## Where the drivers are found
 
 `pg`, `postgres`, `mysql2`, `mysql`, `mariadb`, `tedious`, `better-sqlite3`, `libsql`, `sqlite3`, `mongodb`, `@prisma/client` and Express are resolved from your application's entry where Node runs it, so they are the ones your
