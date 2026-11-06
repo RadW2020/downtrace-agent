@@ -166,6 +166,19 @@ npx downtrace verify    # downtrace verify: the token writes to shop-api / stagi
 
 It reads the token the instrumentation would, from `DOWNTRACE_DSN` or `DOWNTRACE_TOKEN` and `DOWNTRACE_URL`; `--dsn <dsn>`, or `--token <token>` with `--url <url>`, checks another. It never prints the token. Exit 0: the token writes where it says · 1: the cloud refused it · 2: nothing could be checked (no token, a cloud it cannot reach or that does not answer in ten seconds, or any other answer), and it says which.
 
+## The ingestion token is safe to commit
+
+The token in `DOWNTRACE_TOKEN` is public by design, like a Sentry DSN, and so is the DSN that carries it, in `DOWNTRACE_DSN` or in `init({ dsn })`: put either wherever your deployment can read it, your repository, your Dockerfile or your instrument file included. It belongs to one project and one environment, it only sends, and every other door of the cloud answers it as it answers no credential at all. Whoever holds it:
+
+- **can** send data to its project, stored as its environment — batches, and evidence for the captures the cloud asks for — and so make Downtrace report what never happened;
+- **can** spend the project's budgets — rows a day, captures an hour, evidence a day, error signatures — and a spent one stops every environment of the project, production included, until it refills;
+- **can** read, in the answers to what it sends, the project and environment it writes to, and the routes and dependencies the cloud asks that environment to capture;
+- **cannot** read findings, reports, errors, evidence or pages, operate on anything, or write to another project or as another environment.
+
+If it ends up somewhere you would rather it had not, ask whoever runs your Downtrace cloud for a new token for that environment: the old one stops working at once, and what was sent with it stays. An *unbound* token (above) writes as whatever environment the batch declares, production included: replace it with one bound to its environment before you commit it.
+
+Only the ingestion token, `dt_…`, is public. An access credential, `dtr_…` — what a coding agent reads and operates with, and what `@downtrace/mcp` reads from a variable of the same name — is a secret: never commit it.
+
 ## If your build prunes dependencies it cannot see
 
 `--import` loads the instrumentation from the command line, so **nothing in your code imports it**. Bundlers that ship only what is imported — Next.js `output: "standalone"`, and anything else that copies "only what is used" — leave it out, and the container dies at boot with `Error: Cannot find package '@downtrace/agent'`.

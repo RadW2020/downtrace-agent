@@ -29,6 +29,7 @@ import {
 import {
   exitCodeOfInit,
   type FileAction,
+  INGESTION_TOKEN,
   INIT_SCHEMA,
   type InitFailure,
   type InitReport,
@@ -79,6 +80,7 @@ function report(project: string, rest: Partial<InitReport>): InitReport {
     failure: null,
     next: null,
     instrument: null,
+    token: INGESTION_TOKEN,
     ...rest,
   };
 }

@@ -27,6 +27,26 @@ export type InitFailureCode = (typeof INIT_FAILURE_CODES)[number];
 
 export type FileAction = "created" | "updated" | "unchanged";
 
+/**
+ * What init says of the ingestion token, in its text and in `--json` alike: the question a person wiring production
+ * asks is whether the token can go in the repository, and it can. It is public by design, like a Sentry DSN: it only
+ * sends, to one project and one environment, and every other door of the cloud answers it as it answers no
+ * credential. What that leaves to whoever holds it is said here plainly, and the README says it in these words
+ * (`test/token-readme.test.ts`).
+ */
+export const INGESTION_TOKEN = {
+  safeToCommit: true,
+  can: [
+    "send data to its project, stored as its environment — batches, and evidence for the captures the cloud asks for — and so make Downtrace report what never happened",
+    "spend the project's budgets — rows a day, captures an hour, evidence a day, error signatures — and a spent one stops every environment of the project, production included, until it refills",
+    "read, in the answers to what it sends, the project and environment it writes to, and the routes and dependencies the cloud asks that environment to capture",
+  ],
+  cannot:
+    "read findings, reports, errors, evidence or pages, operate on anything, or write to another project or as another environment",
+  replace:
+    "ask whoever runs your Downtrace cloud for a new token for that environment: the old one stops working at once",
+} as const;
+
 export interface Missing {
   code: MissingCode;
   message: string;
@@ -74,6 +94,8 @@ export interface InitReport {
    * a Next.js application, whose hook is the one above, and when there was nothing to look at.
    */
   instrument: { file: string | null; loadedBy: string | null; skipped: string | null } | null;
+  /** The ingestion token is safe to commit: what whoever holds it can and cannot do, and how it is replaced. */
+  token: typeof INGESTION_TOKEN;
 }
 
 export function exitCodeOfInit(report: InitReport): number {
@@ -130,6 +152,15 @@ export function renderInitText(report: InitReport): string {
     lines.push("", "To do:");
     for (const item of report.missing) lines.push(`  - ${item.message}.`, `    ${item.advice}`);
   }
+
+  lines.push(
+    "",
+    "Production: the ingestion token, in DOWNTRACE_TOKEN or inside DOWNTRACE_DSN, is public like a Sentry DSN, and safe to commit.",
+    "  Whoever holds it can:",
+    ...report.token.can.map((can) => `    - ${can}`),
+    `  It cannot ${report.token.cannot}.`,
+    `  To replace it, ${report.token.replace}.`,
+  );
 
   if (report.next !== null) lines.push("", `Next: ${report.next}`);
   return `${lines.join("\n")}\n`;

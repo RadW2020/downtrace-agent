@@ -27,7 +27,7 @@ Downtrace as tools a coding agent can discover and use: the queries and the oper
 
 The shared administration password is not the token for a project. This server sends its token as a Bearer token, and in that shape the password opens `list_projects` and `read_credential` and no tool about a project: those answer it a 403 with `needs: "access credential"`, because a project's reads and operations need an access credential of that project.
 
-The token is read from the environment and never from an argument: an argument ends up in a process list and in a shell history, and this one can close findings.
+The token is read from the environment and never from an argument: an argument ends up in a process list and in a shell history, and this one can close findings. For the same reason it is a secret, unlike the instrumentation's ingestion token of the same name, which only sends and is safe to commit: an access credential, `dtr_…`, stays out of a repository, and so out of an `.mcp.json` that is committed.
 
 ## What it speaks
 

@@ -10,7 +10,7 @@ import { findConfig, parseConfig } from "../src/check/config.ts";
 import type { CheckReport } from "../src/check/report.ts";
 import { runInit } from "../src/init/command.ts";
 import { INSTRUMENTATION_FILE } from "../src/init/files.ts";
-import type { InitReport } from "../src/init/report.ts";
+import { INGESTION_TOKEN, type InitReport } from "../src/init/report.ts";
 import { APP, cleanEnv, createProject, downtrace, type Project } from "./support/check-project.ts";
 
 /**
@@ -537,6 +537,43 @@ describe("run again", () => {
     expect(Object.keys(written)).toEqual(["owner", "check", "extra"]);
     const again = await init(dir);
     expect(again.report.files).toEqual([{ path: "downtrace.json", action: "unchanged" }]);
+  });
+});
+
+describe("the ingestion token", () => {
+  /** The text as a person reads it, with the wrapping of the lines taken out. */
+  const flat = (text: string): string => text.replaceAll(/\s+/g, " ");
+
+  // covers: RF-601
+  it("says it is safe to commit, what a leaked one can and cannot do, and how to replace it, in words", async () => {
+    const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
+    const { code, text } = await initText(dir);
+    expect(code).toBe(0);
+    const said = flat(text);
+    expect(said).toContain("DOWNTRACE_TOKEN");
+    expect(said).toContain("DOWNTRACE_DSN");
+    expect(said).toContain("safe to commit");
+    for (const can of INGESTION_TOKEN.can) expect(said, can).toContain(`- ${can}`);
+    expect(said).toContain(`It cannot ${INGESTION_TOKEN.cannot}.`);
+    expect(said).toContain(`To replace it, ${INGESTION_TOKEN.replace}.`);
+    // What to run next stays the last thing said.
+    expect(text.trimEnd().split("\n").at(-1)).toBe("Next: npx @downtrace/agent check");
+  });
+
+  // covers: RF-601
+  it("says the same to a coding agent, in the JSON, whatever init could configure", async () => {
+    for (const files of [{ ".git/": "", "package.json": EXPRESS_PG }, { "package.json": "{}" }, {}]) {
+      const { report } = await init(await project(files));
+      expect(report.token, report.status).toEqual(INGESTION_TOKEN);
+      expect(report.token.safeToCommit).toBe(true);
+    }
+  });
+
+  it("says it too when there is something left to do", async () => {
+    const dir = await project({ ".git/": "", "package.json": "{}" });
+    const { code, text } = await initText(dir);
+    expect(code).toBe(1);
+    expect(flat(text)).toContain(`To replace it, ${INGESTION_TOKEN.replace}.`);
   });
 });
 
