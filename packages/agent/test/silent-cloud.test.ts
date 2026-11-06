@@ -399,7 +399,12 @@ describe("a flush that is not leaving, while another is under way", () => {
     });
     let answered = 0;
     const c = await cloud(() => (answered++ === 0 ? first : { status: 202 }));
-    const agent = createAgent(testConfig(c.url, { intervalMs: 60_000, instrument: new Set() }), { log: quiet });
+    // A version a variable names: the first batch then waits for no search of one, and is in flight at once, which is
+    // what this is about. Without it the first flush waits for the fingerprint of the code before it sends, and the
+    // report rides the first batch instead (DT-130).
+    const agent = createAgent(testConfig(c.url, { version: "t1", intervalMs: 60_000, instrument: new Set() }), {
+      log: quiet,
+    });
     cleanups.push(c.close, () => agent.stop());
     agent.start();
     serve("/first");

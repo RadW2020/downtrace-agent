@@ -161,6 +161,45 @@ batches the cloud refused, batches it could not send, errors inside itself, the 
 travel is that a cloud seeing nothing has to be able to tell «nothing happened» from «this instrumentation has been
 throwing batches away for two hours».
 
+## The deployed version
+
+Every batch says which deploy it comes from, and the comparison of one deploy with the one before is built on that. You
+do not have to set it. At start-up the instrumentation looks for it, from the most explicit source to the most generic,
+and the first that answers chooses it:
+
+1. `DOWNTRACE_VERSION`, when you set it.
+2. A variable your deploy platform or your CI sets: `VERCEL_GIT_COMMIT_SHA`, `RENDER_GIT_COMMIT`,
+   `RAILWAY_GIT_COMMIT_SHA`, `HEROKU_BUILD_COMMIT`, Coolify's `SOURCE_COMMIT`, `CODEBUILD_RESOLVED_SOURCE_VERSION`,
+   `GITHUB_SHA`, `CI_COMMIT_SHA` and
+   [the rest of the list](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/src/config.ts), in its
+   order. A CI's variables exist during the build, so they count when the build passes them on to the application, with
+   `ARG` and `ENV` in a Dockerfile for instance. Where a platform sets no commit, the name it gives the deploy: Fly.io's
+   image, Cloud Run's revision, App Engine's version.
+3. On ECS, the digest of the container's image, from the task metadata endpoint the ECS agent gives every container:
+   `image:sha256:…`. One request to that endpoint at start-up, with a one-second timeout.
+4. Anywhere else, a fingerprint of your code: `code:` and 16 hexadecimal digits. It is a hash of the content of your
+   code files (`.js`, `.ts` and their kin), `package.json` files and lockfile, under the closest directory above your
+   entry that has a `package.json`. `node_modules`, version control and every other file are left out, so neither a
+   restart nor a log, an upload or a newer file time changes it, and two instances of one build agree on it. A new
+   build with any change to that code gets a new one. It reads at most 5,000 files and 32 MiB, one file at a time, off
+   the path of every request; a larger application is fingerprinted by what fits, read in the same order on every
+   instance. Only the hash leaves your server. Kubernetes sets nothing of the kind, and this is what covers it.
+
+The prefixes are there so that nobody reads an image digest or a fingerprint as a commit: in the cloud, through the MCP
+server and in a batch you inspect, a version that begins `image:` or `code:` says what it is.
+
+A process says one version for its whole life, never `unknown` first and the real one after: that would read as two
+deploys. So the first batch waits for the search, ten seconds at most from the start, and nothing in the search delays
+your application's start or reaches it if it fails. A process that leaves before the search has finished says `unknown`.
+
+With `DOWNTRACE_DEBUG=1`, one line says which source chose the version, and what it passed over on the way:
+
+```
+[downtrace] version: code:5e884898da280471, from a fingerprint of 812 files under /app (the ECS task metadata answered 404)
+```
+
+In minimal mode, below, the version travels as a digest of itself, whichever source chose it.
+
 ## Sending no free text at all
 
 `DOWNTRACE_MINIMAL=1` withholds everything you wrote. Route templates, dependency targets, your hostname

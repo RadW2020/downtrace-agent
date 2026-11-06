@@ -1,6 +1,7 @@
 import { AGGREGATES_SCHEMA_V0 } from "@downtrace/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  type AgentConfig,
   configFromEnv,
   DEFAULT_INTERVAL_MS,
   detectVersion,
@@ -9,6 +10,7 @@ import {
   parsePgDepth,
   parseShed,
   profileCeilingMs,
+  VERSION_ENV_VARS,
 } from "../src/config.ts";
 import { Sheddable } from "../src/overhead.ts";
 import { PROFILE_WINDOW_MS } from "../src/profile.ts";
@@ -54,6 +56,64 @@ describe("configFromEnv", () => {
     expect(detectVersion({ VERCEL_GIT_COMMIT_SHA: "abc" })).toBe("abc");
     expect(detectVersion({ VERCEL_GIT_COMMIT_SHA: "abc", DOWNTRACE_VERSION: "v1" })).toBe("v1");
     expect(detectVersion({ GIT_SHA: "  8f71ac  " })).toBe("8f71ac");
+  });
+});
+
+/**
+ * DT-130: the version comes from the first variable of the list with a value, and the list is read from the source,
+ * so a variable added to it is tested by being added (CLAUDE.md: a test that says «all» enumerates from the source).
+ */
+describe("the deployed version a variable names (DT-130)", () => {
+  const cloud = { DOWNTRACE_TOKEN: "t", DOWNTRACE_URL: "http://x" };
+  function configOf(env: NodeJS.ProcessEnv): AgentConfig {
+    const r = configFromEnv({ ...cloud, ...env });
+    if (!r.ok) throw new Error(r.reason);
+    return r.config;
+  }
+
+  it("lists each variable once, and DOWNTRACE_VERSION first", () => {
+    expect(new Set(VERSION_ENV_VARS).size).toBe(VERSION_ENV_VARS.length);
+    expect(VERSION_ENV_VARS[0]).toBe("DOWNTRACE_VERSION");
+    expect(VERSION_ENV_VARS).toContain("CODEBUILD_RESOLVED_SOURCE_VERSION");
+  });
+
+  it.each(VERSION_ENV_VARS.map((name) => [name]))("is %s when it is the only variable, and says so", (name) => {
+    const config = configOf({ [name]: "8f71ac2" });
+    expect(config.version).toBe("8f71ac2");
+    expect(config.versionFrom).toBe(name);
+  });
+
+  it("takes the first of the list when several are set: DOWNTRACE_VERSION over everything", () => {
+    for (const [i, name] of VERSION_ENV_VARS.entries()) {
+      const env = Object.fromEntries(VERSION_ENV_VARS.slice(i).map((later) => [later, `from-${later}`]));
+      expect(configOf(env).versionFrom, `${name} is not preferred over the ones after it`).toBe(name);
+    }
+    const all = Object.fromEntries(VERSION_ENV_VARS.map((name) => [name, `from-${name}`]));
+    expect(configOf(all).version).toBe("from-DOWNTRACE_VERSION");
+  });
+
+  it("passes over an empty value and a CI's unresolved HEAD, to the next variable", () => {
+    expect(configOf({ DOWNTRACE_VERSION: "  ", BUILDKITE_COMMIT: "HEAD", GITHUB_SHA: "abc" })).toMatchObject({
+      version: "abc",
+      versionFrom: "GITHUB_SHA",
+    });
+    expect(configOf({ AWS_COMMIT_ID: "HEAD" })).toMatchObject({ version: "unknown", versionFrom: undefined });
+  });
+
+  it("clamps a value to the 128 characters the protocol takes", () => {
+    expect(configOf({ APP_VERSION: "v".repeat(300) }).version).toHaveLength(128);
+  });
+
+  it("is unknown, from nothing, when no variable names one: the start-up looks further", () => {
+    expect(configOf({})).toMatchObject({ version: "unknown", versionFrom: undefined, ecsMetadataUri: undefined });
+  });
+
+  it("reads the ECS task metadata endpoint, v4 before v3, and only an http(s) URL", () => {
+    const v4 = "http://169.254.170.2/v4/abc";
+    const v3 = "http://169.254.170.2/v3/abc";
+    expect(configOf({ ECS_CONTAINER_METADATA_URI_V4: v4, ECS_CONTAINER_METADATA_URI: v3 }).ecsMetadataUri).toBe(v4);
+    expect(configOf({ ECS_CONTAINER_METADATA_URI: v3 }).ecsMetadataUri).toBe(v3);
+    expect(configOf({ ECS_CONTAINER_METADATA_URI_V4: "file:///etc/passwd" }).ecsMetadataUri).toBeUndefined();
   });
 });
 

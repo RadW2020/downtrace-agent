@@ -28,6 +28,7 @@ import {
   recordOperationIn,
 } from "./context.ts";
 import { createDeclaredRoutes, type DeclaredRoutes } from "./declared.ts";
+import { type Chosen, DeployedVersion, lookFurther, VERSION_BUDGET_MS } from "./deployed.ts";
 import { applicationEntry, resolutionBases } from "./entry.ts";
 import { ErrorFingerprintCache, errorFingerprint } from "./errors.ts";
 import { FRAMEWORK, ProcessExceptions, UNCAUGHT, UNHANDLED_REJECTION } from "./exceptions.ts";
@@ -143,6 +144,13 @@ export interface AgentDeps {
    * the wiring is exercised without waiting for the production cadence.
    */
   loopTickMs?: number;
+  /**
+   * Where the version is looked for when no variable names it, and how long the search may take (DT-130). In
+   * production, `lookFurther`: the ECS task metadata, then a fingerprint of the code, within `VERSION_BUDGET_MS`. A
+   * test hands over a search that answers late, fails or never answers.
+   */
+  lookForVersion?: ((signal: AbortSignal) => Promise<Chosen>) | undefined;
+  versionBudgetMs?: number | undefined;
   /** The Node the agent runs on, `process.versions.node` unless a test says it is an older one (DT-131). */
   nodeVersion?: string | undefined;
 }
@@ -221,6 +229,13 @@ export class Agent {
    */
   private reportedInternalErrors = 0;
   private readonly sender: Sender;
+  /** The version every batch carries, one for the life of the process (DT-130). */
+  private readonly deployed: DeployedVersion;
+  /** The search for it when no variable names it, and its budget; see `AgentDeps.lookForVersion`. */
+  private readonly lookForVersion: ((signal: AbortSignal) => Promise<Chosen>) | undefined;
+  private readonly versionBudgetMs: number;
+  /** What asks the runtime's metadata, the same `fetch` the sender uses. */
+  private readonly fetchImpl: typeof fetch;
   private readonly handleSignals: boolean;
   /** The cadence of the event loop feed, from the deps; a second by default (see `AgentDeps.loopTickMs`). */
   private readonly loopTickMs: number | undefined;
@@ -410,8 +425,24 @@ export class Agent {
     // than not at all. The environment is **not** withheld: the ingest token already tells the cloud which
     // one this is, so hiding it here protects nothing and would collapse the scope everything is organised
     // by (ADR 0105).
+    //
+    // Read when a batch is assembled, and not copied here: when no variable names the version, the start-up is still
+    // looking for it, and the first batch that reads it fixes it for every batch after (DT-130). A getter, so that the
+    // rule holds on every path a batch is written by, the blocking ones on the way out included.
+    const deployed = new DeployedVersion({ log: this.log });
+    // Named by a variable, even as `unknown`, or by whoever built the configuration: then nothing is looked for.
+    if (config.versionFrom !== undefined || config.version !== "unknown") {
+      deployed.named({ version: config.version, source: config.versionFrom ?? "the configuration" });
+    }
+    this.deployed = deployed;
+    this.lookForVersion = deps.lookForVersion;
+    this.versionBudgetMs = deps.versionBudgetMs ?? VERSION_BUDGET_MS;
+    this.fetchImpl = deps.fetchImpl ?? fetch;
     const deploy: DeployInfo = {
-      version: config.minimal ? withheldName(config.version) : config.version,
+      get version(): string {
+        const version = deployed.read();
+        return config.minimal ? withheldName(version) : version;
+      },
       environment: config.environment,
     };
     // Every component that keeps a clock is handed this one, and none has a default of its own. Each used to fall
@@ -580,6 +611,16 @@ export class Agent {
     // And under `check`, the project the tests are of: the main module is then the runner, which a package manager
     // may keep where nothing of the application resolves (`resolutionBases`).
     const from = resolutionBases(entry, this.config.checkProject);
+    // When no variable named the version, the search for it starts here and runs on its own: nothing of it is awaited,
+    // so the application's start waits for none of it, and the first batch waits for it within its budget (DT-130).
+    if (this.deployed.open) {
+      const fetchImpl = this.fetchImpl;
+      const ecsMetadataUri = this.config.ecsMetadataUri;
+      this.deployed.search(
+        this.lookForVersion ?? ((signal) => lookFurther({ ecsMetadataUri, entry, fetchImpl, signal })),
+        this.versionBudgetMs,
+      );
+    }
     // The mount record arms here and not at the load of `mounts.ts`: an import of the package must not load
     // express or wrap a method of it when the instrumentation is not starting (the README's promise, gh-903),
     // and `register` calls `start()` during `--import`, before the application registers anything, so no
@@ -934,9 +975,8 @@ export class Agent {
     process.once("beforeExit", this.onBeforeExit);
     if (this.sender.writesOnly) process.once("exit", this.onExit);
     if (this.handleSignals) for (const s of SIGNALS) process.on(s, this.onSignal[s]);
-    this.log.debug(
-      `started: ${this.config.url} · ${this.config.environment} · ${this.config.version} · every ${this.config.intervalMs} ms`,
-    );
+    // The version is not on this line: it may not be chosen yet, and its own line says it when it is (DT-130).
+    this.log.debug(`started: ${this.config.url} · ${this.config.environment} · every ${this.config.intervalMs} ms`);
   }
 
   /**
@@ -1065,6 +1105,15 @@ export class Agent {
       // keeps its own timeout.
       if (deadline) await settledWithin(params.underWay, deadline);
       this.enqueueHeld({ leaving });
+      // The first batch says the version the search chose, and so does every batch after it: never `unknown` first and
+      // a digest after (DT-130). So the search is waited for here, after the interval is closed on time and before the
+      // batch is assembled: within its own budget, and on the way out within half the deadline, which leaves the batch
+      // the other half to leave in. Once the version is chosen this waits for nothing.
+      if (this.deployed.open) {
+        await this.deployed.ready(
+          leaving ? AbortSignal.timeout((params.timeoutMs ?? SHUTDOWN_FLUSH_MS) / 2) : undefined,
+        );
+      }
       const sent = await this.sender.flush(deadline ?? params.timeoutMs);
       // Said, because it is the last thing this process will say about it: nothing is queued in a process that
       // is leaving, and there is no next batch to count the loss in (gh-650).

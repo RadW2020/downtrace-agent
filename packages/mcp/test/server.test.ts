@@ -146,6 +146,18 @@ describe("the handshake", () => {
   });
 
   /**
+   * DT-130: when no variable names the deploy, the instrumentation sends the image's digest or a fingerprint of the
+   * code, each behind a prefix. An agent that took either for a commit would go looking for it in the repository.
+   */
+  it("says that a version behind `image:` or `code:` is not a commit", async () => {
+    const { s } = server();
+    const out = handshake(await s.handle("initialize", {}));
+    const sentence =
+      out.instructions.split(". ").find((candidate) => candidate.includes("A deployed version is")) ?? "";
+    for (const said of ["`image:`", "`code:`", "neither is a commit"]) expect(sentence).toContain(said);
+  });
+
+  /**
    * DT-72, invariant 12: a consumer's annotations are data too. A note, the reason a finding or an error was
    * closed, an assessment: another consumer wrote them, a person or another coding agent, and they are not under
    * `fromService` because they are not the service's words. The greeting names them on their own.

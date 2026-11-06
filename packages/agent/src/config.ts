@@ -9,7 +9,19 @@ export interface AgentConfig {
   /** Ingest base URL, without trailing slash. */
   url: string;
   environment: string;
+  /**
+   * The deployed version a variable names (`VERSION_ENV_VARS`), or `unknown`. When it is `unknown`, the start-up looks
+   * further: the runtime's metadata, then a fingerprint of the code (`deployed.ts`, DT-130).
+   */
   version: string;
+  /** The variable `version` was read from; absent when none named it. Said by the line `DOWNTRACE_DEBUG` writes. */
+  versionFrom?: string | undefined;
+  /**
+   * The ECS task metadata endpoint of this container, which the ECS agent sets in every container it starts
+   * (`ECS_CONTAINER_METADATA_URI_V4`, or the v3 one on an older agent). Asked once, at start-up, for the digest of the
+   * image, and only when no variable named the version (DT-130). Absent anywhere but on ECS.
+   */
+  ecsMetadataUri?: string | undefined;
   debug: boolean;
   /** Aggregation interval; 10 s in production. */
   intervalMs: number;
@@ -134,17 +146,63 @@ export function profileCeilingMs(intervalMs: number): number {
   return Math.max(intervalMs, (5 * 60_000) / 2 - intervalMs);
 }
 
-/** Env vars commonly set by deploy platforms, in order of preference, used when DOWNTRACE_VERSION is absent. */
+/**
+ * The variables the deployed version is read from, in order of preference: the first with a value names it (DT-130).
+ *
+ * The operator's own first. Then the commit a deploy platform sets in the running application. Then the commit a CI
+ * service or a build sets: those exist in the build, and reach the application only when the build passes them on
+ * (`ARG`/`ENV` in a Dockerfile, an `.env` it writes), which is common enough to read them. Last, what a platform
+ * names a deploy by when it sets no commit at all: those are not commits, and each reads as what it is. Each one was
+ * checked against its platform's documentation when it was added. A name that two platforms share is listed once.
+ */
 export const VERSION_ENV_VARS = [
   "DOWNTRACE_VERSION",
   "APP_VERSION",
   "GIT_SHA",
-  "VERCEL_GIT_COMMIT_SHA",
-  "HEROKU_SLUG_COMMIT",
-  "SOURCE_VERSION",
-  "RENDER_GIT_COMMIT",
-  "RAILWAY_GIT_COMMIT_SHA",
+  // Deploy platforms, in the running application.
+  "VERCEL_GIT_COMMIT_SHA", // Vercel
+  "HEROKU_BUILD_COMMIT", // Heroku, dyno metadata
+  "HEROKU_SLUG_COMMIT", // Heroku, dyno metadata, the name before HEROKU_BUILD_COMMIT
+  "SOURCE_VERSION", // Heroku, in the build
+  "RENDER_GIT_COMMIT", // Render
+  "RAILWAY_GIT_COMMIT_SHA", // Railway, deploys from GitHub
+  "SOURCE_COMMIT", // Coolify
+  "KOYEB_GIT_SHA", // Koyeb, deploys from GitHub
+  "NF_DEPLOYMENT_SHA", // Northflank
+  "CC_COMMIT_ID", // Clever Cloud
+  "GIT_REV", // Dokku
+  // CI services and builds, when the build passes them on.
+  "CODEBUILD_RESOLVED_SOURCE_VERSION", // AWS CodeBuild, and CodePipeline through it
+  "GITHUB_SHA", // GitHub Actions
+  "CI_COMMIT_SHA", // GitLab CI, Woodpecker, Harness CI
+  "BITBUCKET_COMMIT", // Bitbucket Pipelines
+  "CIRCLE_SHA1", // CircleCI
+  "BUILD_SOURCEVERSION", // Azure Pipelines
+  "BUILDKITE_COMMIT", // Buildkite
+  "DRONE_COMMIT_SHA", // Drone, Harness CI
+  "TRAVIS_COMMIT", // Travis CI
+  "SEMAPHORE_GIT_SHA", // Semaphore
+  "APPVEYOR_REPO_COMMIT", // AppVeyor
+  "GIT_CLONE_COMMIT_HASH", // Bitrise
+  "CF_REVISION", // Codefresh
+  "GIT_COMMIT", // Jenkins, with the Git plugin
+  "COMMIT_REF", // Netlify, in the build
+  "AWS_COMMIT_ID", // AWS Amplify, in the build
+  "ZEABUR_GIT_COMMIT_SHA", // Zeabur, in the build
+  // What a platform names a deploy by when it sets no commit: not commits, and they read as what they are.
+  "FLY_IMAGE_REF", // Fly.io: registry.fly.io/<app>:deployment-<id>
+  "K_REVISION", // Cloud Run: <service>-<number>-<suffix>
+  "GAE_VERSION", // App Engine
 ] as const;
+
+/**
+ * A value that names no version: what a CI service sets before it has resolved the commit (Buildkite before the
+ * checkout, Amplify on a rebuild). The variable is passed over, as an empty one is.
+ */
+const UNRESOLVED = "HEAD";
+
+/** The ECS task metadata endpoints, the current one first. */
+const ECS_METADATA_ENV_VARS = ["ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI"] as const;
 
 export function configFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -186,13 +244,16 @@ export function configFromEnv(
       );
     }
   }
+  const named = versionFromEnv(env);
   return {
     ok: true,
     config: {
       token,
       url: rawUrl.replace(/\/+$/, ""),
       environment: clamp(env.DOWNTRACE_ENV ?? env.NODE_ENV ?? "production", 64),
-      version: detectVersion(env),
+      version: named?.version ?? "unknown",
+      versionFrom: named?.from,
+      ecsMetadataUri: ecsMetadataUri(env),
       debug: env.DOWNTRACE_DEBUG === "1" || env.DOWNTRACE_DEBUG === "true",
       intervalMs,
       profileMs,
@@ -212,12 +273,27 @@ export function configFromEnv(
   };
 }
 
+/** The version the variables name, or `unknown`. The rest of the chain runs at start-up (`deployed.ts`). */
 export function detectVersion(env: NodeJS.ProcessEnv): string {
+  return versionFromEnv(env)?.version ?? "unknown";
+}
+
+/** The first variable of `VERSION_ENV_VARS` that names a version, and the version, clamped to what the protocol takes. */
+export function versionFromEnv(env: NodeJS.ProcessEnv): { version: string; from: string } | undefined {
   for (const name of VERSION_ENV_VARS) {
     const v = env[name]?.trim();
-    if (v) return clamp(v, 128);
+    if (v && v !== UNRESOLVED) return { version: clamp(v, 128), from: name };
   }
-  return "unknown";
+  return undefined;
+}
+
+/** The ECS task metadata endpoint, when this process runs on ECS; anything that is not an http(s) URL is none. */
+function ecsMetadataUri(env: NodeJS.ProcessEnv): string | undefined {
+  for (const name of ECS_METADATA_ENV_VARS) {
+    const uri = env[name]?.trim();
+    if (uri && /^https?:\/\//.test(uri)) return uri;
+  }
+  return undefined;
 }
 
 function clamp(value: string, max: number): string {
