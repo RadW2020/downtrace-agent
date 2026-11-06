@@ -278,7 +278,7 @@ app.use(expressErrorHandler());
 
 ## Requirements
 
-Node.js 20 or newer; the built package is exercised on Node 20, 22 and 24 in CI. The package declares no Node version to its package manager, so adding it never fails the install of a workspace whose other apps run an older Node. On an older Node the instrumentation prints one warning and does nothing else, and `downtrace` says so in one line and exits with 2.
+Node.js 18.19.0 or newer, other than Node 19, an odd release past its end of life; the built package is exercised on Node 18.19.0, 20, 22 and 24 in CI. The package declares no Node version to its package manager, so adding it never fails the install of a workspace whose other apps run an older Node. On an older Node, and on 19, the instrumentation prints one warning and does nothing else, and `downtrace` says so in one line and exits with 2.
 
 Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`. See [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
 

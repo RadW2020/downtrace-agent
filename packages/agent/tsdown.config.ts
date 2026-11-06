@@ -8,7 +8,7 @@ import { defineConfig } from "tsdown";
 // TypeScript users, and it is dual too.
 const common = {
   platform: "node",
-  target: "node20",
+  target: "node18.19",
   dts: true,
 } as const;
 

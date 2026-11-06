@@ -5,7 +5,7 @@ import { defineConfig } from "tsdown";
 const common = {
   entry: ["src/index.ts"],
   platform: "node",
-  target: "node20",
+  target: "node18.19",
   dts: true,
 } as const;
 
