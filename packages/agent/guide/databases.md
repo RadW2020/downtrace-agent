@@ -333,8 +333,8 @@ application has: a query is counted by the copy it went through, once.
 The instrumentation runs from Node 18.19.0 ([requirements](../README.md#requirements)), and there it observes what it
 observes on Node 24, for every driver version that itself runs on 18.19. Each version below was run on Node 18.19.0
 and on Node 24, imported and required where it can be both, with a query that succeeds and one that fails, against
-the packed package, and the MySQL drivers against MariaDB 11.4: both Nodes wrote the same dependency, target, queries
-and error. A newer version asks for the Node its `package.json` declares.
+the packed package, the MySQL drivers against MariaDB 11.4 and SQL Server's against Azure SQL Edge: both Nodes wrote
+the same dependency, target, queries and error. A newer version asks for the Node its `package.json` declares.
 
 | Driver | Run on Node 18.19.0 | Newer versions |
 |---|---|---|
@@ -349,6 +349,15 @@ and error. A newer version asks for the Node its `package.json` declares.
 | `libsql` | 0.5.29 | |
 | `@libsql/client` | 0.18.0, on a file | |
 | `sqlite3` | 5.1.7 | 6 declares Node 20.17 |
+| `tedious` | 19.2.2 | 20 declares Node 22 |
+| `mssql` | 12.7.14, over `tedious` 19.2.2, which it takes as it takes 20 | |
+| `mongodb` | 6.22.0 | 7 declares Node 20.19 |
+| Mongoose | 8.24.8 | 9 declares Node 20.19 |
+| `ioredis` | 5.11.1 | 6 declares Node 20 |
+| `redis` (node-redis) | 5.12.1 | 6 declares Node 20 |
+
+One difference: on Node 18, as on Node 20, the `SELECT 1;` with which `mssql`'s pool checks a connection before it hands it over is
+one more query of the route that took it ([SQL Server](#sql-server)).
 
 **Neon's driver does not run on Node 18 by itself**, in either version: it signs in with `crypto.getRandomValues` from
 the global `crypto`, which Node has without a flag from 19, and on 18 the process ends at the first query. Set it

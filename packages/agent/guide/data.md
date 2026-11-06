@@ -42,7 +42,8 @@ once». The name is made once per method and host and kept, so a call costs a lo
 The commands each request issues are reported the same way, per server: how many per request, how long they took and
 how many failed. Both Redis clients publish on a tracing channel, so nothing is patched: ioredis, and node-redis
 (`redis`, `@redis/client`) from 5.12. A node-redis older than 5.12 publishes nothing, and its commands are not seen;
-`npm install redis@latest` is what it takes.
+`npm install redis@latest` is what it takes. Which versions of each ran on Node 18.19 is in
+[On Node 18](databases.md#on-node-18).
 
 Each command is also an **operation**, in the profile and in the black box, named by the command and its server —
 `HGETALL cache:6379` — and never by its key or its arguments, which both clients put on the channel and the
