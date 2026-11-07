@@ -1,4 +1,6 @@
 import diagnostics_channel from "node:diagnostics_channel";
+import { createRequire } from "node:module";
+import { basesOf, type From } from "./entry.ts";
 
 /**
  * Jest runs a test file's modules in a registry of its own: `jest-runtime` reads, compiles and caches every module the
@@ -14,7 +16,9 @@ import diagnostics_channel from "node:diagnostics_channel";
  * tracing channel — its `requireModule`, the one every `require` of a test file goes through, is wrapped: each
  * module a sandbox requires is offered to the patches that know it, which patch the copy the tests use. The
  * channel is observed, the loading is not changed (no load hook, ADR 0209), and the wrapper returns what Jest
- * returned. Node 20 has no `module.require` channel, and there a suite run by Jest stays as it was.
+ * returned. Node announces loads from 22.4. Before it, and only under `check` in a project that has Jest, `require`
+ * itself is watched until Jest has loaded its runtime, by a wrapper that changes nothing a load does (`watchRequire`,
+ * ADR 0258).
  */
 
 /** A module a sandbox may require, and what to do to the copy it gets. */
@@ -29,6 +33,11 @@ export interface JestDeps {
   patches: readonly SandboxPatch[];
   /** Where a failure of this file's own code goes (invariant 2, ADR 0161). Never to the test that required. */
   internalError: (err: unknown) => void;
+  /**
+   * Where `require` is, when it is to be watched for `jest-runtime`: `Module.prototype`, which the agent hands over
+   * under `check`, in a project that has Jest, where Node announces no load (ADR 0258).
+   */
+  loader?: { require?: unknown } | undefined;
 }
 
 const MARK = Symbol.for("downtrace.jest.requireModule");
@@ -71,9 +80,11 @@ export function wrapJestRuntime(exported: unknown, deps: JestDeps): boolean {
 
 /**
  * Listens for `jest-runtime` being loaded, from the start: a process that never runs Jest pays one comparison per
- * module it loads, at load, and nothing in a request. Returns what stops listening.
+ * module it loads, at load, and nothing in a request. With a `loader`, watches its `require` as well. Returns what
+ * stops listening and watching.
  */
 export function attachJest(deps: JestDeps): () => void {
+  const unwatch = deps.loader === undefined ? undefined : watchRequire(deps.loader, deps);
   const channel = diagnostics_channel.tracingChannel("module.require");
   const handlers = {
     start: () => {},
@@ -92,7 +103,55 @@ export function attachJest(deps: JestDeps): () => void {
   channel.subscribe(handlers);
   return () => {
     channel.unsubscribe(handlers);
+    unwatch?.();
   };
+}
+
+/**
+ * Before Node 22.4 nothing announces that `jest-runtime` was loaded, and the one place left to learn it is `require`
+ * itself (ADR 0258). `require` on `loader` is wrapped, and the wrapper changes nothing a load does: the original is
+ * called on the module that called it, with what it was called with, and what it returns or throws passes through
+ * untouched. Only once it has returned is the id compared, and a `jest-runtime` handed to `wrapJestRuntime`.
+ *
+ * It gives `require` back at the first `jest-runtime` whose `Runtime` it wraps, which a Jest process loads before
+ * any test file: the main process as it builds its contexts, a worker as it is set up. And when the instrumentation
+ * stops. A `require` that something else wrapped over it in the meantime is left in place, and the wrapper, which
+ * that one calls, is from then on only a way through.
+ */
+function watchRequire(loader: { require?: unknown }, deps: JestDeps): (() => void) | undefined {
+  const original = loader.require;
+  if (typeof original !== "function") return undefined;
+  let watching = true;
+  const watched = function (this: unknown, ...args: unknown[]): unknown {
+    const result: unknown = Reflect.apply(original, this, args);
+    if (watching && args[0] === "jest-runtime") {
+      try {
+        if (wrapJestRuntime(result, deps)) unwatch();
+      } catch (err) {
+        deps.internalError(err);
+      }
+    }
+    return result;
+  };
+  const unwatch = (): void => {
+    watching = false;
+    if (loader.require === watched) loader.require = original;
+  };
+  loader.require = watched;
+  return unwatch;
+}
+
+/** Whether the project has Jest: `jest` resolves from where the application's modules do. Resolving loads nothing. */
+export function hasJest(from: From): boolean {
+  for (const base of basesOf(from)) {
+    try {
+      createRequire(base).resolve("jest/package.json");
+      return true;
+    } catch {
+      // Not from this base.
+    }
+  }
+  return false;
 }
 
 /** The file a module was required from ends with this path, whatever the separator. */

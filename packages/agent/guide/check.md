@@ -127,16 +127,23 @@ module registry ([below](#a-test-run-what-each-runner-keeps-of-its-profile)), no
 pool and `--no-isolate` behave as the `forks` row says and its `vmThreads` pool as the `threads` row does; and Vitest
 5.0.3 behaves as 4.1.11 in the default pool and in `threads`.
 
-**Under Jest, the instrumentation reaches into Jest's own module registry, on Node 22 and later.** Jest runs a test
+**Under Jest, the instrumentation reaches into Jest's own module registry.** Jest runs a test
 file's modules in a registry and a context of its own: the `pg`, `mysql2`, `mysql`, `mariadb` (up to 3.4), `tedious`, `mssql`, postgres.js, MongoDB and Express the tests use are
 not the ones in Node's module cache, which is where the instrumentation finds them everywhere else. So when Jest
-loads `jest-runtime`, which Node announces on its `module.require` channel, the instrumentation wraps the
-`requireModule` every `require` of a test file goes through, and patches the copies Jest hands the tests: their
-queries are counted and their Express routes are named by their mounts, as anywhere else. Checked by
-`check.test.ts` on Jest 30 and 29, with Express 4 routers mounted under routers and `pg`. What reaches Node's own
-modules — HTTP, Fastify, the Redis clients — never needed it. **On Node 20**, which has no `module.require` channel,
-a suite Jest runs has no queries from those drivers, and its Express routes under a mount come out as
-`/:param/:param/:userId`: run it on Node 22 or later. Jest's ESM mode (`--experimental-vm-modules`) is not reached.
+loads `jest-runtime`, the instrumentation wraps the `requireModule` every `require` of a test file goes through, and
+patches the copies Jest hands the tests: their queries are counted and their Express routes are named by their mounts,
+as anywhere else. From Node 22.4, Node announces that load on its `module.require` channel. Before 22.4 it announces
+nothing, and under `check`, in a project where `jest` resolves, the instrumentation watches `require` itself from its
+start until Jest has loaded `jest-runtime`, which each process of Jest does before it reads a test file, and then gives
+`require` back. The watcher calls Node's `require` with what it was given and returns, or throws, what it did. Checked
+by `check.test.ts` on Jest 30 and 29, in band and in two workers, with Express 4 routers mounted under routers, on a
+Node that announces and on one that does not; and by `scripts/pack-test-jest.sh` on the packed package with Jest 29 and
+`pg`, on Node 18.19.0 and 24. What reaches Node's own modules — HTTP, Fastify, the Redis clients — never needed it.
+**Before Node 22.4, outside `check`** — a suite run with `--import @downtrace/agent/register` and `DOWNTRACE_INSPECT` —,
+or in a project from which `jest` does not resolve (Jest brought by another package, as `react-scripts` brings it,
+under pnpm), a suite Jest runs has no queries from those drivers, and its Express routes under a mount come out as
+`/:param/:param/:userId`; on Node 22.4 or later both are reached. Jest's ESM mode (`--experimental-vm-modules`) is not
+reached.
 
 **Vitest's thread pools are the one case that loses it, and nothing in a thread can change that.** A terminated thread
 fires no `beforeExit`, no `exit` and no signal: what it held goes with it, and the file does not have its routes. Use

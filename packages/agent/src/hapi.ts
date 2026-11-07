@@ -1,9 +1,10 @@
-import diagnostics_channel, { type TracingChannel } from "node:diagnostics_channel";
+import diagnostics_channel from "node:diagnostics_channel";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { apart, currentContext } from "./context.ts";
 import { basesOf, type From } from "./entry.ts";
 import type { Unannounced } from "./fastify.ts";
+import { announcesRequires } from "./instrument/arm.ts";
 import type { Logger } from "./log.ts";
 
 /**
@@ -253,7 +254,7 @@ export function attachHapi(deps: AttachHapiDeps): () => void {
     }
     if (seen.has(file)) continue;
     seen.add(file);
-    announces ??= announcesRequires(channel, require);
+    announces ??= announcesRequires(require);
     let loaded: unknown;
     try {
       // Where Node announces the load, only a Hapi loaded already; elsewhere the start loads it, once, at start-up and
@@ -274,30 +275,4 @@ export function attachHapi(deps: AttachHapiDeps): () => void {
     channel.unsubscribe(handlers);
     if (listening === mine) listening = undefined;
   };
-}
-
-/**
- * Whether Node announces what modules require, on its `module.require` channel: from Node 22.4, and not before. Asked
- * of Node, with a require of one of its own modules, which loads nothing; a require that throws announces nothing.
- */
-function announcesRequires(channel: TracingChannel, require: NodeRequire): boolean {
-  let heard = false;
-  const listener = {
-    start: () => {
-      heard = true;
-    },
-    end: () => {},
-    asyncStart: () => {},
-    asyncEnd: () => {},
-    error: () => {},
-  };
-  channel.subscribe(listener);
-  try {
-    require("node:path");
-  } catch {
-    // Nothing to hear, then: the start loads Hapi itself, which works on every Node.
-  } finally {
-    channel.unsubscribe(listener);
-  }
-  return heard;
 }

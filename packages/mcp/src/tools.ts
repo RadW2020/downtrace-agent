@@ -536,8 +536,8 @@ export const tools: Tool[] = [
     name: "list_captures",
     description:
       "The newest hundred captures of a project, newest first, whatever their origin —requested, automatic or " +
-      "prearmed—, since all of them spend one budget. Each says its state, when it was accepted and when " +
-      "observation really started —`startedAt`, null until the instrumentation confirms it—, and while it is " +
+      "prearmed—, since those of one environment spend one budget. Each says its state, when it was accepted " +
+      "and when observation really started —`startedAt`, null until the instrumentation confirms it—, and while it is " +
       "live when to ask again (`retryAfterSeconds`). The answer also carries the budget —captures per rolling " +
       "hour, how many at once, how long a footprint cools down and the longest window— and the legend of the " +
       "states. The evidence is not here: it is in `read_capture`, one capture at a time.",
@@ -621,8 +621,8 @@ export const tools: Tool[] = [
       "it is queued, `startedAt` stays null until the instrumentation confirms observation began, and nothing " +
       "recovers detail that was not kept; `read_capture` follows it. A footprint with a live capture, or cooling " +
       'down after one that finished, is refused with 409 and `reason: "cooldown"`, naming that capture: read it ' +
-      "rather than asking again. A project already running as many captures as it may, or whose hourly budget is " +
-      "spent, is refused with 429, `reason` `concurrent` or `hourly`, and `retryAfterSeconds`." +
+      "rather than asking again. An environment already running as many captures as it may, or whose hourly " +
+      "budget is spent, is refused with 429, `reason` `concurrent` or `hourly`, and `retryAfterSeconds`." +
       idempotentRetry,
     inputSchema: {
       type: "object",

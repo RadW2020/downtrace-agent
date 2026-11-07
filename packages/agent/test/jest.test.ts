@@ -1,10 +1,14 @@
+import { execFile } from "node:child_process";
 import diagnostics_channel from "node:diagnostics_channel";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, Module } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { Agent } from "../src/agent.ts";
 import { attachJest, requiredFrom, type SandboxPatch, wrapJestRuntime } from "../src/jest.ts";
+import { testConfig } from "./support/agent-config.ts";
 
 /**
  * The bridge to Jest's own module registry, on a `Runtime` of the test's: what it offers to which patch, what it
@@ -85,7 +89,222 @@ describe("Jest's requireModule, wrapped", () => {
   });
 });
 
-/** Node 20 has no `module.require` channel, and there the bridge stays unattached, as the README says. */
+/** A loader as Node's `Module.prototype` is one: a `require(id)` called on the module that requires. */
+function loaderOf(modules: Record<string, unknown>) {
+  const callers: unknown[] = [];
+  const loader: { require: (this: unknown, id: string) => unknown } = {
+    require(this: unknown, id: string): unknown {
+      callers.push(this);
+      if (!(id in modules)) throw Object.assign(new Error(`Cannot find module '${id}'`), { code: "MODULE_NOT_FOUND" });
+      return modules[id];
+    },
+  };
+  return { loader, callers };
+}
+
+/** What Jest's own modules are, to a `require` called on them. */
+const testWorker = { filename: "/app/node_modules/jest-runner/build/testWorker.js" };
+
+describe("require, watched for jest-runtime where Node announces no load (ADR 0258)", () => {
+  // covers: RF-121
+  it("wraps the Runtime of the first jest-runtime required, and gives require back", () => {
+    const express = { Router: {} };
+    const Runtime = runtimeClass({ express });
+    const { loader } = loaderOf({ "jest-runtime": { default: Runtime }, "graceful-fs": {} });
+    const original = loader.require;
+    const patch = recording("express");
+    cleanups.push(attachJest({ patches: [patch], internalError, loader }));
+    expect(loader.require).not.toBe(original);
+    loader.require.call(testWorker, "graceful-fs");
+    expect(loader.require).not.toBe(original);
+    expect(loader.require.call(testWorker, "jest-runtime")).toEqual({ default: Runtime });
+    expect(loader.require).toBe(original);
+    new Runtime().requireModule("/app/app.js", "express");
+    expect(patch.offered).toEqual([express]);
+  });
+
+  // covers: RF-121
+  it("calls require on the module that called it, and returns or throws what it did, untouched", () => {
+    const lodash = { chunk: () => [] };
+    const { loader, callers } = loaderOf({ lodash });
+    cleanups.push(attachJest({ patches: [], internalError, loader }));
+    expect(loader.require.call(testWorker, "lodash")).toBe(lodash);
+    let thrown: unknown;
+    try {
+      loader.require.call(testWorker, "nonesuch");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "MODULE_NOT_FOUND", message: "Cannot find module 'nonesuch'" });
+    expect(callers).toEqual([testWorker, testWorker]);
+  });
+
+  // covers: RF-121
+  it("goes on watching past a jest-runtime that exports no Runtime", () => {
+    const Runtime = runtimeClass({ pg: {} });
+    let exported: unknown = { default: class {} };
+    const { loader } = loaderOf({});
+    const original = loader.require;
+    loader.require = function (this: unknown, id: string): unknown {
+      return id === "jest-runtime" ? exported : original.call(this, id);
+    };
+    const own = loader.require;
+    cleanups.push(attachJest({ patches: [], internalError, loader }));
+    loader.require.call(testWorker, "jest-runtime");
+    expect(loader.require).not.toBe(own);
+    exported = Runtime;
+    loader.require.call(testWorker, "jest-runtime");
+    expect(loader.require).toBe(own);
+  });
+
+  // covers: RF-121
+  it("leaves a require wrapped over its own in place, and is then only a way through", () => {
+    const Runtime = runtimeClass({});
+    const { loader, callers } = loaderOf({ "jest-runtime": { default: Runtime } });
+    cleanups.push(attachJest({ patches: [], internalError, loader }));
+    const watched = loader.require;
+    // A tracker's hook, installed after the instrumentation's: it calls what it found, which is the watcher.
+    const tracker = function (this: unknown, id: string): unknown {
+      return watched.call(this, id);
+    };
+    loader.require = tracker;
+    loader.require.call(testWorker, "jest-runtime");
+    expect(loader.require).toBe(tracker);
+    expect(loader.require.call(testWorker, "jest-runtime")).toEqual({ default: Runtime });
+    expect(callers).toHaveLength(2);
+  });
+
+  // covers: RF-121
+  it("gives require back when the instrumentation stops before Jest loaded its runtime", () => {
+    const { loader } = loaderOf({});
+    const original = loader.require;
+    const stop = attachJest({ patches: [], internalError, loader });
+    expect(loader.require).not.toBe(original);
+    stop();
+    expect(loader.require).toBe(original);
+  });
+
+  // covers: RF-121
+  it("hands a failure of its own to internalError, and the require still returns what it returned", () => {
+    const exported = {
+      get default(): unknown {
+        throw new Error("a getter that throws");
+      },
+    };
+    const { loader } = loaderOf({ "jest-runtime": exported });
+    cleanups.push(attachJest({ patches: [], internalError, loader }));
+    expect(loader.require.call(testWorker, "jest-runtime")).toBe(exported);
+    expect(handed.splice(0).map((e) => (e as Error).message)).toEqual(["a getter that throws"]);
+  });
+
+  it("watches nothing when it is not handed a loader", () => {
+    const { loader } = loaderOf({});
+    const original = loader.require;
+    cleanups.push(attachJest({ patches: [], internalError }));
+    expect(loader.require).toBe(original);
+  });
+});
+
+/**
+ * What the agent decides: `require` is watched under `check`, in a project that has Jest, where Node announces no load,
+ * and nowhere else. On the real `Module.prototype`, and a `jest-runtime` of the test's.
+ */
+describe("an agent's start, and the require it watches (ADR 0258)", () => {
+  /** A project as `check` names it, with Jest in it or not, and a `jest-runtime` its entry can require. */
+  async function project(withJest: boolean): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "downtrace-jest-agent-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const runtime = join(dir, "node_modules", "jest-runtime");
+    await mkdir(runtime, { recursive: true });
+    await writeFile(join(runtime, "package.json"), JSON.stringify({ name: "jest-runtime", main: "index.js" }));
+    await writeFile(
+      join(runtime, "index.js"),
+      "class Runtime { requireModule(from, name) { return { name }; } }\nexports.default = Runtime;\n",
+    );
+    if (withJest) {
+      await mkdir(join(dir, "node_modules", "jest"), { recursive: true });
+      await writeFile(join(dir, "node_modules", "jest", "package.json"), JSON.stringify({ name: "jest" }));
+    }
+    await writeFile(join(dir, "entry.js"), "");
+    return dir;
+  }
+
+  /**
+   * An agent started as `check` starts one, or not, on a Node that announces loads or on one that does not: there the
+   * start's question on `module.require` goes to a channel Node publishes nothing on, as before Node 22.4.
+   */
+  const started = (dir: string, { check, announced }: { check: boolean; announced: boolean }): Agent => {
+    const config = testConfig("http://127.0.0.1:9", {
+      checkRoutes: check ? join(dir, "routes.jsonl") : undefined,
+      checkProject: check ? dir : undefined,
+    });
+    const agent = new Agent(config, { log: { warn: () => {}, debug: () => {} } });
+    const channels = diagnostics_channel as { tracingChannel: (name: string) => unknown };
+    const tracingChannel = channels.tracingChannel;
+    if (!announced)
+      channels.tracingChannel = (name) => tracingChannel(name === "module.require" ? "unannounced" : name);
+    try {
+      agent.start();
+    } finally {
+      channels.tracingChannel = tracingChannel;
+    }
+    cleanups.push(() => agent.stop());
+    return agent;
+  };
+
+  // covers: RF-121
+  it("under check, where Node announces no load, in a project that has Jest: until Jest loads its runtime", async () => {
+    const dir = await project(true);
+    const original = Module.prototype.require;
+    started(dir, { check: true, announced: false });
+    expect(Module.prototype.require).not.toBe(original);
+    const loaded = createRequire(join(dir, "entry.js"))("jest-runtime") as { default: { prototype: object } };
+    expect(Module.prototype.require).toBe(original);
+    expect(Object.getOwnPropertySymbols(loaded.default.prototype)).toContain(
+      Symbol.for("downtrace.jest.requireModule"),
+    );
+  });
+
+  // covers: RF-121
+  it("gives it back when the agent stops first", async () => {
+    const dir = await project(true);
+    const original = Module.prototype.require;
+    const agent = started(dir, { check: true, announced: false });
+    expect(Module.prototype.require).not.toBe(original);
+    await agent.stop();
+    expect(Module.prototype.require).toBe(original);
+  });
+
+  // The agent's other base, the entry of the process that runs these tests, resolves this repository's Jest: a project
+  // without Jest is `hasJest`'s, below.
+  it.each([
+    ["where Node announces loads", { check: true, announced: true }],
+    ["outside check", { check: false, announced: false }],
+  ])("leaves require alone %s", async (_case, how) => {
+    const dir = await project(true);
+    const original = Module.prototype.require;
+    started(dir, how);
+    expect(Module.prototype.require).toBe(original);
+  });
+
+  // In a child with no `NODE_PATH`: pnpm's shim for Vitest puts its whole store on it, from where Jest always resolves.
+  it("finds Jest where the project resolves it, and only there", async () => {
+    const withJest = await project(true);
+    const without = await project(false);
+    const source = new URL("../src/jest.ts", import.meta.url).href;
+    const asked = `import { hasJest } from ${JSON.stringify(source)};
+console.log(JSON.stringify([hasJest(process.argv[1]), hasJest(process.argv[2]), hasJest([process.argv[2], process.argv[1]])]));`;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "NODE_PATH"));
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ["--input-type=module", "-e", asked, `${withJest}/`, `${without}/`],
+      { env },
+    );
+    expect(JSON.parse(stdout)).toEqual([true, false, true]);
+  });
+});
+
+/** Node announces loads on `module.require` from 22.4; before it, the watched `require` above stands in for it. */
 const announces = await (async () => {
   let seen = false;
   const channel = diagnostics_channel.tracingChannel("module.require");

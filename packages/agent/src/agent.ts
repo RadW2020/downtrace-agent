@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import diagnostics_channel from "node:diagnostics_channel";
 import type http from "node:http";
-import { createRequire } from "node:module";
+import { createRequire, Module } from "node:module";
 import { hostname } from "node:os";
 import {
   type AgentInfo,
@@ -39,7 +39,7 @@ import { DEFAULT_CACHE_SIZE, type Fingerprint, FingerprintCache } from "./finger
 import { attachHapi } from "./hapi.ts";
 import { attachHono, honoRouterModule, patchHonoRouters } from "./hono.ts";
 import { createInspector } from "./inspect.ts";
-import { type Armed, armedTogether, whenLoaded } from "./instrument/arm.ts";
+import { type Armed, announcesRequires, armedTogether, whenLoaded } from "./instrument/arm.ts";
 import { instrumentHttp } from "./instrument/http.ts";
 import {
   armMariadb,
@@ -59,7 +59,7 @@ import { armPrisma, patchPrisma } from "./instrument/prisma.ts";
 import { instrumentRedis } from "./instrument/redis.ts";
 import { armSqlite, patchSqlite } from "./instrument/sqlite.ts";
 import { patchSqlite3 } from "./instrument/sqlite3.ts";
-import { attachJest, requiredFrom, type SandboxPatch } from "./jest.ts";
+import { attachJest, hasJest, requiredFrom, type SandboxPatch } from "./jest.ts";
 import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { withheldName } from "./minimal.ts";
@@ -920,7 +920,16 @@ export class Agent {
           patchPrisma((client as { PrismaClient?: unknown } | null | undefined)?.PrismaClient, "unknown", prismaDeps),
       });
     }
-    this.stopJest = attachJest({ patches: sandbox, internalError });
+    // Where Node announces no load, nothing announces Jest's runtime as it loads either, and under `check`, in a
+    // project that has Jest, `require` is watched for it until it is wrapped (ADR 0258). Nowhere else: not in
+    // production, not where Node announces.
+    const watchRequire =
+      this.config.checkRoutes !== undefined && hasJest(from) && !announcesRequires(createRequire(entry));
+    this.stopJest = attachJest({
+      patches: sandbox,
+      internalError,
+      loader: watchRequire ? Module.prototype : undefined,
+    });
     // A driver the application loads inside a request — a lazy import, a route Next.js loads as it is first asked for —
     // is patched in the microtask after that load, and that request's queries are counted (ADR 0246). From the first
     // request, and not from here: start-up keeps the moment ADR 0209 measured with a tracker beside it (ADR 0247).

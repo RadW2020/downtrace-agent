@@ -214,6 +214,34 @@ export function armedTogether(armed: readonly Armed[]): Armed {
 }
 
 /**
+ * Whether Node announces what modules require, on its `module.require` channel: from Node 22.4, and not before. Asked
+ * of Node, with a require of one of its own modules, which loads nothing; a require that throws announces nothing.
+ * Hapi's request class (`hapi.ts`) and Jest's runtime (`jest.ts`) are looked for some other way where it does not.
+ */
+export function announcesRequires(require: NodeRequire): boolean {
+  const channel = diagnostics_channel.tracingChannel("module.require");
+  let heard = false;
+  const listener = {
+    start: () => {
+      heard = true;
+    },
+    end: () => {},
+    asyncStart: () => {},
+    asyncEnd: () => {},
+    error: () => {},
+  };
+  channel.subscribe(listener);
+  try {
+    require("node:path");
+  } catch {
+    // Nothing to hear, then: each caller has its way for a Node that announces nothing, which works on every Node.
+  } finally {
+    channel.unsubscribe(listener);
+  }
+  return heard;
+}
+
+/**
  * Runs `attach` each time the process has loaded modules through `require` — an `import` of a CommonJS module too —,
  * which Node announces on its `module.require` channel from 22 (ADR 0246): once the code that loaded them has run to
  * its end, in a microtask, and so before anything that code waits for. A lazy import in a handler is patched before the

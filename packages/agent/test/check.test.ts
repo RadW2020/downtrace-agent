@@ -2074,16 +2074,27 @@ const JESTS = [
   ["Jest 29", dirname(createRequire(import.meta.url).resolve("jest29/package.json"))],
 ] as const;
 
-/** A project whose tests Jest runs, at `calls.txt` and `queries.txt` per request, with what the change sets. */
-async function jestProject(jest: string, change: { calls: string; queries: string }): Promise<Checked> {
+/**
+ * A project whose tests Jest runs, at `calls.txt` and `queries.txt` per request, with what the change sets. In band
+ * and with one test file, unless `run` says how many files and which mode, and with what in the environment.
+ */
+async function jestProject(
+  jest: string,
+  change: { calls: string; queries: string },
+  run: { mode?: string; files?: number; env?: Record<string, string> } = {},
+): Promise<Checked> {
+  const tests: Record<string, string> = {};
+  for (let file = 0; file < (run.files ?? 1); file += 1) tests[`users${file === 0 ? "" : file}.test.js`] = JEST_TEST;
   const made = await createProject({
     "app.js": JEST_APP,
-    "users.test.js": JEST_TEST,
+    ...tests,
     "calls.txt": "1",
     "queries.txt": "1",
     ".gitignore": "node_modules\n",
     "package.json": JSON.stringify({ name: "jest-suite", private: true, jest: { transform: {} } }),
-    "downtrace.json": JSON.stringify({ check: { command: "node node_modules/jest/bin/jest.js --runInBand" } }),
+    "downtrace.json": JSON.stringify({
+      check: { command: `node node_modules/jest/bin/jest.js ${run.mode ?? "--runInBand"}` },
+    }),
   });
   projects.push(made);
   await mkdir(join(made.dir, "node_modules"), { recursive: true });
@@ -2092,8 +2103,39 @@ async function jestProject(jest: string, change: { calls: string; queries: strin
   await symlink(PG_DIR, join(made.dir, "node_modules", "pg"), "dir");
   await made.write("calls.txt", change.calls);
   await made.write("queries.txt", change.queries);
-  return check(made, ["--base", "HEAD"]);
+  return check(made, ["--base", "HEAD"], run.env);
 }
+
+/**
+ * A Node that announces no load, as Node before 22.4: whoever asks for `module.require`, the channel on which Node
+ * announces loads, is handed one Node publishes nothing on. Loaded before the instrumentation, in every process of the
+ * run, through the `NODE_OPTIONS` `check` keeps. A real Node 18.19 is `scripts/pack-test-jest.sh`'s.
+ */
+const BEFORE_22_4 = `--import data:text/javascript,${encodeURIComponent(`import dc from "node:diagnostics_channel";
+const tracingChannel = dc.tracingChannel;
+dc.tracingChannel = (name) => tracingChannel(name === "module.require" ? "downtrace.test.unannounced" : name);`)}`;
+
+describe.each(JESTS)("a suite Jest runs, %s, on a Node that announces no load (ADR 0258)", (_name, jest) => {
+  // covers: RF-121
+  it.each([
+    ["in band", "--runInBand"],
+    ["in two workers", "--maxWorkers=2"],
+  ])("names the route by its mounts, and sees the calls multiplied, %s", async (_mode, mode) => {
+    const checked = await jestProject(
+      jest,
+      { calls: "3", queries: "1" },
+      { mode, files: 2, env: { NODE_OPTIONS: BEFORE_22_4 } },
+    );
+    const users = route(checked.report, "GET /v1/users/:userId");
+    expect(users.verdict, JSON.stringify(checked.report.routes.map((r) => r.id))).toBe("worse");
+    expect(users.requests).toEqual({ base: 6, change: 6 });
+    expect(users.operations.find((operation) => operation.kind === "call")).toMatchObject({
+      change: "multiplied",
+      perRequest: { base: 1, change: 3 },
+    });
+    expect(checked.code).toBe(1);
+  });
+});
 
 describe.each(JESTS)("a suite Jest runs, %s, as most Express backends are tested", (_name, jest) => {
   let checked: Checked;
