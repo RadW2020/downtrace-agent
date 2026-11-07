@@ -19,6 +19,18 @@ const unsupported = unsupportedNode(process.versions.node);
 if (unsupported !== undefined) {
   process.stderr.write(`downtrace: ${unsupported}\n`);
   process.exitCode = 2;
+} else if (process.argv[2] === "login") {
+  // `login` is a command of its own: it speaks to a cloud, which none of the others does.
+  const { runLogin } = await import("./login/command.ts");
+  const abort = new AbortController();
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => abort.abort());
+  process.exitCode = await runLogin({
+    argv: process.argv.slice(3),
+    env: process.env,
+    stdout: (text) => process.stdout.write(text),
+    stderr: (text) => process.stderr.write(text),
+    signal: abort.signal,
+  });
 } else {
   const { runCli } = await import("./check/command.ts");
   const { AGENT_VERSION } = await import("./version.ts");

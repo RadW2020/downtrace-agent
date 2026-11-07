@@ -34,6 +34,7 @@ export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace report [--json] <file>
        downtrace compare [--json] <base file> <change file>
        downtrace verify [--dsn <dsn> | --token <token> --url <url>]
+       downtrace login --project <slug> [--env <environment>] [--level read|operate]   (downtrace login --help)
 
 check runs the tests of the project on a base and on the working tree with the instrumentation writing locally,
 and compares them route by route, by composition: which queries, outgoing calls and Redis commands each request
