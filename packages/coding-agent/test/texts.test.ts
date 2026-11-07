@@ -16,6 +16,11 @@ import { tools } from "../../mcp/src/tools.ts";
  * names is asked of the code that has to answer it: a flag `downtrace` does not take, a variable nothing reads or a
  * tool the MCP server does not list would be invented the day the text is followed. Each is read from the source,
  * never from a second list kept here.
+ *
+ * The source is not what a coding agent runs, though: the mirror publishes this directory on every push, and npx
+ * fetches what npm serves, which is the source as it was at the last release. So the texts run the versions released
+ * with them, and what those versions take is asked too, of `released.json`, which the versions PR writes from the
+ * source it releases.
  */
 
 const root = new URL("../", import.meta.url);
@@ -55,13 +60,18 @@ function inner(text: string): string {
   return text.slice(start + BEGIN.length, end).trim();
 }
 
-/** Every command of the block written as a coding agent would type it, after `npx @downtrace/agent`. */
+/** Every command of the block written as a coding agent would type it, after `npx @downtrace/agent@<version>`. */
 function commandsOf(text: string): string[][] {
   const found: string[][] = [];
-  for (const span of text.matchAll(/`npx @downtrace\/agent ([^`]+)`/g)) {
+  for (const span of text.matchAll(/`npx @downtrace\/agent(?:@[^\s`]+)? ([^`]+)`/g)) {
     found.push(words(span[1] ?? ""));
   }
   return found;
+}
+
+/** Every `npx @downtrace/agent` of a text, quoted or not, with the version it names, or undefined if it names none. */
+function versionsOf(text: string): { written: string; version: string | undefined }[] {
+  return [...text.matchAll(/npx @downtrace\/agent(?:@([^\s`)]+))?/g)].map((m) => ({ written: m[0], version: m[1] }));
 }
 
 /** Splits a command line into its words as a POSIX shell would for these: double quotes keep a word whole. */
@@ -235,6 +245,60 @@ async function sourceOf(dir: string): Promise<string> {
   const files = (await readdir(base, { recursive: true })).filter((file) => file.endsWith(".ts"));
   return (await Promise.all(files.map((file) => readFile(new URL(file, base), "utf8")))).join("\n");
 }
+
+/** What npm serves at each version the plugin names, as the source was when the versions PR released it. */
+type Released = {
+  "@downtrace/agent": { version: string; commands: string[]; flags: string[] };
+  "@downtrace/mcp": { version: string; tools: string[] };
+};
+
+describe("what a coding agent runs, which is what npm serves and not the source", () => {
+  let released: Released;
+  beforeAll(async () => {
+    released = (await readJson("released.json")) as Released;
+  });
+
+  it("is recorded at the versions the packages were released at", async () => {
+    for (const dir of ["agent", "mcp"]) {
+      const manifest = (await readJson(`../${dir}/package.json`)) as { name: keyof Released; version: string };
+      expect(released[manifest.name]?.version, manifest.name).toBe(manifest.version);
+    }
+  });
+
+  it("runs the version of @downtrace/agent released with the plugin, in every command of every text", () => {
+    const { version } = released["@downtrace/agent"];
+    for (const { name, text } of texts) {
+      for (const { written, version: named } of versionsOf(text)) {
+        expect(named, `${name}: ${written}`).toBe(version);
+      }
+    }
+    expect(versionsOf(block).length).toBeGreaterThan(0);
+  });
+
+  it("names only commands and flags that version of downtrace takes", () => {
+    const { commands, flags } = released["@downtrace/agent"];
+    for (const { name, text } of texts) {
+      for (const command of commandsOf(text)) {
+        expect(commands, `${name}: ${command.join(" ")}`).toContain(command[0]);
+      }
+      // Node's own flags, in the line that starts the instrumentation in production, are Node's to read.
+      for (const flag of text.replaceAll(/`node [^`]*`/g, "").match(/(?<![\w-])--[a-z]+(?:-[a-z]+)*/g) ?? []) {
+        expect(flags, `${name}: ${flag}`).toContain(flag);
+      }
+    }
+  });
+
+  it("names only tools listed by the version of the MCP server the plugin starts", async () => {
+    const { version, tools: listed } = released["@downtrace/mcp"];
+    const config = (await readJson(".mcp.json")) as { mcpServers: Record<string, { args: string[] }> };
+    expect(config.mcpServers.downtrace?.args).toContain(`@downtrace/mcp@${version}`);
+    for (const { name, text } of texts) {
+      for (const match of text.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)) {
+        expect(listed, `${name}: ${match[1]}`).toContain(match[1]);
+      }
+    }
+  });
+});
 
 describe("the plugin", () => {
   it("has a manifest Claude Code accepts", async () => {

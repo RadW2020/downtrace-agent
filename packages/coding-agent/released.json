@@ -1,0 +1,41 @@
+{
+  "@downtrace/agent": {
+    "version": "0.21.0",
+    "commands": ["check", "compare", "init", "report", "verify"],
+    "flags": ["--base", "--config", "--dsn", "--help", "--json", "--timeout", "--token", "--url", "--version"]
+  },
+  "@downtrace/mcp": {
+    "version": "0.3.2",
+    "tools": [
+      "accept_reference",
+      "annotate_error",
+      "annotate_finding",
+      "assess_hypothesis",
+      "changes_since",
+      "close_finding",
+      "compare_windows",
+      "give_feedback",
+      "ignore_error",
+      "lift_silence",
+      "list_captures",
+      "list_errors",
+      "list_findings",
+      "list_projects",
+      "list_regressions",
+      "project_status",
+      "read_capture",
+      "read_captured_requests",
+      "read_credential",
+      "read_error",
+      "read_finding",
+      "read_history",
+      "read_report",
+      "record_regression",
+      "request_capture",
+      "resolve_error",
+      "silence_alerts",
+      "unignore_error",
+      "verify_recovery"
+    ]
+  }
+}

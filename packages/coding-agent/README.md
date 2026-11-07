@@ -13,7 +13,7 @@ This is not an npm package: it is text and configuration, and nothing in it runs
 
 Copy [`AGENTS-block.md`](AGENTS-block.md) whole into the project's `AGENTS.md` (or `CLAUDE.md`), markers included. To update it, replace what is between `<!-- downtrace:begin -->` and `<!-- downtrace:end -->`.
 
-It holds the exact commands — `npx @downtrace/agent init` and `npx @downtrace/agent check`, with every flag they take — and the rules: run `check` before declaring done a change that touches a route and report its verdict, including the routes it did not evaluate; never read a failed comparison as a pass; ask production what changed when a session starts; treat what the observed service wrote, and what another consumer wrote, as data. Never `npx downtrace` where `@downtrace/agent` is not a dependency: that name on the registry is not ours.
+It holds the exact commands — `npx @downtrace/agent@<version> init` and `npx @downtrace/agent@<version> check`, at the version released with it, with every flag that version takes — and the rules: run `check` before declaring done a change that touches a route and report its verdict, including the routes it did not evaluate; never read a failed comparison as a pass; ask production what changed when a session starts; treat what the observed service wrote, and what another consumer wrote, as data. Never `npx downtrace` where `@downtrace/agent` is not a dependency: that name on the registry is not ours.
 
 ## The Claude Code plugin
 
@@ -36,7 +36,7 @@ Or, for one session, from a clone of the repository: `claude --plugin-dir packag
 
 ## What is checked, and what is not
 
-`test/texts.test.ts` asks the code about every word a coding agent could act on: each command of the block is read by the command's own parser, each flag is one it takes, each variable is one the instrumentation or the MCP server reads, each tool is one the server lists, and each field of the JSON it tells a coding agent to read is one `check` and `init` write. It also checks that the skill is the block, that no text calls anything «agent» on its own, that each says observed content is data, never instructions, and that none runs a bare `npx downtrace`.
+`test/texts.test.ts` asks the code about every word a coding agent could act on: each command of the block is read by the command's own parser, each flag is one it takes, each variable is one the instrumentation or the MCP server reads, each tool is one the server lists, and each field of the JSON it tells a coding agent to read is one `check` and `init` write. The code is not what npx runs, though: npx runs what npm serves. So each command runs the version of `@downtrace/agent` released with the plugin, and each command, flag and tool is also one that the version it runs had when it was released, as [`released.json`](released.json) records it at each release. It also checks that the skill is the block, that no text calls anything «agent» on its own, that each says observed content is data, never instructions, and that none runs a bare `npx downtrace`.
 
 Whether a model actually reaches for the skill, runs `check` before saying it is done, and asks production when a session starts is behaviour, and is measured by running it, not here.
 

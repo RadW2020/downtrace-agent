@@ -5,15 +5,15 @@ Downtrace compares what each HTTP route of this Node.js backend runs — its que
 
 ### Commands
 
-Write them exactly as here: these are all the flags there are. `@downtrace/agent` is the package and `downtrace` its command; npx fetches it, and nothing has to be installed in the project first.
+Write them exactly as here, with the version they name: these are all the flags there are, and that version takes every one. `@downtrace/agent` is the package and `downtrace` its command; npx fetches it, and nothing has to be installed in the project first.
 
 | To | Run |
 |---|---|
-| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent init --json` |
-| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent check --json` |
-| Compare a branch with the point where it left main | `npx @downtrace/agent check --json --base "$(git merge-base origin/main HEAD)"` |
-| Give the test command when `downtrace.json` has none | `npx @downtrace/agent check --json -- npm test` |
-| Allow each test run more than the default 900 seconds | `npx @downtrace/agent check --json --timeout 1800` |
+| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent@0.21.0 init --json` |
+| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent@0.21.0 check --json` |
+| Compare a branch with the point where it left main | `npx @downtrace/agent@0.21.0 check --json --base "$(git merge-base origin/main HEAD)"` |
+| Give the test command when `downtrace.json` has none | `npx @downtrace/agent@0.21.0 check --json -- npm test` |
+| Allow each test run more than the default 900 seconds | `npx @downtrace/agent@0.21.0 check --json --timeout 1800` |
 
 Never shorten them to `npx downtrace` unless `@downtrace/agent` is a dependency of the project: without it, that name on the registry is not Downtrace's, and npx would run whatever is published under it.
 
