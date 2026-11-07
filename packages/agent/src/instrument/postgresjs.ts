@@ -36,8 +36,10 @@ interface QueryLike {
   executed?: unknown;
   resolve?: unknown;
   reject?: unknown;
-  /** The text postgres.js sends, with a `$n` for each value: written when the query is built on a connection. */
+  /** The text postgres.js 3 sends, with a `$n` for each value: written when the query is built on a connection. */
   string?: unknown;
+  /** What postgres.js 4 built, cached by `build()` as the query reaches a connection: its `text` is 3's `string`. */
+  built?: unknown;
   /** The parts of the template the application wrote, or `[text]` for `sql.unsafe`. */
   strings?: unknown;
 }
@@ -62,10 +64,12 @@ export interface InstrumentPostgresJsDeps {
 /**
  * The text of the query: the one postgres.js built, or, for a query that failed before it reached a connection,
  * the template the application wrote with a `$n` where postgres.js would have put each value. Never a value: the
- * driver sends them as parameters.
+ * driver sends them as parameters. 4's `text` is a getter that builds the query, so only what it cached is read.
  */
 function textOf(query: QueryLike): string | undefined {
   if (typeof query.string === "string") return query.string;
+  const built = query.built as { text?: unknown } | null | undefined;
+  if (typeof built?.text === "string") return built.text;
   const strings = query.strings;
   if (!Array.isArray(strings) || strings.length === 0) return undefined;
   if (!strings.every((part) => typeof part === "string")) return undefined;
@@ -145,9 +149,10 @@ function observe(query: QueryLike, deps: InstrumentPostgresJsDeps): void {
 }
 
 /**
- * The start-up half (ADR 0235). postgres.js is two modules in one package: `cjs/src/` for `require`, and `src/`
- * for `import`, which never enters the module cache `armDriver` reads (ADR 0209). So the start resolves the package
- * from the application's root and loads nothing, and the attach patches each copy its own way:
+ * The start-up half (ADR 0235). postgres.js 3 is two modules in one package: `cjs/src/` for `require`, and `src/`
+ * for `import`, which never enters the module cache `armDriver` reads (ADR 0209). 4 is `src/` alone, ES modules
+ * only. So the start resolves the package from the application's root and loads nothing, and the attach patches
+ * each copy there is its own way:
  *
  * - **CommonJS** as `pg` and `mysql2`: from the first request at which the application has loaded it, off the
  *   module cache, with a `require` that is a cache hit.
@@ -174,37 +179,60 @@ export function armPostgresJs(
   return armedTogether([...copies.values()].map((copy) => armCopy(copy, deps)));
 }
 
-/** A copy of postgres.js: its directory, the version it says, and the `require` that found it. */
+/**
+ * A copy of postgres.js: its directory, the version it says, the `require` that found it, and whether `require`
+ * loads a CommonJS copy of its own (3's `cjs/`) or the ES modules `import` loads (4, which has no other).
+ */
 interface Copy {
   root: string;
   version: string;
   require: NodeRequire;
+  cjs: boolean;
 }
 
 /** The postgres.js `from` resolves, or nothing. Resolves and reads its `package.json`; loads nothing of it. */
 function copyOf(from: string, log: Logger): Copy | undefined {
   const require = createRequire(from);
+  let entry: string;
   try {
-    // `default` is the condition `require` meets in its exports, and it names `cjs/src/index.js`.
-    const root = path.resolve(path.dirname(require.resolve("postgres")), "..", "..");
-    const pkg = require(path.join(root, "package.json")) as { name?: unknown; version?: unknown };
-    if (pkg.name !== "postgres") {
-      log.debug("postgres resolved to a package of another name; not instrumenting");
-      return undefined;
+    // `default` is the condition `require` meets in its exports: `cjs/src/index.js` in 3, `src/index.js` in 4.
+    entry = require.resolve("postgres");
+  } catch {
+    return undefined;
+  }
+  // The package is the nearest directory above the entry whose `package.json` is postgres.js's: 3's `cjs/` has one
+  // of its own, with no name.
+  for (let dir = path.dirname(entry); ; ) {
+    const pkg = manifestOf(require, dir);
+    if (pkg?.name === "postgres") {
+      const version = typeof pkg.version === "string" ? pkg.version : "unknown";
+      return { root: dir, version, require, cjs: path.relative(dir, entry).split(path.sep)[0] === "cjs" };
     }
-    return { root, version: typeof pkg.version === "string" ? pkg.version : "unknown", require };
+    const parent = path.dirname(dir);
+    if (parent === dir || path.basename(parent) === "node_modules") break;
+    dir = parent;
+  }
+  log.debug("postgres resolved to a package of another name; not instrumenting");
+  return undefined;
+}
+
+/** The `package.json` in `dir`, or nothing where there is none, or none that parses. */
+function manifestOf(require: NodeRequire, dir: string): { name?: unknown; version?: unknown } | undefined {
+  try {
+    return require(path.join(dir, "package.json")) as { name?: unknown; version?: unknown };
   } catch {
     return undefined;
   }
 }
 
 function armCopy(
-  { root, version, require }: Copy,
+  { root, version, require, cjs: hasCjs }: Copy,
   deps: InstrumentPostgresJsDeps & { early?: boolean | undefined },
 ): Armed {
   const cjs = path.join(root, "cjs", "src", "query.js");
   const esm = pathToFileURL(path.join(root, "src", "query.js")).href;
-  let cjsDone = false;
+  // 4 has no CommonJS copy to wait for: its `require` loads the ES modules, and the import patches them.
+  let cjsDone = !hasCjs;
   // undefined: not asked for yet; false: in flight; true: settled, patched or not.
   let esmDone: boolean | undefined;
   const importEsm = (): void => {

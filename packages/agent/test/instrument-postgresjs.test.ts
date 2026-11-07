@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { apart, currentContext, dependencyKey, enterRequest, type RequestContext } from "../src/context.ts";
 import { ErrorFingerprintCache } from "../src/errors.ts";
 import { FingerprintCache } from "../src/fingerprint.ts";
@@ -28,10 +29,32 @@ afterEach(() => {
 });
 
 const require = createRequire(import.meta.url);
-const root = path.resolve(path.dirname(require.resolve("postgres")), "..", "..");
+/** The directory of an installed postgres.js: 3 under `postgres`, 4 under the alias `postgres4`. */
+const rootOf = (name: string): string => {
+  let dir = path.dirname(require.resolve(name));
+  while (!existsSync(path.join(dir, "package.json")) || require(path.join(dir, "package.json")).name !== "postgres") {
+    dir = path.dirname(dir);
+  }
+  return dir;
+};
+const root = rootOf("postgres");
+const root4 = rootOf("postgres4");
+
+/**
+ * Where the driver's connection writes the text it built: 3 sets `string` on the query, and 4 caches what
+ * `build()` returned in `built`, whose `text` is the same text.
+ */
+const asThree = (query: Driven, text: string): void => {
+  query.string = text;
+};
+const asFour = (query: Driven, text: string): void => {
+  query.built = { text, values: [], oids: [] };
+};
 const COPIES = [
-  ["the ESM copy", () => import(pathToFileURL(path.join(root, "src", "query.js")).href)],
-  ["the CommonJS copy", async () => require(path.join(root, "cjs", "src", "query.js"))],
+  ["the ESM copy", () => import(pathToFileURL(path.join(root, "src", "query.js")).href), asThree],
+  ["the CommonJS copy", async () => require(path.join(root, "cjs", "src", "query.js")), asThree],
+  // 4 is ES modules only: `resolve` and `reject` are methods of the class, and the query runs a microtask later.
+  ["4, its one copy", () => import(pathToFileURL(path.join(root4, "src", "query.js")).href), asFour],
 ] as const;
 
 type QueryClass = new (
@@ -46,6 +69,7 @@ interface Driven extends Promise<unknown> {
   strings: readonly string[];
   args: unknown[];
   string?: string;
+  built?: { text: string; values: unknown[]; oids: unknown[] };
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
 }
@@ -56,6 +80,9 @@ const connection = (query: Driven): void => {
   waiting.push(query);
 };
 
+/** How the copy under test writes the text it built on the query. */
+let writeBuilt: (query: Driven, text: string) => void = asThree;
+
 /** The connection's answer: builds each waiting query's text, as postgres.js does, and settles it outside any request. */
 function answer(settle: (query: Driven) => void, { build = true } = {}): void {
   const queries = waiting;
@@ -63,7 +90,11 @@ function answer(settle: (query: Driven) => void, { build = true } = {}): void {
   apart(() => {
     expect(currentContext()).toBeUndefined();
     for (const query of queries) {
-      if (build) query.string = query.strings.reduce((text, part, i) => `${text}$${i}${part}`);
+      if (build)
+        writeBuilt(
+          query,
+          query.strings.reduce((text, part, i) => `${text}$${i}${part}`),
+        );
       settle(query);
     }
   });
@@ -87,11 +118,15 @@ async function inRequest(fn: () => Promise<void>): Promise<RequestContext> {
 const queriesOf = (ctx: RequestContext) =>
   [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "query").map((o) => [o.text, o.errors]);
 
-describe.each(COPIES)("postgres.js's Query, %s", (_name, load) => {
+describe.each(COPIES)("postgres.js's Query, %s", (_name, load, built) => {
   let Query: QueryClass;
   const fingerprints = new FingerprintCache();
   const errors = new ErrorFingerprintCache();
   const sql = (strings: TemplateStringsArray, ...args: unknown[]) => new Query(strings, args, connection);
+
+  beforeEach(() => {
+    writeBuilt = built;
+  });
 
   beforeAll(async () => {
     const module = (await load()) as { Query: QueryClass };
@@ -139,6 +174,24 @@ describe.each(COPIES)("postgres.js's Query, %s", (_name, load) => {
     expect(ctx.work?.get(dependencyKey("postgres", ""))).toMatchObject({ calls: 1, errors: 1 });
     expect(queriesOf(ctx)).toEqual([["select * from orders", 1]]);
     expect([...(ctx.operations?.values() ?? [])].some((o) => o.kind === "error")).toBe(true);
+  });
+
+  it("reads the text the driver built, where it differs from the template the application wrote", async () => {
+    // A helper in the template, `sql(column)`, is a `$n` of the template and an identifier of the text built.
+    const ctx = await inRequest(async () => {
+      const query = sql`select ${"name"} from users`;
+      const settled = query.then((x) => x);
+      await handedToConnection(1);
+      answer(
+        (q) => {
+          writeBuilt(q, 'select "name" from users');
+          q.resolve([]);
+        },
+        { build: false },
+      );
+      await settled;
+    });
+    expect(queriesOf(ctx)).toEqual([['select "name" from users', 0]]);
   });
 
   it("reads the template the application wrote when the query failed before it reached a connection", async () => {
@@ -285,6 +338,51 @@ describe("postgres.js's start-up half", () => {
       const code = await new Promise<number>((resolve) => child.on("exit", resolve));
       expect(code, stdout).toBe(0);
       expect(stdout.trim().split("\n")).toEqual(["unavailable", "true"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("arms postgres.js 4, which has no CommonJS copy, and its attach settles once its ES module is patched", async () => {
+    // 4 is ES modules only: what `require.resolve` finds is `src/index.js`, and there is no `cjs/` to wait for.
+    const dir = await realpath(await mkdtemp(path.join(tmpdir(), "downtrace-armpostgresjs-4-")));
+    try {
+      await mkdir(path.join(dir, "node_modules"), { recursive: true });
+      await symlink(root4, path.join(dir, "node_modules", "postgres"), "dir");
+      const src = fileURLToPath(new URL("../src/instrument/postgresjs.ts", import.meta.url));
+      const script = `
+        import { pathToFileURL } from "node:url";
+        import { armPostgresJs } from ${JSON.stringify(src)};
+        const said = [];
+        const armed = armPostgresJs({
+          log: { warn: () => {}, debug: (line) => said.push(line) },
+          internalError: (err) => { console.error(String(err)); process.exit(2); },
+          from: process.argv[1],
+        });
+        console.log(armed.state);
+        let turns = 0;
+        while (!armed.attach() && turns < 50) { turns++; await new Promise((r) => setImmediate(r)); }
+        console.log(armed.attach());
+        const { Query } = await import(pathToFileURL(process.argv[2]).href);
+        console.log(Query.prototype[Symbol.for("downtrace.postgresjs.instrumented")] === true);
+        console.log(said.filter((line) => line.startsWith("instrumented postgres")).join());
+      `;
+      const query = path.join(dir, "node_modules", "postgres", "src", "query.js");
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, path.join(dir, "app.js"), query], {
+        env: { ...process.env, NODE_PATH: "" },
+      });
+      let stdout = "";
+      child.stdout.on("data", (c: Buffer) => {
+        stdout += c.toString();
+      });
+      const code = await new Promise<number>((resolve) => child.on("exit", resolve));
+      expect(code, stdout).toBe(0);
+      expect(stdout.trim().split("\n"), "state, attach settled, the class patched, the version").toEqual([
+        "on",
+        "true",
+        "true",
+        `instrumented postgres ${require(path.join(root4, "package.json")).version}`,
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

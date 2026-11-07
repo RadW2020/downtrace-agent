@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -107,11 +108,24 @@ function batchesOf(stderr: string): Batch[] {
   return batches;
 }
 
+/** The directory of an installed postgres.js: 3 under `postgres`, 4 under the alias `postgres4`. */
+function driverRoot(name: "postgres" | "postgres4"): string {
+  const require = createRequire(import.meta.url);
+  let dir = path.dirname(require.resolve(name));
+  while (!existsSync(path.join(dir, "package.json")) || require(path.join(dir, "package.json")).name !== "postgres") {
+    dir = path.dirname(dir);
+  }
+  return dir;
+}
+
 /** Runs the application in a directory of its own, with the driver in its `node_modules`, and reads what it sent. */
-async function application(load: string, options: { warm: boolean; env?: Record<string, string> }) {
+async function application(
+  load: string,
+  options: { warm: boolean; env?: Record<string, string>; driver?: "postgres" | "postgres4" },
+) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "downtrace-postgresjs-"));
   try {
-    const driver = path.resolve(path.dirname(createRequire(import.meta.url).resolve("postgres")), "..", "..");
+    const driver = driverRoot(options.driver ?? "postgres");
     await mkdir(path.join(dir, "node_modules"), { recursive: true });
     await symlink(driver, path.join(dir, "node_modules", "postgres"), "dir");
     const server = path.join(dir, "server.mjs");
@@ -209,6 +223,27 @@ describe.skipIf(!DATABASE_URL)("postgres.js as an application starts it", () => 
     const routes = path.join(await mkdtemp(path.join(os.tmpdir(), "downtrace-postgresjs-routes-")), "routes.json");
     try {
       const app = await application(ESM, { warm: false, env: { DOWNTRACE_CHECK_ROUTES: routes } });
+      expect(app.said.markedAtFirst).toBe(true);
+      observed(app);
+    } finally {
+      await rm(path.dirname(routes), { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // postgres.js 4, what `npm install postgres` installs since 2026-10-29, is ES modules only: one copy, imported.
+  it("observes postgres.js 4, imported, from the request after the one that imported it", async () => {
+    const app = await application(ESM, { warm: true, driver: "postgres4" });
+    observed(app);
+  }, 60_000);
+
+  it("under `downtrace check`, observes postgres.js 4 from the first request", async () => {
+    const routes = path.join(await mkdtemp(path.join(os.tmpdir(), "downtrace-postgresjs-routes-")), "routes.json");
+    try {
+      const app = await application(ESM, {
+        warm: false,
+        driver: "postgres4",
+        env: { DOWNTRACE_CHECK_ROUTES: routes },
+      });
       expect(app.said.markedAtFirst).toBe(true);
       observed(app);
     } finally {

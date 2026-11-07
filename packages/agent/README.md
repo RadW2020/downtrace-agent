@@ -63,7 +63,7 @@ npm install @downtrace/agent
 npx downtrace init    # writes the instrument file and the line that loads it
 ```
 
-The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN: the cloud's URL with your ingest token as its user, `https://dt_…@your-downtrace-cloud`. [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md) writes what the recipes below show. As written, the file reads `DOWNTRACE_DSN` from the environment and does nothing without it; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
+The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN: the cloud's URL with your ingest token as its user, `https://dt_…@your-downtrace-cloud`. `downtrace init` writes what the recipes below show ([its guide](#documentation)). As written, the file reads `DOWNTRACE_DSN` from the environment and does nothing without it; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
 
 ### NestJS, compiled to CommonJS
 
@@ -293,7 +293,7 @@ The reference pages live beside this README, in `guide/` of the package:
 - [Databases](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md) — Postgres, Neon, postgres.js, MySQL, SQL Server, SQLite, MongoDB and Prisma, driver by driver
 - [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md) — each framework, the heuristic, and what is wrapped
 - [Errors](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/errors.md) — the two calls, sanitising, how a process ends, beside your error tracker
-- [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`downtrace check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`downtrace login`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/login.md)
+- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`login`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/login.md)
 
 ## Changelog
 

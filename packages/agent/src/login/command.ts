@@ -21,7 +21,10 @@ export interface LoginDeps {
   fetchImpl?: typeof fetch;
   /** How the command waits between two asks; a real timer unless a test stands one in. */
   sleep?: (ms: number, signal: AbortSignal | undefined) => Promise<void>;
-  /** The clock the code's expiry is read against, in milliseconds; `Date.now` unless a test stands one in. */
+  /**
+   * The clock the code's life is measured with, in milliseconds: a duration, so `performance.now` unless a test
+   * stands one in.
+   */
   now?: () => number;
 }
 
@@ -208,7 +211,7 @@ const fail = (reason: string, message: string): LoginFailure => ({
 async function login(args: LoginArgs, deps: LoginDeps): Promise<LoginResult | LoginFailure> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const sleep = deps.sleep ?? wait;
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? (() => performance.now());
   const body: Record<string, string | boolean> = {
     project: args.project,
     environment: args.environment,

@@ -45,8 +45,8 @@ When your application uses postgres.js (`postgres`, the driver of Drizzle's `dri
 Supabase backends), its queries are observed under the same `pg` switch, as dependency `postgres`: per request, how
 many, how long and how many failed, and each one an operation of the route by its text with `?` for every value —
 postgres.js sends the values as parameters, and the text it reads is the one the driver built. A query outside a
-request is in no route's numbers, as with `pg`. Run against a real Postgres, with the driver imported as ESM and
-required as CommonJS, on postgres.js 3.4.9. What it does not say, and why:
+request is in no route's numbers, as with `pg`. Run against a real Postgres on postgres.js 3.4.9, imported as ESM
+and required as CommonJS, and on 4.1.0, imported: 4 is ES modules only. What it does not say, and why:
 
 - **Which server.** A postgres.js query does not know its connection, so every query is the dependency `postgres`
   with no host: a read replica and a primary reached through postgres.js are one dependency, not two, and a
@@ -56,9 +56,9 @@ required as CommonJS, on postgres.js 3.4.9. What it does not say, and why:
 - **The first request, imported as ESM.** The ESM copy of the driver never enters the module cache the
   instrumentation reads, so it imports the driver's query module itself, the same file your `import "postgres"`
   loads, from the first request your server answers, on the next turn of the event loop. Queries that start before
-  that import finishes, which in practice means the first request's, are not counted. Required as CommonJS it is
-  patched before the first request's handler runs, as `pg` is. Under `downtrace check` the import starts at
-  start-up, so a test file's first request counts.
+  that import finishes, which in practice means the first request's, are not counted. postgres.js 3 required as
+  CommonJS is patched before the first request's handler runs, as `pg` is; 4 has no CommonJS copy. Under
+  `downtrace check` the import starts at start-up, so a test file's first request counts.
 - **A cursor read with `for await`** is not counted; one with a callback, and `forEach`, are.
 - **Beside an error tracker** it was not verified. The instrumentation wraps `Query.prototype.handle`, where
   Sentry's own postgres.js integration also hooks, and it loads the query module only from the first request, after
