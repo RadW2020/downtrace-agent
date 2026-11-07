@@ -89,11 +89,11 @@ describe("what the batch says it is observing", () => {
 });
 
 /**
- * A MySQL driver the application declares and the instrumentation cannot resolve from its entry — a bundle, a monorepo
- * that keeps it elsewhere — against one the application does not use (RF-110, ADR 0240). The production path, in a
- * child process whose entry is the application's, as `register` starts it, with the batch read off its stderr.
+ * A driver the application declares and the instrumentation cannot resolve from its entry — a bundle, a monorepo that
+ * keeps it elsewhere — against one the application does not use (RF-110, ADR 0240). The production path, in a child
+ * process whose entry is the application's, as `register` starts it, with the batch read off its stderr.
  */
-describe("a MySQL driver the application declares and none resolves", () => {
+describe("a driver the application declares and none resolves", () => {
   const register = fileURLToPath(new URL("../src/register.ts", import.meta.url));
   const index = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
@@ -156,6 +156,38 @@ await new Promise((r) => app.close(r));
     const observers = await observersOf({ dependencies: { express: "^5" } });
     expect(observers).toMatchObject({ pg: "unavailable", http: "on" });
     expect(observers).not.toHaveProperty("mysql");
+  });
+
+  // covers: RF-110
+  it("says it of SQLite, SQL Server, MongoDB and Prisma too, each by a package the application declares", async () => {
+    const observers = await observersOf({
+      dependencies: { "better-sqlite3": "^12", mssql: "^12", mongoose: "^8", "@prisma/client": "^6" },
+    });
+    expect(observers).toMatchObject({
+      sqlite: "unavailable",
+      mssql: "unavailable",
+      mongodb: "unavailable",
+      prisma: "unavailable",
+      pg: "unavailable",
+      http: "on",
+    });
+  });
+
+  // covers: RF-110
+  it("leaves Prisma out when a driver adapter is beside its client, as on Prisma 7, and says the adapter's driver", async () => {
+    const observers = await observersOf({
+      dependencies: { "@prisma/client": "^7", "@prisma/adapter-better-sqlite3": "^7" },
+    });
+    expect(observers).toMatchObject({ sqlite: "unavailable", http: "on" });
+    expect(observers).not.toHaveProperty("prisma");
+  });
+
+  // covers: RF-110
+  it("says nothing of any database whose key is left out when the application declares none of it", async () => {
+    const observers = await observersOf({ dependencies: { express: "^5" } });
+    const leftOut = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name) && name !== "pg");
+    expect(leftOut.length).toBeGreaterThan(0);
+    for (const name of leftOut) expect(observers, name).not.toHaveProperty(name);
   });
 });
 

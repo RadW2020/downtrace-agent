@@ -2,11 +2,14 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DRIVERLESS } from "../src/agent.ts";
+import { OBSERVER_PACKAGES } from "../src/check/hints.ts";
+import { INSTRUMENTS } from "../src/config.ts";
 import type { Logger } from "../src/log.ts";
-import { declaredDependencies as declared } from "../src/manifest.ts";
+import { declaredDependencies as declared, declaresDriverOf } from "../src/manifest.ts";
 
 /**
- * What the application declares, read from its `package.json` at the start (RF-110): what tells a MySQL driver the
+ * What the application declares, read from its `package.json` at the start (RF-110): what tells a driver the
  * application declares and the instrumentation cannot resolve from a database the application does not use (ADR 0240).
  */
 const dirs: string[] = [];
@@ -116,5 +119,47 @@ describe("the dependencies the application declares", () => {
   it("are none, and never a throw, when the read is cut short", async () => {
     const dir = await tree({ "package.json": manifest({ dependencies: { mysql2: "^3" } }) });
     expect([...(await declaredDependencies(path.join(dir, "server.js"), AbortSignal.abort()))]).toEqual([]);
+  });
+});
+
+/**
+ * The switches whose key is left out when no driver resolves (ADR 0240): every switch with a driver but Postgres's,
+ * which says `unavailable` declared or not (ADR 0093).
+ */
+const LEFT_OUT = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name) && name !== "pg");
+
+describe("a database the application declares a driver of", () => {
+  // covers: RF-110
+  it("is each switch's whose key is left out when none resolves, by every package `check` reads for it", () => {
+    expect(LEFT_OUT).toEqual(expect.arrayContaining(["mysql", "sqlite", "mssql", "mongodb", "prisma"]));
+    for (const name of LEFT_OUT) {
+      const packages = OBSERVER_PACKAGES[name] ?? [];
+      expect(packages, name).not.toEqual([]);
+      for (const one of packages) expect(declaresDriverOf(name, new Set([one])), `${name}: ${one}`).toBe(true);
+    }
+  });
+
+  // covers: RF-110
+  it("is not a switch's when the application declares every other switch's packages and none of its own", () => {
+    for (const name of LEFT_OUT) {
+      const others = Object.entries(OBSERVER_PACKAGES).flatMap(([observer, packages]) =>
+        observer === name ? [] : packages,
+      );
+      expect(declaresDriverOf(name, new Set(others)), name).toBe(false);
+    }
+  });
+
+  // covers: RF-110
+  it("is not Prisma's when a driver adapter is beside its client, as Prisma 7 requires: its queries are the driver's", () => {
+    for (const adapter of ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3", "@prisma/adapter-planetscale"]) {
+      expect(declaresDriverOf("prisma", new Set(["@prisma/client", adapter])), adapter).toBe(false);
+    }
+    // The adapter's driver is the switch that says it.
+    const sqlite = new Set(["@prisma/client", "@prisma/adapter-better-sqlite3"]);
+    expect(declaresDriverOf("sqlite", sqlite)).toBe(true);
+  });
+
+  it("is none for a switch nobody reads packages for", () => {
+    expect(declaresDriverOf("not-a-switch", new Set(["mysql2", "@prisma/client"]))).toBe(false);
   });
 });

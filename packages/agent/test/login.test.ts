@@ -1,7 +1,12 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { LOGIN_SCHEMA, LOGIN_USAGE, parseLoginArgs, runLogin } from "../src/login/command.ts";
+import { DOWNTRACE_CLOUD, LOGIN_SCHEMA, LOGIN_USAGE, parseLoginArgs, runLogin } from "../src/login/command.ts";
 import { readDocumentation } from "./support/documentation.ts";
 
 /**
@@ -306,10 +311,134 @@ describe("downtrace login and a cloud it does not trust blindly", () => {
   });
 });
 
+/**
+ * Runs login against Downtrace's cloud, whose address is not this machine's: `fetch` is stood in, answering each path
+ * with what `answers` scripts, so nothing leaves the machine.
+ */
+async function loginToDowntraceCloud(argv: string[], answers: Record<string, Answer | Error>) {
+  const asked: string[] = [];
+  let clock = 0;
+  let stdout = "";
+  let stderr = "";
+  const code = await runLogin({
+    argv,
+    env: {},
+    stdout: (t) => {
+      stdout += t;
+    },
+    stderr: (t) => {
+      stderr += t;
+    },
+    signal: undefined,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    fetchImpl: async (input) => {
+      const url = String(input);
+      asked.push(url);
+      const answer = answers[new URL(url).pathname];
+      if (answer === undefined || answer instanceof Error) throw answer ?? new Error(`nothing scripted for ${url}`);
+      const body = JSON.stringify(answer.body).replaceAll("{base}", DOWNTRACE_CLOUD);
+      return new Response(body, { status: answer.status, headers: { "content-type": "application/json" } });
+    },
+  });
+  return { code, stdout, stderr, asked };
+}
+
+describe("downtrace login with no cloud named", () => {
+  it("asks Downtrace's cloud, and hands over what it approved for that address", async () => {
+    // covers: RF-519
+    const run = await loginToDowntraceCloud(["--project", "nidus-api", "--env", "staging"], {
+      "/login/device/code": aCode,
+      "/login/device/token": approved,
+    });
+    expect(run.code).toBe(0);
+    expect(run.asked).toEqual([`${DOWNTRACE_CLOUD}/login/device/code`, `${DOWNTRACE_CLOUD}/login/device/token`]);
+    expect(run.stderr).toContain(`open ${DOWNTRACE_CLOUD}/device?code=BCDF-GHJK`);
+    expect(run.stdout).toContain(`DOWNTRACE_TOKEN=dt_ingest DOWNTRACE_URL=${DOWNTRACE_CLOUD}`);
+  });
+
+  it("names the cloud that refused, which the person did not name", async () => {
+    // covers: RF-519
+    // Downtrace's cloud before its operator opens sign-up: the request reaches it, and what it says is said.
+    const closed = await loginToDowntraceCloud(["--project", "nidus-api"], {
+      "/login/device/code": {
+        status: 503,
+        body: {
+          error: "not_configured",
+          error_description: "sign-up is not configured on this cloud: its operator creates projects",
+        },
+      },
+    });
+    expect(closed.code).toBe(1);
+    expect(closed.asked).toEqual([`${DOWNTRACE_CLOUD}/login/device/code`]);
+    expect(closed.stdout).toBe("");
+    expect(closed.stderr).toBe(
+      `downtrace login: the cloud at ${DOWNTRACE_CLOUD} answered: sign-up is not configured on this cloud: its operator creates projects\n`,
+    );
+
+    const json = await loginToDowntraceCloud(["--project", "nidus-api", "--json"], {
+      "/login/device/code": { status: 502, body: "Bad Gateway" },
+    });
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.stdout)).toEqual({
+      schema: LOGIN_SCHEMA,
+      status: "failed",
+      reason: "refused",
+      message: `the cloud at ${DOWNTRACE_CLOUD} answered 502 to the request for a code`,
+    });
+
+    const denied = await loginToDowntraceCloud(["--project", "nidus-api"], {
+      "/login/device/code": aCode,
+      "/login/device/token": {
+        status: 400,
+        body: { error: "access_denied", error_description: "the person denied it" },
+      },
+    });
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toContain(
+      `downtrace login: the cloud at ${DOWNTRACE_CLOUD} answered: the person denied it\n`,
+    );
+
+    const unreachable = await loginToDowntraceCloud(["--project", "nidus-api"], {
+      "/login/device/code": new Error("getaddrinfo ENOTFOUND"),
+    });
+    expect(unreachable.code).toBe(1);
+    expect(unreachable.stderr).toContain(`the cloud at ${DOWNTRACE_CLOUD} did not answer: getaddrinfo ENOTFOUND`);
+  });
+});
+
+describe("the address of Downtrace's cloud", () => {
+  it("is written in one place of packages/, and everything else takes it from there", async () => {
+    // covers: RF-519
+    // A later domain is a second name of the same cloud: what writes the address by hand is what would be left behind.
+    // The public text of packages/ is what git tracks there and what it would add; nothing it ignores is published.
+    const packages = fileURLToPath(new URL("../../", import.meta.url));
+    const { stdout } = await promisify(execFile)(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"],
+      { cwd: packages, timeout: 30_000, maxBuffer: 64 * 1024 * 1024 },
+    );
+    const files = stdout.split("\0").filter((file) => file !== "");
+    expect(files).toContain("agent/src/login/command.ts");
+    const host = new URL(DOWNTRACE_CLOUD).host;
+    const writing: string[] = [];
+    for (const file of files) {
+      const text = await readFile(join(packages, file), "utf8").catch((err: NodeJS.ErrnoException) => {
+        // Deleted in the working tree and not yet in the index: it is no longer published.
+        if (err.code === "ENOENT") return "";
+        throw err;
+      });
+      if (text.toLowerCase().includes(host)) writing.push(file);
+    }
+    expect(writing).toEqual(["agent/src/login/command.ts"]);
+  });
+});
+
 describe("the command line of downtrace login", () => {
   it.each([
     [[], {}, "--project is required"],
-    [["--project", "x"], {}, "--url or DOWNTRACE_URL"],
     [["--project", "x", "--url", "ftp://cloud"], {}, "must be https://"],
     [["--project", "x", "--url", "http://cloud.example"], {}, "http:// only for localhost"],
     [["--project", "x"], { DOWNTRACE_URL: "http://10.0.0.5:8080" }, "http:// only for localhost"],
@@ -342,6 +471,25 @@ describe("the command line of downtrace login", () => {
     }
   });
 
+  it("asks Downtrace's cloud when neither --url nor DOWNTRACE_URL names one, and the one named otherwise", () => {
+    // covers: RF-519
+    const cloudOf = (argv: string[], env: NodeJS.ProcessEnv): string => {
+      const parsed = parseLoginArgs(argv, env);
+      return parsed.kind === "login" ? parsed.args.url : parsed.kind;
+    };
+    expect(cloudOf(["--project", "x"], {})).toBe(DOWNTRACE_CLOUD);
+    expect(cloudOf(["--project", "x"], { DOWNTRACE_URL: " " })).toBe(DOWNTRACE_CLOUD);
+    expect(cloudOf(["--project", "x"], { DOWNTRACE_URL: "https://mine.example/" })).toBe("https://mine.example");
+    expect(
+      cloudOf(["--project", "x", "--url", "https://named.example"], { DOWNTRACE_URL: "https://mine.example" }),
+    ).toBe("https://named.example");
+    // An origin login can send a sign-up to, with nothing after it to strip.
+    expect(new URL(DOWNTRACE_CLOUD).protocol).toBe("https:");
+    expect(new URL(DOWNTRACE_CLOUD).origin).toBe(DOWNTRACE_CLOUD);
+    // The usage says which cloud that is: the guide and the README do not write it.
+    expect(LOGIN_USAGE).toContain(DOWNTRACE_CLOUD);
+  });
+
   it("prints its usage", async () => {
     const run = await login(["--help"]);
     expect(run.code).toBe(0);
@@ -359,4 +507,38 @@ describe("the documentation of downtrace login", () => {
     expect(docs).toContain("Exit status of login: 0 approved, 1 not approved");
     expect(docs).toContain(`schema: "${LOGIN_SCHEMA}"`);
   });
+
+  it("says how to get a token with downtrace login, with no address to fill in", async () => {
+    // covers: RF-519
+    const page = (path: string): Promise<string> => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+    const readme = await page("README.md");
+    const start = readme.indexOf("\n## Install\n");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const install = readme.slice(start, readme.indexOf("\n## ", start + 1));
+    for (const [where, text] of [
+      ["the README's install section", install],
+      ["guide/login.md", await page("guide/login.md")],
+    ] as const) {
+      const commands = fenced(text).filter((line) => /\blogin --project\b/.test(line));
+      expect(commands, where).not.toEqual([]);
+      for (const command of commands) {
+        // As written, it reaches Downtrace's cloud: there is nothing in it to replace.
+        const argv = (command.split("#")[0] ?? "").trim().split(/\s+/);
+        const parsed = parseLoginArgs(argv.slice(argv.indexOf("login") + 1), {});
+        expect(parsed, `${where}: ${command}`).toMatchObject({ kind: "login", args: { url: DOWNTRACE_CLOUD } });
+      }
+      expect(text, where).toContain("Downtrace's cloud");
+    }
+  });
 });
+
+/** The lines of a page's code blocks. */
+function fenced(markdown: string): string[] {
+  const lines: string[] = [];
+  let inside = false;
+  for (const line of markdown.split("\n")) {
+    if (line.startsWith("```")) inside = !inside;
+    else if (inside) lines.push(line);
+  }
+  return lines;
+}

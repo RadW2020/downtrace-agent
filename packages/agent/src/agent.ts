@@ -16,7 +16,6 @@ import {
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CallFingerprints } from "./calls.ts";
 import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
-import { OBSERVER_PACKAGES } from "./check/hints.ts";
 import { CoarseRegister } from "./coarse.ts";
 import { type AgentConfig, INSTRUMENTS, type Instrument } from "./config.ts";
 import {
@@ -63,7 +62,7 @@ import { patchSqlite3 } from "./instrument/sqlite3.ts";
 import { attachJest, hasJest, requiredFrom, type SandboxPatch } from "./jest.ts";
 import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { declaredDependencies } from "./manifest.ts";
+import { declaredDependencies, declaresDriverOf } from "./manifest.ts";
 import { withheldName } from "./minimal.ts";
 import { armExpress, armMounts } from "./mounts.ts";
 import { unsupportedNode } from "./node-floor.ts";
@@ -312,8 +311,8 @@ export class Agent {
   /** The `mysql2` observer's and the `mariadb` one's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
   /**
-   * The read of what the application declares, when the MySQL observer found no driver (RF-110): settled within
-   * `MANIFEST_BUDGET_MS` of the start, it never rejects, and the batches wait for it.
+   * The read of what the application declares, when an observer whose key ADR 0240 leaves out found no driver (RF-110):
+   * settled within `MANIFEST_BUDGET_MS` of the start, it never rejects, and the batches wait for it.
    */
   private declaring: Promise<void> | undefined;
   /** MongoDB's, the same way, for the driver and the copy Mongoose brings (ADR 0237). */
@@ -697,6 +696,9 @@ export class Agent {
     const internalError = (err: unknown): void => this.internalError(err);
     // What each driver's observer can patch once the application has loaded it (ADR 0246).
     const atLoad: Armed[] = [];
+    // The switches asked for whose driver did not resolve, and whose key is left out unless the application declares
+    // one (RF-110).
+    const unresolved = new Set<LeftOut>();
     // The pg observer announces itself, and knows the version: saying it again here made the log claim two
     // instrumentations where there was one, which is a false trail for whoever reads it at three in the morning.
     if (on.has("pg")) {
@@ -762,18 +764,7 @@ export class Agent {
           armMysqljs({ ...mysqlDeps, from }),
           armMariadb({ ...mysqlDeps, from, early: this.config.checkRoutes !== undefined }),
         ]);
-        said(observers, "mysql", armed.state);
-        // Unless the application declares one: then a bundle, or a monorepo that keeps it elsewhere, has hidden it, and
-        // the key says `unavailable`, as pg's does (RF-110, Q-12). Its package.json says which, read off the start.
-        if (armed.state === "unavailable") {
-          const signal = AbortSignal.timeout(MANIFEST_BUDGET_MS);
-          // Caught here and not where it is awaited, which is the next flush: until then a rejection would be unhandled.
-          this.declaring = declaredDependencies({ from, signal, log: this.log })
-            .then((declared) => {
-              if ((OBSERVER_PACKAGES.mysql ?? []).some((name) => declared.has(name))) observers.mysql = "unavailable";
-            })
-            .catch(internalError);
-        }
+        said(observers, "mysql", armed.state, unresolved);
         this.mysqlAttach = armed.attach;
         atLoad.push(armed);
         // Prisma's adapter over the driver's CommonJS bundle, whose classes are out of reach: at the adapter, as it
@@ -879,7 +870,7 @@ export class Agent {
     if (on.has("mongodb")) {
       const mongoDeps = { log: this.log, internalError, errors: this.errors };
       const armed = armMongo({ ...mongoDeps, from });
-      said(observers, "mongodb", armed.state);
+      said(observers, "mongodb", armed.state, unresolved);
       this.mongoAttach = armed.attach;
       atLoad.push(armed);
       sandbox.push({
@@ -891,7 +882,7 @@ export class Agent {
     if (on.has("mssql")) {
       const mssqlDeps = { log: this.log, internalError, fingerprints: this.mssqlFingerprints, errors: this.errors };
       const armed = armTedious({ ...mssqlDeps, from });
-      said(observers, "mssql", armed.state);
+      said(observers, "mssql", armed.state, unresolved);
       this.mssqlAttach = armed.attach;
       atLoad.push(armed);
       this.stopMssql = watchMssql({ ...mssqlDeps, from });
@@ -904,7 +895,7 @@ export class Agent {
     if (on.has("sqlite")) {
       const sqliteDeps = { log: this.log, internalError, fingerprints: this.sqliteFingerprints, errors: this.errors };
       const armed = armSqlite({ ...sqliteDeps, from });
-      said(observers, "sqlite", armed.state);
+      said(observers, "sqlite", armed.state, unresolved);
       this.sqliteAttach = armed.attach;
       atLoad.push(armed);
       sandbox.push(
@@ -931,7 +922,7 @@ export class Agent {
       };
       // Under `check` its runtime is wrapped as it loads, for a client Vitest runs itself (ADR 0243).
       const armed = armPrisma({ ...prismaDeps, from, early: this.config.checkRoutes !== undefined });
-      said(observers, "prisma", armed.state);
+      said(observers, "prisma", armed.state, unresolved);
       this.prismaAttach = armed.attach;
       sandbox.push({
         // `@prisma/client`, and a client generated into the project, which is required by its path: Prisma names that
@@ -940,6 +931,18 @@ export class Agent {
         patch: (client) =>
           patchPrisma((client as { PrismaClient?: unknown } | null | undefined)?.PrismaClient, "unknown", prismaDeps),
       });
+    }
+    // A switch that found no driver is `unavailable`, as pg's is, when the application declares one: then a bundle, or a
+    // monorepo that keeps it elsewhere, has hidden it (RF-110, Q-12). Its package.json says which, read once for all of
+    // them, off the start.
+    if (unresolved.size > 0) {
+      const signal = AbortSignal.timeout(MANIFEST_BUDGET_MS);
+      // Caught here and not where it is awaited, which is the next flush: until then a rejection would be unhandled.
+      this.declaring = declaredDependencies({ from, signal, log: this.log })
+        .then((declared) => {
+          for (const name of unresolved) if (declaresDriverOf(name, declared)) observers[name] = "unavailable";
+        })
+        .catch(internalError);
     }
     // Where Node announces no load, nothing announces Jest's runtime as it loads either, and under `check`, in a
     // project that has Jest, `require` is watched for it until it is wrapped (ADR 0258). Nowhere else: not in
@@ -1182,7 +1185,7 @@ export class Agent {
           leaving ? AbortSignal.timeout((params.timeoutMs ?? SHUTDOWN_FLUSH_MS) / 2) : undefined,
         );
       }
-      // And what the application declares, for the same reason: never MySQL left out first and `unavailable` after
+      // And what the application declares, for the same reason: never a database left out first and `unavailable` after
       // (RF-110). Within its own budget, and on the way out within the deadline.
       if (this.declaring !== undefined) {
         if (deadline) await settledWithin([this.declaring], deadline);
@@ -1774,20 +1777,23 @@ export function driversFoundLine(observers: Observers, asked: ReadonlySet<Instru
   return `drivers found: none, of ${lookedFor.join(", ")}`;
 }
 
+/** The switches whose key is left out when no driver resolves (ADR 0240): every one with a driver but Postgres's. */
+type LeftOut = "mysql" | "sqlite" | "mssql" | "mongodb" | "prisma";
+
 /**
  * What an observer of a database the application may not use says once armed (ADR 0240): `on` when a driver resolved,
  * and nothing when none did. With every switch asked for by default, a driver that does not resolve is almost always a
  * database the application does not use, and an `unavailable` for each of those would bury the one that matters; the
- * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093), and MySQL says it of a driver the
- * application declares (RF-110).
+ * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093), and the others say it of a driver the
+ * application declares (RF-110): a switch that found none goes into `unresolved`, for its package.json to say which.
  */
-function said(
-  observers: Observers,
-  name: "mysql" | "sqlite" | "mssql" | "mongodb" | "prisma",
-  state: "on" | "unavailable",
-): void {
-  if (state === "on") observers[name] = "on";
-  else delete observers[name];
+function said(observers: Observers, name: LeftOut, state: "on" | "unavailable", unresolved: Set<LeftOut>): void {
+  if (state === "on") {
+    observers[name] = "on";
+    return;
+  }
+  delete observers[name];
+  unresolved.add(name);
 }
 
 /**

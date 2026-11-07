@@ -300,6 +300,16 @@ describe("what a coding agent runs, which is what npm serves and not the source"
   });
 });
 
+describe("the README", () => {
+  it("says its limits, and nothing that tells a reader to stay away", async () => {
+    // It opened with a banner that called Downtrace a closed pilot, which a coding agent reads as «not for this
+    // project» (DT-185). The limits are what a reader needs to decide.
+    const readme = await read("README.md");
+    expect(readme).not.toMatch(/\bclosed\b(?: \w+)? pilot|by invitation|invite-only/i);
+    expect(readme).toMatch(/\bno SLA\b/);
+  });
+});
+
 describe("the plugin", () => {
   it("has a manifest Claude Code accepts", async () => {
     const manifest = (await readJson(".claude-plugin/plugin.json")) as Record<string, unknown>;

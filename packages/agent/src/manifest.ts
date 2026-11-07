@@ -1,10 +1,22 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { OBSERVER_PACKAGES } from "./check/hints.ts";
 import { basesOf, type From } from "./entry.ts";
 import type { Logger } from "./log.ts";
 
 /** The fields of a `package.json` that declare a dependency, as `init` and `check` read them. */
 const DECLARING = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+
+/**
+ * Whether what the application declares says it uses the database of this switch (RF-110): one of the packages `check`
+ * reads for it, `OBSERVER_PACKAGES`'s. Prisma's client is not, with a driver adapter beside it — any `@prisma/adapter-*`,
+ * as Prisma 7 requires —: a client given one is left alone and its queries are its driver's (ADR 0241), so the `prisma`
+ * switch had nothing of it to observe, and the adapter's driver is the switch that says it.
+ */
+export function declaresDriverOf(observer: string, declared: ReadonlySet<string>): boolean {
+  if (observer === "prisma" && [...declared].some((name) => name.startsWith("@prisma/adapter-"))) return false;
+  return (OBSERVER_PACKAGES[observer] ?? []).some((name) => declared.has(name));
+}
 
 /**
  * The packages the application declares (RF-110): what tells a driver it declares and the instrumentation cannot

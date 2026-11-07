@@ -8,11 +8,18 @@
  * person's choice, and the coding agent's.
  */
 
+/**
+ * Downtrace's cloud: the one `login` asks when neither `--url` nor `DOWNTRACE_URL` names another. This is the one place
+ * the packages write its address; the usage takes it from here, and the documentation says «Downtrace's cloud». A
+ * later domain would be a second name of the same cloud, and this address would keep serving.
+ */
+export const DOWNTRACE_CLOUD = "https://downtrace.uliber.com";
+
 /** What the command needs from the process it runs in, passed in and not reached for. */
 export interface LoginDeps {
   /** The words after `downtrace login`. */
   argv: readonly string[];
-  /** The environment, read once at start-up: `DOWNTRACE_URL` when `--url` is not given. */
+  /** The environment, read once at start-up: `DOWNTRACE_URL` when `--url` is not given, else Downtrace's cloud. */
   env: NodeJS.ProcessEnv;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
@@ -31,11 +38,11 @@ export interface LoginDeps {
 export const LOGIN_USAGE = `Usage: downtrace login --project <slug> [--env <environment>] [--level read|operate] [--name <name>]
                        [--rotate-token] [--url <cloud>] [--json]
 
-login asks a Downtrace cloud for a project and connects a coding agent to it, with no operator in between. It prints
-a link and a code; the person opens the link, signs in with GitHub and approves once. Then it prints an access
-credential for that project, restricted to that one environment, and, when the environment has no token yet, an
-ingestion token for it, which only sends data. An environment of the person's that already has a token keeps it, and
-login prints only the credential, unless --rotate-token asks to replace it.
+login asks Downtrace's cloud, or the one --url names, for a project and connects a coding agent to it, with no
+operator in between. It prints a link and a code; the person opens the link, signs in with GitHub and approves
+once. Then it prints an access credential for that project, restricted to that one environment, and, when the
+environment has no token yet, an ingestion token for it, which only sends data. An environment of the person's that
+already has a token keeps it, and login prints only the credential, unless --rotate-token asks to replace it.
 
 Options of login:
   --project <slug>     the project: lowercase letters, digits and dashes
@@ -44,7 +51,8 @@ Options of login:
   --name <name>        the project's name, when it is new; default the slug
   --rotate-token       for an environment that has an ingestion token, replace it too; the old one stops when this
                        one is collected
-  --url <cloud>        the cloud, https:// (http:// only for localhost); default DOWNTRACE_URL
+  --url <cloud>        the cloud, https:// (http:// only for localhost); default DOWNTRACE_URL, and without it
+                       Downtrace's cloud, ${DOWNTRACE_CLOUD}
   --json               print the result as JSON, for a coding agent
 
 Exit status of login: 0 approved, 1 not approved (denied, expired, full, unreachable), 2 a usage error.
@@ -102,8 +110,8 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
   }
   const project = values["--project"];
   if (project === undefined) return { kind: "error", message: "--project is required: the project to connect to" };
-  const url = (values["--url"] ?? env.DOWNTRACE_URL ?? "").trim().replace(/\/+$/, "");
-  if (url === "") return { kind: "error", message: "name the cloud with --url or DOWNTRACE_URL" };
+  // A DOWNTRACE_URL set to nothing names no cloud; an empty --url is refused above.
+  const url = (values["--url"] ?? env.DOWNTRACE_URL ?? "").trim().replace(/\/+$/, "") || DOWNTRACE_CLOUD;
   const reason = unusableUrl(url);
   if (reason !== undefined) return { kind: "error", message: reason };
   const level = values["--level"] ?? "read";
@@ -219,9 +227,11 @@ async function login(args: LoginArgs, deps: LoginDeps): Promise<LoginResult | Lo
   };
   if (args.name !== undefined) body.name = args.name;
   if (args.rotateToken) body.rotate_token = true;
+  // A refusal names the cloud it came from: with no --url, it is not one the person named.
+  const cloud = `the cloud at ${new URL(args.url).origin}`;
   const asked = await post(fetchImpl, `${args.url}/login/device/code`, body, deps.signal);
   if ("failure" in asked) return asked.failure;
-  if (asked.status !== 200) return refusal(asked.body, `the cloud answered ${asked.status} to the request for a code`);
+  if (asked.status !== 200) return refusal(asked.body, cloud, `${asked.status} to the request for a code`);
   const code = readCode(asked.body);
   if (code === undefined) return fail("bad-answer", "the cloud's answer to the request for a code is not one");
   // The page the person is sent to is the cloud's own: a link elsewhere is not one to follow.
@@ -274,16 +284,16 @@ async function login(args: LoginArgs, deps: LoginDeps): Promise<LoginResult | Lo
       interval += SLOW_DOWN_SECONDS;
       continue;
     }
-    return refusal(polled.body, `the cloud answered ${polled.status}`);
+    return refusal(polled.body, cloud, String(polled.status));
   }
   return fail("expired_token", "the code expired before it was approved: run downtrace login again");
 }
 
-/** A refusal of the cloud, in its own words when it gave them. */
-function refusal(body: unknown, otherwise: string): LoginFailure {
+/** A refusal of `cloud`, in its own words when it gave them, and otherwise what it `answered`. */
+function refusal(body: unknown, cloud: string, answered: string): LoginFailure {
   const reason = field(body, "error") ?? "refused";
   const description = field(body, "error_description");
-  return fail(reason, description ?? otherwise);
+  return fail(reason, `${cloud} answered${description === undefined ? ` ${answered}` : `: ${description}`}`);
 }
 
 interface DeviceCode {

@@ -1,13 +1,13 @@
 # Downtrace for coding agents
 
-> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. Install it where a dependency that is still moving is acceptable.
-
 What a coding agent needs to use Downtrace without being told to: when it is the answer — performance, a regression, an N+1, a change about to be deployed, what happened in production —, the check to run before it says a change to a route is done, and the question to ask production when a session starts. The same text comes in two shapes:
 
 - **A block for a project's `AGENTS.md` or `CLAUDE.md`**, which Claude Code, Codex and Cursor all read: [`AGENTS-block.md`](AGENTS-block.md). It works with no plugin installed.
 - **A Claude Code plugin**, which brings the same text as a skill, the MCP server, and the step at the start of a session.
 
 This is not an npm package: it is text and configuration, and nothing in it runs in your backend.
+
+Downtrace is free: no plans, no billing and no SLA.
 
 ## The block
 

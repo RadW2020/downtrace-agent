@@ -1,10 +1,10 @@
 # @downtrace/mcp
 
-> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+**Downtrace tells you when a change breaks the performance of your Node.js backend.** Before you deploy, it finds which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed. This is its **MCP server**: what Downtrace found in production, and why, as tools a coding agent can discover and use.
 
-Downtrace as tools a coding agent can discover and use: the queries and the operations, over MCP.
+Downtrace is free: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions.
 
-`product.md` is explicit that this is not an optional integration — «a product that could only be operated from the interface would fail half of its users» — and that reading is not enough: «a report exporter does not satisfy it: an agent must be able to operate the product».
+Reading is not all of it: a coding agent operates Downtrace from here too — it closes a finding, accepts a reference, asks for a capture, silences alerts —, as far as the credential it is given allows.
 
 ## Running it
 

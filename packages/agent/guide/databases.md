@@ -210,8 +210,8 @@ What the instrumentation does with the driver, and what it gives up:
   that made it, to the callback the driver answers through, whose arguments and `this` pass untouched; a statement that
   does not compile is counted as a failed one. A statement run with no callback is not counted: nothing says when it
   ends, and giving it one would change where its errors go. `each` is counted when it has its completion callback.
-- `observers` in the batch says `on` when a driver was found; when none was, it says nothing, as for an application
-  that does not use it.
+- `observers` in the batch says `on` when a driver was found; when none was, `unavailable` if your application declares
+  one, and otherwise nothing, as for an application that does not use it.
 
 ## MongoDB
 
@@ -240,8 +240,8 @@ What the instrumentation does with the driver, and what it gives up:
 - **Mongoose 5 to 7, on the drivers 3 to 5, are not observed.** Those drivers answer through callbacks, and their pool
   hands a waiting request its connection from the request that gave it back: what a wrapper recorded would not be
   known to be the request's. `init` says it, from the range your `package.json` declares.
-- `observers` in the batch says `on` when a driver was found; when none was, it says nothing, as for an application
-  that does not use it.
+- `observers` in the batch says `on` when a driver was found; when none was, `unavailable` if your application declares
+  one, and otherwise nothing, as for an application that does not use it.
 
 ## Prisma
 
@@ -299,8 +299,8 @@ through one method of its class, and the instrumentation wraps it (switch `prism
   imports Prisma's runtime as an ES module nothing can reach into (on Prisma 7 it goes through a driver adapter, and is
   seen through the driver); one a bundler inlined; and, outside `check`, one a runner loads itself.
 - **Not counted twice.** A client given a driver adapter is left alone: its SQL is the driver's to count.
-- `observers` in the batch says `prisma: on` when `@prisma/client` resolves from your application, and nothing when it
-  does not.
+- `observers` in the batch says `prisma: on` when `@prisma/client` resolves from your application; when it does not,
+  `unavailable` if your application declares it with no driver adapter beside it, and otherwise nothing.
 
 How to tell which row you are in: with `DOWNTRACE_INSPECT`, a route whose Prisma queries are seen has a `postgres` (or
 `mysql`, `sqlite`, `mongodb`) dependency. A route that queries through Prisma and has none is in one of the **No** rows,
@@ -387,9 +387,11 @@ hoisting — would otherwise leave your database unseen and your mounted Express
 that cannot be resolved from there is reported as `unavailable` in the
 batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `mssql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
-would hide the one it does. `mysql` is `unavailable` when none is found and your application declares `mysql2`, `mysql`,
-`mariadb` or a package that brings one — a bundle, a monorepo that keeps it elsewhere —: what it declares is read from
-the closest `package.json` above the entry, outside `node_modules`. `DOWNTRACE_DEBUG=1` says at start-up which drivers
-were not found. `downtrace check` reads the `package.json` where it runs, and adds a note for each observer, `pg`
-included, that found no driver your project depends on — `mongoose` declared and `mongodb` left out —, and none for a
-database it does not depend on.
+would hide the one it does. Each is `unavailable` instead when none is found and your application declares one of the
+packages `downtrace check` reads for it — `mysql2`, `mssql`, `better-sqlite3`, `mongoose`, `@prisma/client`, or a
+package that brings one —, which a bundle or a monorepo that keeps it elsewhere has hidden: what it declares is read
+from the closest `package.json` above the entry, outside `node_modules`. `@prisma/client` beside a driver adapter, as
+Prisma 7 has it, is the adapter's driver's to say. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found.
+`downtrace check` reads the `package.json` where it runs, and adds a note for each observer, `pg` included, that found
+no driver your project depends on — `mongoose` declared and no `mongodb` found —, and none for a database it does not
+depend on.

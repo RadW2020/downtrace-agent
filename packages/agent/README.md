@@ -60,10 +60,11 @@ The whole of it: [`downtrace init`](https://github.com/RadW2020/downtrace-agent/
 
 ```sh
 npm install @downtrace/agent
-npx downtrace init    # writes the instrument file and the line that loads it
+npx downtrace init                      # writes the instrument file and the line that loads it
+npx downtrace login --project shop-api  # asks Downtrace's cloud for the project; you approve it in the browser
 ```
 
-The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN: the cloud's URL with your ingest token as its user, `https://dt_…@your-downtrace-cloud`. `downtrace init` writes what the recipes below show ([its guide](#documentation)). As written, the file reads `DOWNTRACE_DSN` from the environment and does nothing without it; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
+The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN. `downtrace init` writes what the recipes below show, and `downtrace login` prints the ingest token and the cloud's URL the DSN is made of ([their guides](#documentation)). As written, the file reads `DOWNTRACE_DSN` from the environment; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
 
 ### NestJS, compiled to CommonJS
 
@@ -144,7 +145,7 @@ Each setting is an option of `init()` and a variable of the environment: an opti
 | `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found with no configuration: the variable your platform or CI sets, the image's digest on ECS, or a fingerprint of your code ([how](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version)) |
 | `inspect` | `DOWNTRACE_INSPECT` | `stderr` or a file path: writes every batch exactly as it would be sent, and needs no DSN ([below](#see-exactly-what-would-leave-your-server)) |
 
-The rest — debug, the interval, the profile, which observers run, minimal mode, query text, exclusions, the benchmark's switches — and what a late `init()` loses are in [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md). A second `init()`, or one after `--import @downtrace/agent/register` started the instrumentation, changes nothing and says so.
+The rest — debug, the interval, the profile, which observers run, minimal mode, query text, exclusions, the benchmark's switches — and what a late or a second `init()` does are in [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md).
 
 An ingest token belongs to one environment, and **that** is the environment everything sent with it is stored as, whatever `DOWNTRACE_ENV` says. If the two disagree, the data still lands — going blind over a mislabelled deploy would be worse than the wrong label — and the project's page shows the instance as declaring something else, which is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the batch declare.
 
