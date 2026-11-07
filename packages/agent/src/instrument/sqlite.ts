@@ -2,7 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { currentContext, type RequestContext, recordCallIn, recordErrorIn, recordOperationIn } from "../context.ts";
 import { applicationEntry, type From } from "../entry.ts";
-import type { ErrorFingerprintCache } from "../errors.ts";
+import { type ErrorFingerprintCache, firstFileOf } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
 import { type Armed, armDriver, armedTogether } from "./arm.ts";
@@ -66,6 +66,13 @@ function textOf(statement: unknown): string | undefined {
 }
 
 /**
+ * This module's file, as its frames name it: the source, or the chunk of the built package it is bundled into. Both
+ * drivers throw synchronously, from native code, so the first frames of a failed statement's stack are this wrapper's,
+ * and they are left out of its signature (DT-180).
+ */
+const OWN_FILE = firstFileOf(new Error().stack);
+
+/**
  * How many observed runs are on the stack. A driver that runs a statement through another of its own methods — libsql's
  * `all` loops over its `iterate` — ran one statement, and the run inside is not counted again. Everything here is
  * synchronous, so nothing else runs while the count is up.
@@ -120,7 +127,7 @@ function record(
         failed,
         target: "",
       });
-      recordErrorIn(ctx, deps.errors, failed, err, "", started, ended);
+      recordErrorIn(ctx, deps.errors, failed, err, "", started, ended, { withoutFramesOf: OWN_FILE });
     }
   } catch (failure) {
     deps.internalError(failure);

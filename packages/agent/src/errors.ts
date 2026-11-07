@@ -23,14 +23,14 @@ const MAX_TEXT = 512;
 /** How many frames of the stack make the signature. Enough to tell two call sites apart, few enough to read. */
 const FRAMES = 3;
 
-/**
- * One frame, reduced to what identifies the place and nothing about the machine.
- *
- * The file name and the line stay: they are the structure of the user's own code, like a route template, and
- * they are what makes a signature readable. The directory goes — it gives away the `$HOME` of whoever built
- * it and the path it was deployed to, and says nothing about the error.
- */
-function frameOf(line: string): string | undefined {
+/** A frame's function, if it names one, and its place: `/abs/path/file.js:12:5`, or a `file:` URL. */
+interface Parts {
+  fn: string;
+  where: string;
+}
+
+/** The parts of a line of a stack, or nothing for a line that is no frame. */
+function partsOf(line: string): Parts | undefined {
   const trimmed = line.trim();
   if (!trimmed.startsWith("at ")) return undefined;
   const body = trimmed.slice(3);
@@ -40,7 +40,35 @@ function frameOf(line: string): string | undefined {
   const open = body.endsWith(")") ? body.indexOf("(") : -1;
   const fn = open > 0 ? body.slice(0, open).trim() : "";
   const where = open > 0 ? body.slice(open + 1).replace(/\)$/, "") : body;
+  return { fn, where };
+}
 
+/** The file of a place, as the stack names it, without its line and column. */
+function fileOf(where: string): string {
+  return where.replace(/:\d+:\d+$/, "");
+}
+
+/**
+ * The file of a stack's first frame, as its frames name it: what a module passes, from a stack it takes as it loads,
+ * to leave its own frames out of a signature (`SignOptions.withoutFramesOf`). Nothing when the stack has no frame,
+ * as with `Error.stackTraceLimit` at 0.
+ */
+export function firstFileOf(stack: string | undefined): string | undefined {
+  for (const line of stack?.split("\n") ?? []) {
+    const parts = partsOf(line);
+    if (parts) return fileOf(parts.where);
+  }
+  return undefined;
+}
+
+/**
+ * One frame, reduced to what identifies the place and nothing about the machine.
+ *
+ * The file name and the line stay: they are the structure of the user's own code, like a route template, and
+ * they are what makes a signature readable. The directory goes — it gives away the `$HOME` of whoever built
+ * it and the path it was deployed to, and says nothing about the error.
+ */
+function frameOf({ fn, where }: Parts): string | undefined {
   // Node's own frames and dependencies are collapsed: which line of `pg` threw is not this application's
   // shape, and keeping them would make every signature mostly library.
   if (where.startsWith("node:")) return fn ? `${fn} (node)` : "(node)";
@@ -58,12 +86,19 @@ function frameOf(line: string): string | undefined {
   return fn ? `${fn}@${place}` : place;
 }
 
-/** The top frames, joined. Empty when there is no usable stack, which is a real case and not an error. */
-export function stackSignature(stack: string | undefined): string {
+/**
+ * The top frames, joined. Empty when there is no usable stack, which is a real case and not an error. The frames of
+ * `without`, a file as the stack names it, are left out: they are the instrumentation's, where a driver threw
+ * through its wrapper (DT-180).
+ */
+export function stackSignature(stack: string | undefined, without?: string | undefined): string {
   if (!stack) return "";
   const frames: string[] = [];
   for (const line of stack.split("\n")) {
-    const frame = frameOf(line);
+    const parts = partsOf(line);
+    if (!parts) continue;
+    if (without !== undefined && fileOf(parts.where) === without) continue;
+    const frame = frameOf(parts);
     if (!frame) continue;
     frames.push(frame);
     if (frames.length === FRAMES) break;
@@ -106,6 +141,12 @@ function messageOf(err: unknown): string {
  */
 export interface SignOptions {
   stack?: boolean;
+  /**
+   * The file of the instrumentation's own frames, as the stack names it, to leave out of the place: a driver that
+   * throws synchronously, from native code, throws through the wrapper around it, whose frames are not where the
+   * application called it (DT-180).
+   */
+  withoutFramesOf?: string | undefined;
 }
 
 /**
@@ -121,7 +162,8 @@ export function errorFingerprint(err: unknown, options: SignOptions = {}): Finge
   const type = typeOf(err);
   const sanitised = sanitizeMessage(messageOf(err));
   const message = meaningful(sanitised) ? sanitised : "";
-  const where = options.stack === false ? "" : stackSignature(isError(err) ? err.stack : undefined);
+  const where =
+    options.stack === false ? "" : stackSignature(isError(err) ? err.stack : undefined, options.withoutFramesOf);
   let text = type;
   if (message !== "") {
     text = `${type}: ${message}`;
@@ -174,7 +216,7 @@ export class ErrorFingerprintCache {
     const signsStack = options.stack !== false;
     const key = isError(err)
       ? signsStack
-        ? `Error\n${err.name}\n${err.stack ?? ""}\n${err.message}`
+        ? `Error\n${options.withoutFramesOf ?? ""}\n${err.name}\n${err.stack ?? ""}\n${err.message}`
         : `Bare\n${err.name}\n${err.message}`
       : `${typeOf(err)}\n${messageOf(err)}`;
     const cached = this.entries.get(key);

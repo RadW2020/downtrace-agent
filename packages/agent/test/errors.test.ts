@@ -72,6 +72,28 @@ describe("the stack signature", () => {
     expect(stackSignature(["Error: x", "    at run (node:internal/x:1:1)"].join("\n"))).toBe("run (node)");
   });
 
+  it("leaves out every frame of the file it is told is the instrumentation's, as a path or as a URL", () => {
+    // A driver that throws synchronously, from native code, throws through the instrumentation's wrapper (DT-180).
+    const own = "/srv/app/node_modules/@downtrace/agent/dist/index.cjs";
+    const through = [
+      "SqliteError: UNIQUE constraint failed: users.email",
+      `    at Statement.<computed> [as run] (${own}:900:16)`,
+      `    at observed (${own}:850:14)`,
+      "    at Statement.run (/srv/app/node_modules/libsql/index.js:300:20)",
+      `    at Object.run (${own}:870:5)`,
+      "    at signUp (/srv/app/src/users.js:12:9)",
+      "    at /srv/app/src/routes.js:40:3",
+    ].join("\n");
+    expect(stackSignature(through, own)).toBe("(libsql) ← signUp@users.js:12 ← routes.js:40");
+    const url = `file://${own.replace(/\.cjs$/, ".js")}`;
+    expect(stackSignature(through.replaceAll(own, url.slice("file://".length)), undefined)).toContain(
+      "(@downtrace/agent)",
+    );
+    expect(stackSignature(through.replaceAll(own, url), url)).toBe("(libsql) ← signUp@users.js:12 ← routes.js:40");
+    // Told nothing, it signs as it always did.
+    expect(stackSignature(through)).toBe("(@downtrace/agent) ← (@downtrace/agent) ← (libsql)");
+  });
+
   it("is empty when there is no stack, which is a real case and not a failure", () => {
     expect(stackSignature(undefined)).toBe("");
     expect(stackSignature("just a sentence")).toBe("");

@@ -48,6 +48,45 @@ function inRequest(fn: () => void): RequestContext {
 const operationsOf = (ctx: RequestContext) =>
   [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "query").map((o) => [o.text, o.count, o.errors]);
 const sqliteWork = (ctx: RequestContext) => ctx.work?.get(dependencyKey("sqlite", ""));
+const signaturesOf = (ctx: RequestContext) =>
+  [...(ctx.operations?.values() ?? [])].filter((o) => o.kind === "error").map((o) => o.text);
+/** A frame of the instrumentation's wrapper: `sqlite.ts` from the source, `(@downtrace/agent)` from the package. */
+const OWN_FRAME = /(?:^|[\s@(])sqlite\.ts:\d+|\(@downtrace\/agent\)/;
+
+/**
+ * Two places of the application that run the same failing statement, each calling the driver itself, as an
+ * application does: two signatures, of the application's frames.
+ */
+function failFromTwoPlaces(insert: Statement): RequestContext {
+  function signUp(): void {
+    try {
+      insert.run("twice@example.com");
+    } catch {
+      // the application handles it
+    }
+  }
+  function importUsers(): void {
+    try {
+      insert.run("twice@example.com");
+    } catch {
+      // the application handles it
+    }
+  }
+  return inRequest(() => {
+    signUp();
+    importUsers();
+  });
+}
+
+function signedByTheApplication(ctx: RequestContext): void {
+  const signatures = signaturesOf(ctx);
+  expect(signatures, "one signature for each place").toHaveLength(2);
+  for (const signature of signatures) {
+    expect(signature, "a frame of the instrumentation signs it").not.toMatch(OWN_FRAME);
+  }
+  expect(signatures.some((s) => s?.includes("signUp@instrument-sqlite.test.ts"))).toBe(true);
+  expect(signatures.some((s) => s?.includes("importUsers@instrument-sqlite.test.ts"))).toBe(true);
+}
 
 function deps() {
   return {
@@ -116,6 +155,12 @@ describe("better-sqlite3", () => {
     expect((thrown as { code?: unknown }).code).toBe("SQLITE_CONSTRAINT_UNIQUE");
     expect(operationsOf(ctx)).toEqual([[`insert into "users" ("email") values (?)`, 1, 1]]);
     expect(sqliteWork(ctx)).toMatchObject({ calls: 1, errors: 1 });
+  });
+
+  it("signs a failed statement by the application's frames, one signature for each place", () => {
+    db.prepare(`insert or ignore into "users" ("email") values ('twice@example.com')`).run();
+    const insert = db.prepare(`insert into "users" ("email") values (?)`);
+    signedByTheApplication(failFromTwoPlaces(insert));
   });
 
   it("records an exec as one operation, and a transaction's statements with its own", () => {
@@ -188,6 +233,15 @@ describe("libsql, and @libsql/client on a file", () => {
       [`select * from "users" where "email" = ?`, 1, 0],
       [`update "users" set "lastSeen" = ?`, 1, 0],
     ]);
+    db.close();
+  });
+
+  it("signs a failed statement by the application's frames, one signature for each place", () => {
+    const db = new Libsql(":memory:");
+    schema(db);
+    db.prepare(`insert into "users" ("email") values ('twice@example.com')`).run();
+    const insert = db.prepare(`insert into "users" ("email") values (?)`);
+    signedByTheApplication(failFromTwoPlaces(insert));
     db.close();
   });
 
