@@ -232,7 +232,8 @@ export function adviceForUnbuiltBase(base: UnbuiltBase): string {
  * found a driver: `pg`'s through Prisma's adapter, slonik and postgres.js too, MySQL's through `mariadb` and Prisma's
  * adapter for it, SQL Server's through `mssql` and Prisma's adapter over `tedious`, SQLite's through what brings libsql
  * or better-sqlite3, and each database's MikroORM package. The packages are `OBSERVED_PACKAGES`'s, each under its
- * observer. Every switch of `INSTRUMENTS` but `http` and `runtime`, which need no driver.
+ * observer. Every switch of `INSTRUMENTS` but `http` and `runtime`, which need no driver. The instrumentation reads
+ * MySQL's too, against the application's package.json, to say a driver it declares `unavailable` (RF-110).
  */
 export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
   pg: [
@@ -265,7 +266,10 @@ export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
 /** An observer of a run that did not find a driver, and the packages the project depends on that it was for. */
 export interface UnseenObserver {
   observer: string;
-  /** `unavailable` as `pg` says it, or `absent`: left out, as every other observer says it (ADR 0240). */
+  /**
+   * `unavailable` as `pg` says it, and MySQL of a driver the application declares (RF-110), or `absent`: left out, as
+   * every other observer says it (ADR 0240).
+   */
   state: "unavailable" | "absent";
   packages: string[];
 }
@@ -273,8 +277,9 @@ export interface UnseenObserver {
 /**
  * The observers of a run, as `observers` merged them, that did not find a driver the project depends on: what that
  * database did is absent from the run, not zero. Every observer but `pg` leaves its key out when it found none, which
- * the batch reads as «did not say» because the instrumentation cannot tell a database the application does not use;
- * `check` reads the project's dependencies, and can. And `pg`'s `unavailable`, said in every application with no
+ * the batch reads as «did not say» because the instrumentation does not tell a database the application does not use
+ * — but for MySQL, which it says `unavailable` when the application's package.json declares it (RF-110); `check` reads
+ * the project's dependencies, and can. And `pg`'s `unavailable`, said in every application with no
  * Postgres, is said here only for one that depends on it. Without the dependencies (no `package.json` where `check`
  * ran), what said `unavailable` is all there is to go on. A run that said nothing of any observer is not read.
  */

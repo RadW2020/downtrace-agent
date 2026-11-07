@@ -217,7 +217,7 @@ node --import @downtrace/agent/register --import ./instrument.mjs server.js
 loads the driver itself: it resolves it from your application's root (with no loader hooks, which is what lets it
 work without you importing anything) and patches the copy your application loaded once the tracker's hooks are done
 with it: what your application loads at start-up, at the start of the first request; what it loads later, in a
-request, in the microtask after that load, which Node announces from 22. So whichever order the two are loaded in,
+request, in the microtask after that load, which Node announces from 22.4. So whichever order the two are loaded in,
 your application's own load of `pg` is the only one the tracker's hooks ever see, and each one observes what it would
 alone: same requests, calls per request and errors on this side, and the tracker's own `pg` spans on its side — one
 `pg-pool.connect` and one query span per request, with no duplicates. A test runs the three configurations — each one
@@ -230,7 +230,8 @@ found:
 
 - a query made in the same turn as the `require` that loads the driver, such as `require("better-sqlite3")` and a
   statement right after it;
-- on Node 20, which does not announce the load, the queries of that first request, which are counted from the next one;
+- before Node 22.4, which does not announce the load, the queries of that first request, which are counted from the
+  next one;
 - a driver imported as an ES module — postgres.js's ES build, `mariadb` from 3.5 —, which is reached from the first
   request;
 - with a tracker beside it, a request that loads `pg` both ways — a `require` and an `import` of it in that same

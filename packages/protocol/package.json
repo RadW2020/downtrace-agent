@@ -1,7 +1,7 @@
 {
   "name": "@downtrace/protocol",
   "version": "0.14.0",
-  "description": "Downtrace ingestion protocol: JSON Schema, fixtures and generated TypeScript types",
+  "description": "The ingestion protocol of Downtrace, which tells you when a change breaks the performance of your Node.js backend, before and after you deploy: JSON Schema, fixtures and generated TypeScript types",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -34,6 +34,8 @@
   "keywords": [
     "downtrace",
     "observability",
+    "performance",
+    "regression",
     "protocol",
     "json-schema"
   ],

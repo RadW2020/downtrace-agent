@@ -133,8 +133,8 @@ prepared statements, batches, errors and transactions, on 3.4.7 and 3.5.4, and i
 - **What `require("mariadb")` loads from 3.5.3 on is one bundle, `dist/promise.cjs`, which exports none of the
   driver's classes**, and is not observed; `DOWNTRACE_DEBUG=1` says so at the first request. An application compiled
   to CommonJS — NestJS's, for one — with Prisma 7.10's adapter, which pins 3.5.4, has its queries go there, and they
-  are observed one floor up, at the adapter: as it loads, which Node announces on its `module.require` channel (on Node
-  22 and later; on Node 20, only an adapter loaded before the instrumentation started), and under Jest in its
+  are observed one floor up, at the adapter: as it loads, which Node announces on its `module.require` channel (from
+  Node 22.4; before it, only an adapter loaded before the instrumentation started), and under Jest in its
   registry. Every query Prisma sends is a query of the route, with its time and its failure; the dependency is `mysql`
   with no target, because the bundle keeps the server to itself, and the wait for a connection and the `BEGIN` and
   `COMMIT` the adapter sends on its own are not seen. Prisma 7.0 to 7.9 pin 3.4.5, which is observed at the driver
@@ -172,8 +172,8 @@ What the instrumentation does with the driver, and what it gives up:
   load, are calls with no operation.
 - **What is not your route's is not counted:** the options the connection sets as it logs in, and the `SELECT 1;` with
   which `mssql`'s pool validates a connection before it hands it over. That validation is skipped by patching `mssql`
-  as your application loads it, from Node 22; on Node 20, an `mssql` loaded after the instrumentation started keeps
-  counting it.
+  as your application loads it, which Node announces from 22.4; before it, an `mssql` loaded after the instrumentation
+  started keeps counting it.
 - **The wait for a connection is not measured:** `mssql`'s pool has no request to wrap.
 - **Prisma 4 to 6 on SQL Server** goes through its own engine, and is observed through its client, by action and model
   ([Prisma](#prisma), switch `prisma`); Prisma 7, which needs `@prisma/adapter-mssql`, through `mssql`, statement by
@@ -356,8 +356,8 @@ the same dependency, target, queries and error. A newer version asks for the Nod
 | `ioredis` | 5.11.1 | 6 declares Node 20 |
 | `redis` (node-redis) | 5.12.1 | 6 declares Node 20 |
 
-One difference: on Node 18, as on Node 20, the `SELECT 1;` with which `mssql`'s pool checks a connection before it hands it over is
-one more query of the route that took it ([SQL Server](#sql-server)).
+One difference: on Node 18, as on every Node before 22.4, the `SELECT 1;` with which `mssql`'s pool checks a
+connection before it hands it over is one more query of the route that took it ([SQL Server](#sql-server)).
 
 **Neon's driver does not run on Node 18 by itself**, in either version: it signs in with `crypto.getRandomValues` from
 the global `crypto`, which Node has without a flag from 19, and on 18 the process ends at the first query. Set it
@@ -387,6 +387,9 @@ hoisting — would otherwise leave your database unseen and your mounted Express
 that cannot be resolved from there is reported as `unavailable` in the
 batch's observers, which `DOWNTRACE_INSPECT` shows you. `mysql`, `mssql`, `sqlite`, `mongodb` and `prisma` are reported `on` when found,
 and left out when not: with every switch on by default, an `unavailable` for each database an application does not use
-would hide the one it does. `DOWNTRACE_DEBUG=1` says at start-up which drivers were not found. `downtrace check` reads
-the `package.json` where it runs, and adds a note for each observer, `pg` included, that found no driver your project
-depends on — `mysql2` declared and `mysql` left out —, and none for a database it does not depend on.
+would hide the one it does. `mysql` is `unavailable` when none is found and your application declares `mysql2`, `mysql`,
+`mariadb` or a package that brings one — a bundle, a monorepo that keeps it elsewhere —: what it declares is read from
+the closest `package.json` above the entry, outside `node_modules`. `DOWNTRACE_DEBUG=1` says at start-up which drivers
+were not found. `downtrace check` reads the `package.json` where it runs, and adds a note for each observer, `pg`
+included, that found no driver your project depends on — `mongoose` declared and `mongodb` left out —, and none for a
+database it does not depend on.

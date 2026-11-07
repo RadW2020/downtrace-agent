@@ -63,6 +63,31 @@ describe("the documentation", () => {
     expect(Buffer.byteLength(await read("README.md"))).toBeLessThan(README_MAX_BYTES);
   });
 
+  it("opens with what Downtrace does, in the words of the question, before anything else", async () => {
+    // A coding agent asked for «something that tells me if I break performance» proposes what it finds, and this is
+    // the first thing it finds. It opened with a metaphor, a flight recorder, which matches no request, under a
+    // banner that called Downtrace closed. What it finds before and after a deploy has to come first.
+    const readme = await read("README.md");
+    const opening = readme.split("\n\n")[1] ?? "";
+    expect(opening).toMatch(/^\*\*Downtrace /);
+    expect(opening).toMatch(/breaks? (the )?performance/);
+    expect(opening).toMatch(/before you deploy/);
+    expect(opening).toMatch(/after you deploy/);
+  });
+
+  it("says its limits, and nothing that tells a reader to stay away", async () => {
+    const found: string[] = [];
+    for (const page of await pages()) {
+      for (const match of (await read(page)).match(/\bclosed\b(?: \w+)? pilot|by invitation|invite-only/gi) ?? []) {
+        found.push(`${page}: ${match}`);
+      }
+    }
+    expect(found).toEqual([]);
+    const readme = await read("README.md");
+    expect(readme).toMatch(/\bno SLA\b/);
+    expect(readme).toMatch(/protocol is `v0`/);
+  });
+
   it("lists in its table of observers every one DOWNTRACE_INSTRUMENT switches, and only those", async () => {
     // The sentence over the table said «six things» while the table had nine rows. The sentence carries no number
     // now, and the table is counted against the source.

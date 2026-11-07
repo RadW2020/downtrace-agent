@@ -1,8 +1,8 @@
 # Downtrace — open-source packages
 
-> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+**Downtrace tells you when a change breaks the performance of your Node.js backend: before you deploy, which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed.** It learns what each route normally runs and how long it takes, from inside the process and never in the request's path, and when that changes it captures what happened and shows its evidence.
 
-> **Downtrace is a flight recorder for your backend.** It learns how your application normally behaves and, when something gets slower or breaks, captures what happened and tells you what changed.
+Downtrace is free: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions.
 
 [![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@downtrace/agent)](https://www.npmjs.com/package/@downtrace/agent)

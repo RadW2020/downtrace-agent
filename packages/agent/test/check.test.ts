@@ -2845,7 +2845,8 @@ describe("the exit status and the text, for CI and for a person", () => {
     });
     const checked = await check(made, ["--base", "HEAD"], { NODE_PATH: "" });
     expect(checked.report.status, JSON.stringify(checked.report.failure)).toBe("compared");
-    expect(checked.report.base?.observers.mysql).toBeUndefined();
+    // The instrumentation reads the project's package.json too, and says the MySQL it declares `unavailable` (RF-110).
+    expect(checked.report.base?.observers.mysql).toBe("unavailable");
     expect(checked.report.base?.observers.pg).toBe("unavailable");
     const notes = checked.report.notes.join("\n");
     for (const side of ["base", "change"]) {

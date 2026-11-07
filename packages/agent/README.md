@@ -1,8 +1,8 @@
 # @downtrace/agent
 
-> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+**Downtrace tells you when a change breaks the performance of your Node.js backend: before you deploy, which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed.** This is its **instrumentation**: it observes your application from the inside, aggregates locally per route and 10-second interval, and, in production, ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
 
-**A flight recorder for your Node.js backend.** Downtrace watches how your application normally behaves and, when something gets slower or breaks, tells you what changed. This is the **instrumentation**: it observes your application from the inside, aggregates locally per route and 10-second interval, and ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
+Downtrace is free: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions.
 
 It observes these, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
 

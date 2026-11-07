@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareRuns } from "../src/check/compare.ts";
+import { compareRuns, NOT_EVALUATED_REASONS } from "../src/check/compare.ts";
 import { readRun } from "../src/check/read.ts";
 import { fmt, renderJson, renderText } from "../src/check/render.ts";
 import {
@@ -12,6 +12,7 @@ import {
   REPORT_SCHEMA,
   type SideReport,
 } from "../src/check/report.ts";
+import { judge } from "../src/check/run.ts";
 import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint } from "./support/check-batches.ts";
 
 /**
@@ -260,6 +261,61 @@ describe("a comparison that could not be made", () => {
   it("never says anything is unchanged", () => {
     expect(renderText(report)).not.toMatch(/unchanged/i);
     expect(JSON.parse(renderJson(report))).toMatchObject({ status: "failed", summary: null, routes: [] });
+  });
+});
+
+describe("a check in which no route could be evaluated", () => {
+  // covers: RF-511
+  // One route for each reason a route is not evaluated: called with nothing observed, declared and never called, gone
+  // from the change, new in it, called with no profile on either side, and a bucket.
+  const run = (side: "base" | "change") =>
+    readRun(
+      fileOf(
+        batch("p", {
+          intervals: [
+            interval(1000, 1000, [
+              endpoint("GET", "/health", 2),
+              endpoint("GET", "/slow", 3, { requestsWithCalls: 3 }),
+              endpoint("GET", "(unmatched)", 1),
+              side === "base" ? endpoint("POST", "/gone", 1) : endpoint("POST", "/new", 1),
+            ]),
+          ],
+        }),
+      ),
+    );
+  const files = { base: "the base run", change: "the change run" };
+  const judged = judge(
+    { base: run("base"), change: run("change") },
+    { declared: ["GET /orders"], dependencies: undefined, wording: { side: files, file: files, unprofiled: "advice" } },
+  );
+  if (judged.failure === null) throw new Error("the fixture evaluated a route");
+  const report = failed({
+    failure: judged.failure,
+    base: side("main"),
+    change: side("working tree"),
+    routes: judged.routes,
+  });
+  const text = renderText(report);
+
+  it("is made of a route for each reason a route can have", () => {
+    const reasons = new Set(report.routes.flatMap((route) => route.reasons.map((reason) => reason.code)));
+    expect([...reasons].sort()).toEqual([...NOT_EVALUATED_REASONS].sort());
+  });
+
+  it("lists each route the JSON carries, with why it was not evaluated, in the words the JSON uses", () => {
+    const routes = (JSON.parse(renderJson(report)) as CheckReport).routes;
+    expect(text).toContain(`Not evaluated (${routes.length})`);
+    for (const route of routes) {
+      const block = [`  ${route.id}`, ...route.reasons.map((reason) => `    ${reason.message}`)].join("\n");
+      expect(text, route.id).toContain(`\n${block}\n`);
+    }
+  });
+
+  it("still says no comparison could be made, and never that anything is unchanged", () => {
+    expect(text).toContain("downtrace check: no comparison could be made");
+    expect(text).toContain("no route could be evaluated, so nothing is said about any of them");
+    expect(text).not.toMatch(/unchanged/i);
+    expect(exitCodeOf(report)).toBe(2);
   });
 });
 

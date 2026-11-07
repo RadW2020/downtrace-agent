@@ -103,6 +103,7 @@ export function renderText(report: CheckReport): string {
     if (failure.advice !== null) out.push("", `  ${failure.advice}`);
     if (report.base !== null || report.change !== null)
       out.push("", side("base", report.base), side("change", report.change));
+    out.push(...notEvaluatedLines(report.routes));
     if (failure.outputTail !== null && failure.outputTail !== "") {
       out.push("", `Last output of the ${failure.side ?? "test"} run:`);
       for (const line of failure.outputTail.split("\n")) out.push(`  ${line}`);
@@ -146,7 +147,6 @@ export function verdictLines(summary: Summary | null, routes: readonly RouteResu
   ];
   const worse = routes.filter((route) => route.verdict === "worse");
   const unchanged = routes.filter((route) => route.verdict === "unchanged");
-  const skipped = routes.filter((route) => route.verdict === "not-evaluated");
   if (worse.length > 0) {
     out.push("", `Worse (${worse.length})`);
     for (const route of worse) out.push(...evaluatedBlock(route));
@@ -155,12 +155,21 @@ export function verdictLines(summary: Summary | null, routes: readonly RouteResu
     out.push("", `Unchanged (${unchanged.length})`);
     for (const route of unchanged) out.push(...evaluatedBlock(route));
   }
-  if (skipped.length > 0) {
-    out.push("", `Not evaluated (${skipped.length})`);
-    for (const route of skipped) {
-      out.push(`  ${route.id}`);
-      for (const reason of route.reasons) out.push(`    ${reason.message}`);
-    }
+  out.push(...notEvaluatedLines(routes));
+  return out;
+}
+
+/**
+ * The routes that were not evaluated, each with why, in the words the JSON carries: the third column of a verdict, and
+ * all that is said of the routes when none could be evaluated, since why is what the person acts on (RF-511).
+ */
+export function notEvaluatedLines(routes: readonly RouteResult[]): string[] {
+  const skipped = routes.filter((route) => route.verdict === "not-evaluated");
+  if (skipped.length === 0) return [];
+  const out = ["", `Not evaluated (${skipped.length})`];
+  for (const route of skipped) {
+    out.push(`  ${route.id}`);
+    for (const reason of route.reasons) out.push(`    ${reason.message}`);
   }
   return out;
 }

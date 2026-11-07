@@ -8,7 +8,7 @@ import {
   readInspection,
   UNPROFILED_IN_FILE,
 } from "./inspection.ts";
-import { verdictLines } from "./render.ts";
+import { notEvaluatedLines, verdictLines } from "./render.ts";
 import { DURATIONS_NOTE, exitCodeOf, type Side } from "./report.ts";
 import { fileLine } from "./report-command.ts";
 import { judge } from "./run.ts";
@@ -85,6 +85,7 @@ export function renderCompareText(report: CompareReport): string {
     if (report.base !== null || report.change !== null) {
       out.push("", sideLine("base", report.base), sideLine("change", report.change));
     }
+    out.push(...notEvaluatedLines(report.routes));
     for (const note of report.notes) out.push("", note);
     return `${out.join("\n")}\n`;
   }

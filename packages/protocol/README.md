@@ -1,8 +1,8 @@
 # @downtrace/protocol
 
-> ⚠️ **Not production ready.** Downtrace is a closed free pilot: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions. Install it where a dependency that is still moving is acceptable.
+**Downtrace tells you when a change breaks the performance of your Node.js backend: before you deploy, which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed.** This package is the ingestion contract between the Downtrace instrumentation and the Downtrace cloud: a JSON Schema (draft 2020-12) and the TypeScript types generated from it. Read it to write a sender in another language, or to validate what a sender sends.
 
-The ingestion contract between the Downtrace instrumentation and the Downtrace cloud: a JSON Schema (draft 2020-12) and the TypeScript types generated from it. Read it to write a sender in another language, or to validate what a sender sends.
+Downtrace is free: no plans, no billing and no SLA. The protocol is `v0` and can still change between minor versions, by the rules of [Versions](#versions).
 
 ```sh
 npm install @downtrace/protocol

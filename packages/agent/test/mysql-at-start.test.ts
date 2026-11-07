@@ -202,7 +202,7 @@ describe("mysql2 as an application starts it", () => {
   }, 60_000);
 
   // ADR 0246: the driver is patched as the application finishes loading it, and so the request that loads it counts
-  // its own queries. Node announces the load from 22; on 20 the first request's are lost, as ADR 0209 said.
+  // its own queries. Node announces the load from 22.4; before it the first request's are lost, as ADR 0209 said.
   it.each([
     ["a `require`", 'require("mysql2")'],
     ["an `import()`", '(await import("mysql2")).default'],

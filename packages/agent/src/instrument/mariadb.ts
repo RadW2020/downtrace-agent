@@ -352,7 +352,7 @@ export function prismaAdapterOverBundle(from: string): boolean {
  * Over the driver's own modules — up to 3.4, or imported — the driver's observer counts those queries, and the
  * adapter is left alone. What this does not say: the server, which the bundle keeps to itself (the dependency `mysql`
  * with no target, as postgres.js's); the `BEGIN` and `COMMIT` of a transaction, which the adapter sends on the
- * connection itself; and the wait for a connection. Node 20 has no `module.require` channel: there, only an adapter
+ * connection itself; and the wait for a connection. Node announces no load before 22.4: there, only an adapter
  * loaded before the instrumentation started is observed. Returns what stops listening.
  */
 export function watchPrismaMariadb(deps: InstrumentMariadbDeps & { from?: From | undefined }): () => void {

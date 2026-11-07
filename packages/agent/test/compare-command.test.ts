@@ -131,6 +131,28 @@ describe("the verdict of downtrace compare", () => {
     });
   });
 
+  // covers: RF-511
+  it("says, when no route could be evaluated, why each route the JSON carries was not, in check's words", async () => {
+    const nothing = fileOf(
+      batch("app", {
+        intervals: [
+          interval(1000, 1000, [endpoint("GET", "/health", 2), endpoint("GET", "/slow", 3, { requestsWithCalls: 3 })]),
+        ],
+      }),
+    );
+    const { routes } = (await compare({ base: nothing, change: nothing }, ["--json"])).json();
+    const { code, stdout } = await compare({ base: nothing, change: nothing });
+    expect(code).toBe(2);
+    expect(stdout).toContain("downtrace compare: no comparison could be made");
+    expect(stdout).toContain(`Not evaluated (${routes.length})`);
+    expect(routes.map((route) => route.id)).toEqual(["GET /health", "GET /slow"]);
+    for (const route of routes) {
+      const block = [`  ${route.id}`, ...route.reasons.map((reason) => `    ${reason.message}`)].join("\n");
+      expect(stdout, route.id).toContain(`\n${block}\n`);
+    }
+    expect(stdout).not.toMatch(/unchanged/i);
+  });
+
   it("says the lines it left out of each side, and counts them in a note", async () => {
     const { code, stdout } = await compare({ base: recorded(1), change: `oops\n${recorded(1)}` });
     expect(code).toBe(0);

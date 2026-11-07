@@ -90,8 +90,9 @@ export interface ArmDeps<Driver> {
  * The patch itself runs in `attach`, from the start of the first request at which the driver is in the module
  * cache: by then the application has loaded it (a server that answers a request has finished its start-up), and the
  * wrapper is in place before the request's handler runs. What that moment gives up — a query the application makes
- * in the very request that loads the driver, a lazy import in a handler — the same attach takes back from Node 22, in
- * the microtask after the application loads the driver (`whenLoaded`, ADR 0246), from the first request (ADR 0247).
+ * in the very request that loads the driver, a lazy import in a handler — the same attach takes back from Node 22.4,
+ * in the microtask after the application loads the driver (`whenLoaded`, ADR 0246), from the first request (ADR
+ * 0247).
  *
  * The second driver to be observed (DT-91) is why this is a function of its own: the mechanism is ADR 0209's
  * and it is the same for every driver, so a correction to it is one correction.
@@ -243,7 +244,7 @@ export function announcesRequires(require: NodeRequire): boolean {
 
 /**
  * Runs `attach` each time the process has loaded modules through `require` — an `import` of a CommonJS module too —,
- * which Node announces on its `module.require` channel from 22 (ADR 0246): once the code that loaded them has run to
+ * which Node announces on its `module.require` channel from 22.4 (ADR 0246): once the code that loaded them has run to
  * its end, in a microtask, and so before anything that code waits for. A lazy import in a handler is patched before the
  * handler's first query, which waits for a connection, or for the import itself.
  *
@@ -253,9 +254,9 @@ export function announcesRequires(require: NodeRequire): boolean {
  * ours in between would hide it — every span twice, which ADR 0209 is there to prevent. In the microtask the driver is
  * whole, and the tracker's wrapper is under ours, as it is when the first request patches it.
  *
- * Until `attach` settles, or the returned function is called. Node 20 announces nothing, and there the first request
- * after the load is the moment, as ADR 0209 says. What the attach requires does not ask it again, and what it throws
- * goes to `internalError`.
+ * Until `attach` settles, or the returned function is called. Before 22.4 Node announces nothing, and there the first
+ * request after the load is the moment, as ADR 0209 says. What the attach requires does not ask it again, and what it
+ * throws goes to `internalError`.
  */
 export function whenLoaded(deps: { attach: () => boolean; internalError: (err: unknown) => void }): () => void {
   const channel = diagnostics_channel.tracingChannel("module.require");
@@ -296,7 +297,7 @@ export function whenLoaded(deps: { attach: () => boolean; internalError: (err: u
 
 /**
  * Patches a package as the application requires it by its name — which Node announces on its `module.require` channel,
- * from Node 22 — and at once a copy the application has loaded already, resolved from `from`. For what has to be
+ * from Node 22.4 — and at once a copy the application has loaded already, resolved from `from`. For what has to be
  * patched before the application uses it at start-up, which the first request is too late for: a pool that binds a
  * method of its class as it is built, an adapter connected in a NestJS module's `onModuleInit`. Nothing is loaded here:
  * the patch runs on what the application loaded. `accept` is asked with the file the name resolves to, from where it

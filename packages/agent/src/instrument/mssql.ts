@@ -181,8 +181,8 @@ export function armTedious(deps: InstrumentMssqlDeps & { from?: From | undefined
 /**
  * `mssql`'s validation, patched as the application loads the package and not at the first request: its pool binds
  * `_poolValidate` as it is built, which an application does at start-up, and a pool built before the patch keeps the
- * method it bound. On Node 20, which has no `module.require` channel, only a copy loaded before the instrumentation
- * started is patched in time. Returns what stops listening.
+ * method it bound. Before Node 22.4, which announces no load on its `module.require` channel, only a copy loaded before
+ * the instrumentation started is patched in time. Returns what stops listening.
  */
 export function watchMssql(deps: InstrumentMssqlDeps & { from?: From | undefined }): () => void {
   return whenRequired({

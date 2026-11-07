@@ -16,6 +16,7 @@ import {
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CallFingerprints } from "./calls.ts";
 import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
+import { OBSERVER_PACKAGES } from "./check/hints.ts";
 import { CoarseRegister } from "./coarse.ts";
 import { type AgentConfig, INSTRUMENTS, type Instrument } from "./config.ts";
 import {
@@ -62,6 +63,7 @@ import { patchSqlite3 } from "./instrument/sqlite3.ts";
 import { attachJest, hasJest, requiredFrom, type SandboxPatch } from "./jest.ts";
 import { armContextRecording, attachKoa } from "./koa.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { declaredDependencies } from "./manifest.ts";
 import { withheldName } from "./minimal.ts";
 import { armExpress, armMounts } from "./mounts.ts";
 import { unsupportedNode } from "./node-floor.ts";
@@ -81,6 +83,8 @@ const REQUEST_START = "http.server.request.start";
 const RESPONSE_FINISH = "http.server.response.finish";
 const MAX_INTERNAL_ERRORS = 10;
 const SHUTDOWN_FLUSH_MS = 1_000;
+/** How long the read of the application's `package.json` may take (RF-110): one small file, read once. */
+const MANIFEST_BUDGET_MS = 500;
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 /**
  * When this process started, in the clock the rest of the world reads. `performance.now()` measures
@@ -307,6 +311,11 @@ export class Agent {
   private pgAttach: (() => boolean) | undefined;
   /** The `mysql2` observer's and the `mariadb` one's, the same way (ADR 0209). */
   private mysqlAttach: (() => boolean) | undefined;
+  /**
+   * The read of what the application declares, when the MySQL observer found no driver (RF-110): settled within
+   * `MANIFEST_BUDGET_MS` of the start, it never rejects, and the batches wait for it.
+   */
+  private declaring: Promise<void> | undefined;
   /** MongoDB's, the same way, for the driver and the copy Mongoose brings (ADR 0237). */
   private mongoAttach: (() => boolean) | undefined;
   /** SQLite's, the same way, for better-sqlite3 and the libsql `@libsql/client` brings (ADR 0239). */
@@ -411,9 +420,10 @@ export class Agent {
       hostname: config.minimal ? withheldName(host) : host,
       pid: process.pid,
     };
-    // Mutated once, in `start()`, when the observers have actually attached. The sender reads this object at
-    // flush time and the first flush is always after `start()`, so there is nothing to synchronise; building
-    // it here and filling it there is what lets the batch report what happened rather than what was asked.
+    // Mutated in `start()`, when the observers have actually attached, and once the application's package.json is read
+    // (RF-110), which every flush waits for. The sender reads this object at flush time and the first flush is always
+    // after `start()`; building it here and filling it there is what lets the batch report what happened rather than
+    // what was asked.
     const agent: AgentInfo = {
       name: "@downtrace/agent",
       version: AGENT_VERSION,
@@ -753,6 +763,17 @@ export class Agent {
           armMariadb({ ...mysqlDeps, from, early: this.config.checkRoutes !== undefined }),
         ]);
         said(observers, "mysql", armed.state);
+        // Unless the application declares one: then a bundle, or a monorepo that keeps it elsewhere, has hidden it, and
+        // the key says `unavailable`, as pg's does (RF-110, Q-12). Its package.json says which, read off the start.
+        if (armed.state === "unavailable") {
+          const signal = AbortSignal.timeout(MANIFEST_BUDGET_MS);
+          // Caught here and not where it is awaited, which is the next flush: until then a rejection would be unhandled.
+          this.declaring = declaredDependencies({ from, signal, log: this.log })
+            .then((declared) => {
+              if ((OBSERVER_PACKAGES.mysql ?? []).some((name) => declared.has(name))) observers.mysql = "unavailable";
+            })
+            .catch(internalError);
+        }
         this.mysqlAttach = armed.attach;
         atLoad.push(armed);
         // Prisma's adapter over the driver's CommonJS bundle, whose classes are out of reach: at the adapter, as it
@@ -1160,6 +1181,12 @@ export class Agent {
         await this.deployed.ready(
           leaving ? AbortSignal.timeout((params.timeoutMs ?? SHUTDOWN_FLUSH_MS) / 2) : undefined,
         );
+      }
+      // And what the application declares, for the same reason: never MySQL left out first and `unavailable` after
+      // (RF-110). Within its own budget, and on the way out within the deadline.
+      if (this.declaring !== undefined) {
+        if (deadline) await settledWithin([this.declaring], deadline);
+        else await this.declaring;
       }
       const sent = await this.sender.flush(deadline ?? params.timeoutMs);
       // Said, because it is the last thing this process will say about it: nothing is queued in a process that
@@ -1751,7 +1778,8 @@ export function driversFoundLine(observers: Observers, asked: ReadonlySet<Instru
  * What an observer of a database the application may not use says once armed (ADR 0240): `on` when a driver resolved,
  * and nothing when none did. With every switch asked for by default, a driver that does not resolve is almost always a
  * database the application does not use, and an `unavailable` for each of those would bury the one that matters; the
- * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093).
+ * key left out is «did not say». Postgres keeps its `unavailable` (ADR 0093), and MySQL says it of a driver the
+ * application declares (RF-110).
  */
 function said(
   observers: Observers,
