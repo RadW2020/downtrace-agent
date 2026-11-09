@@ -10,15 +10,33 @@ It asks Downtrace's cloud, or the one `--url` names, for a project and connects 
 in between: the way `gh auth login` does, with a device code (RFC 8628). It prints a link and a short code on stderr;
 the person opens the link, signs in with GitHub and reads what is asked —the project, the environment, the level of
 access, that a coding agent asks it on their behalf, and the address and program the request came from— and approves
-once. Then it prints, on stdout:
+once. Then:
 
-- an **access credential** for that project, restricted to that environment, with the configuration of
-  the MCP server that uses it. It **expires 90 days** after it is handed over; run `downtrace login` again for a new
-  one. Every action made with it says it was on behalf of the person who approved it.
-- for a **new** project, an **ingestion token** for that one environment, which only sends data and reads nothing, as
-  the `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` the instrumentation starts with.
+- it keeps an **access credential** for that project, restricted to that environment, in `credentials.json` under
+  `$XDG_CONFIG_HOME/downtrace` (`~/.config/downtrace` without it), where the MCP server finds it: a coding agent never
+  copies it anywhere, and it is not printed. It **expires 90 days** after it is handed over; run
+  `downtrace login` again for a new one. Every action made with it says it was on behalf of the person who approved it.
+- for a **new** project, it prints an **ingestion token** for that one environment, which only sends data and reads
+  nothing, as the `DOWNTRACE_TOKEN` and `DOWNTRACE_URL` the instrumentation starts with. It is shown once: it goes
+  where the backend reads it.
 
-What it prints is shown once. It writes nothing to disk: where it is kept is yours.
+On stdout it says what was granted, where the credential was kept, and the configuration of the MCP server, which
+names the cloud and no credential.
+
+The file is readable by its user alone (0600), in a directory only they open (0700), and holds one entry per cloud and
+project: a new login of the same project at the same cloud replaces the earlier entry, and the others stay. It is
+written whole to a temporary file beside it and renamed over it, so nothing ever reads half of one, and a symbolic link
+in its place is not followed. Each entry says when it expires: an expired one is not sent, and what would have sent it
+says to run `downtrace login` again.
+
+A file that other users can read or write, that belongs to another user or that is a symbolic link is not used, the
+way ssh refuses a private key others can read: what reads it says why, and `chmod 600` on the file, or another login,
+which writes it 0600, makes it usable again.
+
+When the credential cannot be kept —a directory that cannot be written, or a file login cannot read, which it leaves
+as it is— login still exits 0, says why and prints the credential instead, because an approval is collected once. With
+`--no-store` it keeps nothing and prints the credential, with the MCP server's configuration that carries it as
+`DOWNTRACE_TOKEN`: where it is kept is then yours, and an access credential, `dtr_…`, stays out of a repository.
 
 | Option | What it is |
 |---|---|
@@ -28,7 +46,8 @@ What it prints is shown once. It writes nothing to disk: where it is kept is you
 | `--name <name>` | The project's name when it is new; the slug when not given |
 | `--rotate-token` | For a project that already exists, mint the environment's ingestion token too, replacing the one it has |
 | `--url <cloud>` | Another cloud, `https://`; `http://` only for `localhost`. `DOWNTRACE_URL` when not given, and without either Downtrace's cloud, whose address `--help` prints |
-| `--json` | Prints the result as JSON (`schema: "downtrace.login/1"`), for a coding agent; `ingestToken` is `null` when none was minted |
+| `--no-store` | Keeps nothing on disk, and prints the access credential instead |
+| `--json` | Prints the result as JSON (`schema: "downtrace.login/1"`), for a coding agent; `ingestToken` is `null` when none was minted. `accessCredential.storedIn` is the file the credential was kept in, and then its `token` is `null`; when it was not kept, `storedIn` is `null`, `token` is the credential and `notStored` says why |
 
 For a project that is already the person's, an environment with no token yet gets its first one, which replaces
 nothing. An environment that has one keeps it: login hands over a credential and **no ingestion token**, and the token

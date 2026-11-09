@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { unsupportedNode } from "./node-floor.ts";
 
@@ -27,6 +27,8 @@ if (unsupported !== undefined) {
   process.exitCode = await runLogin({
     argv: process.argv.slice(3),
     env: process.env,
+    home: homedir(),
+    uid: process.getuid?.(),
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
     signal: abort.signal,

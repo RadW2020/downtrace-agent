@@ -1,12 +1,15 @@
 /**
  * `downtrace login`: a coding agent asks a Downtrace cloud for a project, one environment and a level of access, and
  * the person approves it once in the browser, the way `gh auth login` does (RFC 8628, the device authorization grant).
- * It prints a code and a link, waits for the approval, and prints what it received: an ingestion token for that
+ * It prints a code and a link, waits for the approval, and hands over what it received: an ingestion token for that
  * environment, which only sends data, and an access credential of that level, which reads that project and no other.
  *
- * It never sees the person's sign-in, and it writes nothing to disk: where the token and the credential are kept is the
- * person's choice, and the coding agent's.
+ * It never sees the person's sign-in. It keeps the access credential in the user's configuration directory, readable
+ * by that user alone (`store.ts`), where the MCP server finds it, so a coding agent never has to copy it anywhere; `--no-store` keeps nothing and prints it instead. The ingestion token is printed: it only
+ * sends, and goes where the backend reads it.
  */
+
+import { CredentialStoreError, credentialsPath, storeCredential } from "./store.ts";
 
 /**
  * Downtrace's cloud: the one `login` asks when neither `--url` nor `DOWNTRACE_URL` names another. This is the one place
@@ -19,8 +22,15 @@ export const DOWNTRACE_CLOUD = "https://downtrace.uliber.com";
 export interface LoginDeps {
   /** The words after `downtrace login`. */
   argv: readonly string[];
-  /** The environment, read once at start-up: `DOWNTRACE_URL` when `--url` is not given, else Downtrace's cloud. */
+  /**
+   * The environment, read once at start-up: `DOWNTRACE_URL` when `--url` is not given, else Downtrace's cloud; and
+   * `XDG_CONFIG_HOME`, where the credential is kept.
+   */
   env: NodeJS.ProcessEnv;
+  /** The user's home directory: the credential is kept under its `.config` when `XDG_CONFIG_HOME` names none. */
+  home: string;
+  /** The user the credentials file belongs to; undefined where files have no POSIX owner. */
+  uid: number | undefined;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
   signal: AbortSignal | undefined;
@@ -36,13 +46,15 @@ export interface LoginDeps {
 }
 
 export const LOGIN_USAGE = `Usage: downtrace login --project <slug> [--env <environment>] [--level read|operate] [--name <name>]
-                       [--rotate-token] [--url <cloud>] [--json]
+                       [--rotate-token] [--url <cloud>] [--no-store] [--json]
 
 login asks Downtrace's cloud, or the one --url names, for a project and connects a coding agent to it, with no
 operator in between. It prints a link and a code; the person opens the link, signs in with GitHub and approves
-once. Then it prints an access credential for that project, restricted to that one environment, and, when the
-environment has no token yet, an ingestion token for it, which only sends data. An environment of the person's that
-already has a token keeps it, and login prints only the credential, unless --rotate-token asks to replace it.
+once. Then it keeps an access credential for that project, restricted to that one environment, in
+$XDG_CONFIG_HOME/downtrace/credentials.json (~/.config/downtrace without it), readable by you alone, where the MCP
+server finds it; and, when the environment has no token yet, it prints an ingestion token for it, which only sends
+data. An environment of the person's that already has a token keeps it, and login hands over only the
+credential, unless --rotate-token asks to replace it.
 
 Options of login:
   --project <slug>     the project: lowercase letters, digits and dashes
@@ -53,6 +65,7 @@ Options of login:
                        one is collected
   --url <cloud>        the cloud, https:// (http:// only for localhost); default DOWNTRACE_URL, and without it
                        Downtrace's cloud, ${DOWNTRACE_CLOUD}
+  --no-store           keep nothing on disk, and print the access credential instead
   --json               print the result as JSON, for a coding agent
 
 Exit status of login: 0 approved, 1 not approved (denied, expired, full, unreachable), 2 a usage error.
@@ -74,6 +87,8 @@ interface LoginArgs {
   rotateToken: boolean;
   url: string;
   json: boolean;
+  /** Keep the access credential in the credentials file; false with `--no-store`. */
+  store: boolean;
 }
 
 type ParsedLogin = { kind: "login"; args: LoginArgs } | { kind: "help" } | { kind: "error"; message: string };
@@ -83,6 +98,7 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
   const values: Record<string, string | undefined> = {};
   let json = false;
   let rotateToken = false;
+  let store = true;
   const flags = new Set(["--project", "--env", "--level", "--name", "--url"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
@@ -93,6 +109,10 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
     }
     if (arg === "--rotate-token") {
       rotateToken = true;
+      continue;
+    }
+    if (arg === "--no-store") {
+      store = false;
       continue;
     }
     const [flag, inline] = arg.includes("=")
@@ -128,6 +148,7 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
       rotateToken,
       url,
       json,
+      store,
     },
   };
 }
@@ -167,13 +188,18 @@ export interface LoginResult {
   replaced: boolean;
   accessCredential: {
     id: string;
-    token: string;
+    /** The secret, or null when it was stored: it is printed only when it is kept nowhere else. */
+    token: string | null;
     level: string;
     onBehalfOf: string;
     /** The environments it reaches. */
     environments: string[];
     /** When it stops opening anything, RFC 3339; empty when the cloud did not say. */
     expiresAt: string;
+    /** The file it was kept in, or null when it was not. */
+    storedIn: string | null;
+    /** Why it was not kept, `--no-store` or what stopped it, or null when it was. */
+    notStored: string | null;
   };
 }
 
@@ -198,14 +224,55 @@ export async function runLogin(deps: LoginDeps): Promise<number> {
     return 2;
   }
   const { args } = parsed;
-  const outcome = await login(args, deps);
-  if (outcome.status === "approved") {
+  const collected = await login(args, deps);
+  if (collected.status === "approved") {
+    const outcome = args.store
+      ? await keep(collected, deps)
+      : withCredential(collected, { storedIn: null, notStored: NOT_ASKED });
     deps.stdout(args.json ? `${JSON.stringify(outcome, null, 2)}\n` : renderApproved(outcome));
     return 0;
   }
-  if (args.json) deps.stdout(`${JSON.stringify(outcome, null, 2)}\n`);
-  else deps.stderr(`downtrace login: ${outcome.message}\n`);
+  if (args.json) deps.stdout(`${JSON.stringify(collected, null, 2)}\n`);
+  else deps.stderr(`downtrace login: ${collected.message}\n`);
   return 1;
+}
+
+/** Why a credential was not kept when `--no-store` asked so: printed, as `notStored`, with nothing to fix. */
+const NOT_ASKED = "--no-store asked not to keep it";
+
+/**
+ * Keeps the credential in the credentials file and takes it out of what is printed. The login is approved and the
+ * code collected, which cannot be done twice, so a credential that cannot be kept is printed instead, with why.
+ */
+async function keep(r: LoginResult, deps: LoginDeps): Promise<LoginResult> {
+  const { token } = r.accessCredential;
+  if (token === null) return r;
+  const path = credentialsPath(deps.env, deps.home);
+  try {
+    await storeCredential(
+      {
+        url: r.url,
+        project: r.project.slug,
+        environment: r.environment,
+        environments: r.accessCredential.environments,
+        level: r.accessCredential.level,
+        id: r.accessCredential.id,
+        token,
+        onBehalfOf: r.accessCredential.onBehalfOf,
+        expiresAt: r.accessCredential.expiresAt,
+      },
+      { path, uid: deps.uid },
+    );
+  } catch (err) {
+    // Said, and never thrown: thrown, it would lose a credential that cannot be collected again.
+    const why = err instanceof CredentialStoreError ? err.message : `${path} could not be written`;
+    return withCredential(r, { storedIn: null, notStored: why });
+  }
+  return withCredential(r, { token: null, storedIn: path, notStored: null });
+}
+
+function withCredential(r: LoginResult, change: Partial<LoginResult["accessCredential"]>): LoginResult {
+  return { ...r, accessCredential: { ...r.accessCredential, ...change } };
 }
 
 const fail = (reason: string, message: string): LoginFailure => ({
@@ -345,6 +412,8 @@ function readDelivery(body: unknown, askedUrl: string): LoginResult | undefined 
         ? environments.filter((e): e is string => typeof e === "string").map(printable)
         : [],
       expiresAt: field(access, "expires_at") ?? "",
+      storedIn: null,
+      notStored: null,
     },
   };
 }
@@ -358,18 +427,14 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
-/** What a person reads: what was granted, the two lines to paste, and what each one can do. */
+/** What a person reads: what was granted, where the credential is, what to paste, and what each one can do. */
 export function renderApproved(r: LoginResult): string {
+  const { token, storedIn, notStored } = r.accessCredential;
+  // A stored credential is found by the MCP server in the file, so its configuration names the cloud and no secret.
+  const env: Record<string, string> =
+    token === null ? { DOWNTRACE_URL: r.url } : { DOWNTRACE_URL: r.url, DOWNTRACE_TOKEN: token };
   const mcp = JSON.stringify(
-    {
-      mcpServers: {
-        downtrace: {
-          command: "npx",
-          args: ["-y", "@downtrace/mcp"],
-          env: { DOWNTRACE_URL: r.url, DOWNTRACE_TOKEN: r.accessCredential.token },
-        },
-      },
-    },
+    { mcpServers: { downtrace: { command: "npx", args: ["-y", "@downtrace/mcp"], env } } },
     null,
     2,
   );
@@ -377,7 +442,7 @@ export function renderApproved(r: LoginResult): string {
   const expires = r.accessCredential.expiresAt === "" ? "" : ` It expires at ${r.accessCredential.expiresAt}.`;
   const reaches =
     r.accessCredential.environments.length === 0 ? "" : `, restricted to ${r.accessCredential.environments.join(", ")}`;
-  const token =
+  const ingest =
     r.ingestToken === null
       ? [
           `No ingestion token: ${r.project.slug} existed, and the token of ${r.environment} stays as it is. To replace it,`,
@@ -393,17 +458,28 @@ export function renderApproved(r: LoginResult): string {
   return [
     `Approved: project ${r.project.slug}, environment ${r.environment}.`,
     "",
-    ...token,
+    ...ingest,
     "",
     `The access credential, level ${r.accessCredential.level}${behalf}, for ${r.project.slug}${reaches}.${expires}`,
-    "Keep it where your coding agent keeps secrets. The MCP server's configuration with it:",
+    ...(storedIn !== null
+      ? [
+          `It is stored in ${storedIn}, readable by you alone, where the MCP server finds it, so it is not printed.`,
+          "The MCP server's configuration:",
+        ]
+      : [
+          ...(notStored !== null && notStored !== NOT_ASKED ? [`It could not be stored: ${notStored}.`] : []),
+          "Keep it where your coding agent keeps secrets. The MCP server's configuration with it:",
+        ]),
     mcp
       .split("\n")
       .map((line) => `  ${line}`)
       .join("\n"),
     "",
-    r.ingestToken === null ? "It is shown only once." : "Both are shown only once.",
-    "",
+    ...(token === null
+      ? r.ingestToken === null
+        ? []
+        : ["The ingestion token is shown only once.", ""]
+      : [r.ingestToken === null ? "It is shown only once." : "Both are shown only once.", ""]),
   ].join("\n");
 }
 

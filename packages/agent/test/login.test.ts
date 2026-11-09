@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { DOWNTRACE_CLOUD, LOGIN_SCHEMA, LOGIN_USAGE, parseLoginArgs, runLogin } from "../src/login/command.ts";
+import { CREDENTIALS_SCHEMA, credentialsPath } from "../src/login/store.ts";
 import { readDocumentation } from "./support/documentation.ts";
 
 /**
@@ -23,10 +25,19 @@ interface FakeCloud {
 }
 
 const servers: Server[] = [];
+/** The home directory each login is given: one of its own under the system's temporary one, never the user's. */
+const homes: string[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
+
+async function aHome(): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "downtrace-login-"));
+  homes.push(home);
+  return home;
+}
 
 /** A cloud answering the code request with `code` and each poll with the next of `polls`. */
 async function cloud(code: Answer, polls: Answer[]): Promise<FakeCloud> {
@@ -88,15 +99,18 @@ const approved: Answer = {
   },
 };
 
-/** Runs login with the clock moved by each wait, and what it printed. */
-async function login(argv: string[], env: NodeJS.ProcessEnv = {}, signal?: AbortSignal) {
+/** Runs login with the clock moved by each wait, in a home of its own unless given one, and what it printed. */
+async function login(argv: string[], env: NodeJS.ProcessEnv = {}, signal?: AbortSignal, home?: string) {
   let clock = 0;
   const waits: number[] = [];
   let stdout = "";
   let stderr = "";
+  const at = home ?? (await aHome());
   const code = await runLogin({
     argv,
     env,
+    home: at,
+    uid: process.getuid?.(),
     stdout: (t) => {
       stdout += t;
     },
@@ -111,13 +125,14 @@ async function login(argv: string[], env: NodeJS.ProcessEnv = {}, signal?: Abort
       clock += ms;
     },
   });
-  return { code, stdout, stderr, waits };
+  return { code, stdout, stderr, waits, home: at };
 }
 
 describe("downtrace login", () => {
   it("asks for the project, waits for the approval and prints what it received, once", async () => {
     const c = await cloud(aCode, [pending, { status: 400, body: { error: "slow_down" } }, pending, approved]);
-    const run = await login(["--project", "nidus-api", "--env", "staging", "--level", "operate"], {
+    // What it prints when asked to keep nothing, as it did before it kept the credential (RF-611).
+    const run = await login(["--project", "nidus-api", "--env", "staging", "--level", "operate", "--no-store"], {
       DOWNTRACE_URL: `${c.url}/`,
     });
 
@@ -145,7 +160,7 @@ describe("downtrace login", () => {
 
   it("prints the result as JSON for a coding agent, and says when a token was replaced", async () => {
     const c = await cloud(aCode, [{ status: 200, body: { ...(approved.body as object), replaced: true } }]);
-    const run = await login(["--project", "nidus-api", "--url", c.url, "--json"]);
+    const run = await login(["--project", "nidus-api", "--url", c.url, "--json", "--no-store"]);
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       schema: LOGIN_SCHEMA,
@@ -162,6 +177,8 @@ describe("downtrace login", () => {
         onBehalfOf: "octocat",
         environments: ["staging"],
         expiresAt: "2027-02-04T10:00:00Z",
+        storedIn: null,
+        notStored: "--no-store asked not to keep it",
       },
     });
     // Production and read when nothing else is asked for.
@@ -311,6 +328,158 @@ describe("downtrace login and a cloud it does not trust blindly", () => {
   });
 });
 
+/** What a file's permissions are, without its type. */
+const modeOf = async (path: string): Promise<number> => (await stat(path)).mode & 0o777;
+
+describe("downtrace login keeps the credential it collected", () => {
+  it("in a file only its user reads, and prints it no second time", async () => {
+    // covers: RF-611
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--env", "staging", "--url", c.url, "--json"]);
+    expect(run.code).toBe(0);
+    const file = credentialsPath({}, run.home);
+    const result = JSON.parse(run.stdout) as { accessCredential: Record<string, unknown>; ingestToken: unknown };
+    expect(result.accessCredential).toEqual({
+      id: "c-1",
+      token: null,
+      level: "operate",
+      onBehalfOf: "octocat",
+      environments: ["staging"],
+      expiresAt: "2027-02-04T10:00:00Z",
+      storedIn: file,
+      notStored: null,
+    });
+    // The ingestion token only sends, and goes where the backend reads it: login still prints it, once.
+    expect(result.ingestToken).toBe("dt_ingest");
+    expect(run.stdout).not.toContain("dtr_access");
+    expect(run.stderr).not.toContain("dtr_access");
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+      schema: CREDENTIALS_SCHEMA,
+      credentials: [
+        {
+          url: c.url,
+          project: "nidus-api",
+          environment: "staging",
+          environments: ["staging"],
+          level: "operate",
+          id: "c-1",
+          token: "dtr_access",
+          onBehalfOf: "octocat",
+          expiresAt: "2027-02-04T10:00:00Z",
+        },
+      ],
+    });
+    if (process.platform !== "win32") {
+      expect(await modeOf(file)).toBe(0o600);
+      expect(await modeOf(dirname(file))).toBe(0o700);
+    }
+  });
+
+  it("says where in its text, with the MCP server's configuration and no credential in it", async () => {
+    // covers: RF-611
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--env", "staging", "--url", c.url]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`It is stored in ${credentialsPath({}, run.home)}, readable by you alone`);
+    expect(run.stdout).toContain(`"DOWNTRACE_URL": "${c.url}"`);
+    expect(run.stdout).not.toContain('"DOWNTRACE_TOKEN"');
+    expect(run.stdout).not.toContain("dtr_access");
+    expect(run.stdout).toContain(`DOWNTRACE_TOKEN=dt_ingest DOWNTRACE_URL=${c.url}`);
+    expect(run.stdout).toContain("The ingestion token is shown only once.");
+  });
+
+  it("under $XDG_CONFIG_HOME when it names a directory", async () => {
+    // covers: RF-611
+    const xdg = await aHome();
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--url", c.url, "--json"], { XDG_CONFIG_HOME: xdg });
+    expect(JSON.parse(run.stdout).accessCredential.storedIn).toBe(join(xdg, "downtrace", "credentials.json"));
+    expect(await readdir(run.home)).toEqual([]);
+  });
+
+  it("writes nothing with --no-store, and prints the credential as it did", async () => {
+    // covers: RF-611
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--url", c.url, "--no-store"]);
+    expect(run.code).toBe(0);
+    expect(await readdir(run.home)).toEqual([]);
+    expect(run.stdout).toContain('"DOWNTRACE_TOKEN": "dtr_access"');
+    expect(run.stdout).toContain("Both are shown only once.");
+  });
+
+  it("replaces the entry of the same cloud and project, and keeps another project's", async () => {
+    // covers: RF-611
+    const home = await aHome();
+    const withCredential = (project: string, token: string): Answer => ({
+      status: 200,
+      body: {
+        ...(approved.body as object),
+        project: { slug: project, name: project },
+        access_credential: { ...(approved.body as { access_credential: object }).access_credential, token },
+      },
+    });
+    // One cloud, answering three logins in turn.
+    const c = await cloud(aCode, [
+      withCredential("nidus-api", "dtr_first"),
+      withCredential("shop-api", "dtr_shop"),
+      withCredential("nidus-api", "dtr_second"),
+    ]);
+    for (const project of ["nidus-api", "shop-api", "nidus-api"]) {
+      const run = await login(["--project", project, "--url", c.url], {}, undefined, home);
+      expect(run.code).toBe(0);
+    }
+    const stored = JSON.parse(await readFile(credentialsPath({}, home), "utf8")) as {
+      credentials: { url: string; project: string; token: string }[];
+    };
+    expect(stored.credentials.map((e) => [e.url, e.project, e.token])).toEqual([
+      [c.url, "shop-api", "dtr_shop"],
+      [c.url, "nidus-api", "dtr_second"],
+    ]);
+  });
+
+  it("says why when it cannot keep it, prints it instead, and still exits 0", async () => {
+    // covers: RF-611
+    // Approved and collected: the code cannot be collected twice, so the credential is printed rather than lost.
+    const home = await aHome();
+    await writeFile(join(home, ".config"), "a file where the directory would be");
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--url", c.url, "--json"], {}, undefined, home);
+    expect(run.code).toBe(0);
+    const credential = JSON.parse(run.stdout).accessCredential;
+    expect(credential.token).toBe("dtr_access");
+    expect(credential.storedIn).toBeNull();
+    expect(credential.notStored).toContain(join(home, ".config"));
+    expect(credential.notStored).not.toContain("dtr_");
+
+    const text = await cloud(aCode, [approved]);
+    const said = await login(["--project", "nidus-api", "--url", text.url], {}, undefined, home);
+    expect(said.code).toBe(0);
+    expect(said.stdout).toContain("It could not be stored:");
+    expect(said.stdout).toContain('"DOWNTRACE_TOKEN": "dtr_access"');
+  });
+
+  it("leaves a file it cannot read as it is", async () => {
+    // covers: RF-611
+    const home = await aHome();
+    const file = credentialsPath({}, home);
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    await writeFile(file, "not json", { mode: 0o600 });
+    const c = await cloud(aCode, [approved]);
+    const run = await login(["--project", "nidus-api", "--url", c.url, "--json"], {}, undefined, home);
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).accessCredential).toMatchObject({ token: "dtr_access", storedIn: null });
+    expect(JSON.parse(run.stdout).accessCredential.notStored).toContain("not JSON");
+    expect(await readFile(file, "utf8")).toBe("not json");
+  });
+
+  it("stores nothing when the login is not approved", async () => {
+    const c = await cloud(aCode, [{ status: 400, body: { error: "access_denied" } }]);
+    const run = await login(["--project", "nidus-api", "--url", c.url]);
+    expect(run.code).toBe(1);
+    expect(await readdir(run.home)).toEqual([]);
+  });
+});
+
 /**
  * Runs login against Downtrace's cloud, whose address is not this machine's: `fetch` is stood in, answering each path
  * with what `answers` scripts, so nothing leaves the machine.
@@ -323,6 +492,8 @@ async function loginToDowntraceCloud(argv: string[], answers: Record<string, Ans
   const code = await runLogin({
     argv,
     env: {},
+    home: await aHome(),
+    uid: process.getuid?.(),
     stdout: (t) => {
       stdout += t;
     },
@@ -464,8 +635,10 @@ describe("the command line of downtrace login", () => {
         rotateToken: true,
         url: "https://c",
         json: false,
+        store: true,
       },
     });
+    expect(parseLoginArgs(["--project=x", "--no-store"], {})).toMatchObject({ kind: "login", args: { store: false } });
     for (const local of ["http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"]) {
       expect(parseLoginArgs(["--project=x", `--url=${local}`], {}).kind, local).toBe("login");
     }
