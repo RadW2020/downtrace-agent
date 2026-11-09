@@ -271,7 +271,9 @@ export function createServer(opts: ServerOptions) {
           capabilities: { tools: {} },
           serverInfo: { name: SERVER_NAME, version: opts.version },
           instructions:
-            "Downtrace is a flight recorder for a backend. Start at `read_credential` when you do not know " +
+            "Downtrace is a flight recorder for a backend. Start a session at `project_brief`: the project's state " +
+            "in one bounded answer, each item with the tool and the arguments that read its detail. " +
+            "Start at `read_credential` when you do not know " +
             "the project's slug: it names the project your credential belongs to, its level, and which " +
             "routes it opens. `list_errors` is every error it has observed, " +
             "from the first one and with no traffic minimum; by default it lists the ones waiting for " +

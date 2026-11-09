@@ -37,6 +37,33 @@ describe("the README", () => {
   });
 });
 
+/**
+ * RF-523: a session starts at the brief. The table of tools is where a reader of the README looks for where to start,
+ * and it said so of `read_report`, which needs a finding's id a session has not read yet, and «ask it first» of
+ * `changes_since`, which says what changed and not how the project is.
+ */
+describe("the table of tools", () => {
+  const rows = readme
+    .split("\n")
+    .filter((line) => /^\| `[a-z_]+`/.test(line))
+    .map((line) => ({ tools: line.split(" | ")[0] ?? "", says: line.slice(line.indexOf(" | ") + 3) }));
+
+  it("puts the brief first, as where to start", () => {
+    // covers: RF-523
+    expect(rows[0]?.tools).toBe("| `project_brief`");
+    expect(rows[0]?.says).toMatch(/^\*\*start here\*\*/);
+  });
+
+  it("says start here of no other tool, and keeps changes_since for what changed since you last looked", () => {
+    // covers: RF-523
+    for (const row of rows.slice(1)) {
+      expect(row.says, row.tools).not.toMatch(/start here|ask it first when a session starts/i);
+    }
+    const changes = rows.find((row) => row.tools === "| `changes_since`");
+    expect(changes?.says).toMatch(/^\*\*for what changed since you last looked\*\*/);
+  });
+});
+
 describe("what the package is listed by", () => {
   it("on the MCP Registry, is the README's first sentence, in the hundred characters the registry allows", () => {
     expect(firstSentence).not.toBe("");

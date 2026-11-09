@@ -134,6 +134,49 @@ const version = {
 } as const;
 
 export const tools: Tool[] = [
+  // First, because a session starts here (RF-523): a client lists the tools in this order, and a coding agent with no
+  // context reads the first ones first.
+  {
+    name: "project_brief",
+    description:
+      "Start here, when a session starts: the project's state in one answer of at most 16 KiB, whatever the " +
+      "project's size, and from each part of it where to read more. `headline` is a sentence of counts that names " +
+      "no route. `telemetry` says whether a batch arrived in the window, for the project and for each environment, " +
+      "with when each last sent: when `telemetry.arrivedSince` is false the brief is missing telemetry, **not** a " +
+      "project with nothing to attend to, however empty its lists. `attention` ranks what needs it: the open " +
+      "findings, newest first, the episodes of lost coverage, the errors first seen in the window, the ones back " +
+      "after being resolved, the newest deploy of each environment with its comparison reduced to counts or why " +
+      "there is none, and the errors nobody filed seen again, each error with its text under `fromService`. " +
+      "`routes` are the busiest of the last hour, with their numbers as numbers —requests, `errorShare`, `p95Ms`, " +
+      "`operationsPerRequest`— and the window each family of detectors judges them over. `hotspots` are the routes " +
+      "whose requests run one operation more than once each, the operation named by its kind and hash and never by " +
+      "its text: where a query run once per row shows, and not proof of one. `unknowns` is what cannot be said: " +
+      "routes no detector judges yet, environments that notify nobody, silences in force and the readiness' own " +
+      "steps. Every list says its `total` and how many it `leftOut`, and every item says what to read next under " +
+      "`next`: `tool`, a tool of this server, with its `arguments`, to call as they are, and `api`, the same read " +
+      "as a path of the API. The brief's own `next` is `changes_since` from its `until`, the question for the rest " +
+      "of the session. Past 16 KiB it leaves out hotspots first, then routes, unknowns, environments and, last, what " +
+      "needs attention, and says so in `limits`. `since` decides what is new, the last 24 hours when it is not " +
+      "given; one that is not in the past is refused with 400. It takes the project's slug, which " +
+      "`read_credential` names when you do not know it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        since: {
+          type: "string",
+          format: "date-time",
+          description:
+            "RFC 3339 instant in the past: what happened after it is new, in `telemetry` and `attention`. The " +
+            "last 24 hours when it is not given.",
+        },
+      },
+      required: ["project"],
+    },
+    method: "GET",
+    path: "/api/p/{slug}/brief",
+    query: ["since"],
+  },
   {
     name: "read_credential",
     description:
@@ -260,9 +303,9 @@ export const tools: Tool[] = [
   {
     name: "changes_since",
     description:
-      "What changed in a project since an instant: **ask it first when a session starts**, with the instant you " +
-      "last looked, instead of listing the findings, the errors, the deploys and the coverage and diffing them " +
-      "yourself. It lists what opened, closed or was first seen after `since` and up to `until`, newest first, one " +
+      "What changed in a project since you last looked: once `project_brief` has said how the project is, this is " +
+      "the question for the rest of the session, from the `until` of the brief or of the last answer, instead of " +
+      "listing the findings, the errors, the deploys and the coverage and diffing them yourself. It lists what opened, closed or was first seen after `since` and up to `until`, newest first, one " +
       "item for each thing with all its `events` in the window: a `finding` that opened (when a second check " +
       "confirmed it) or closed, an `error` first seen, a `deploy` first seen —with the version it followed and, " +
       "when it is the newest of its environment, its comparison with that one reduced to counts, or why there is " +
@@ -351,7 +394,7 @@ export const tools: Tool[] = [
     description:
       "The report of a finding: facts, hypotheses with their state and evidence, the overall confidence " +
       "level with the fields its reasons come from, recommendations tied to the hypothesis they rest on, and " +
-      "everything it cannot say. Start here. It carries a `version`, and that is the one `close_finding`, " +
+      "everything it cannot say. Read it before any decision on a finding. It carries a `version`, and that is the one `close_finding`, " +
       "`accept_reference` and `assess_hypothesis` take: they are decisions on this report, and the cloud " +
       "refuses them without changing anything if the report moved since.",
     inputSchema: { type: "object", properties: { project, finding }, required: ["project", "finding"] },
