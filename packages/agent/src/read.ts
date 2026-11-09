@@ -12,7 +12,9 @@ import { causeOf } from "./verify.ts";
  * `brief` reads the project's brief: what needs attention, each item with the path that has its detail. `api` reads
  * any such path, so the two read whatever the MCP server reads, with no command per tool. They only read: `api` sends
  * GET to the cloud configured, under a project's API, and refuses anything else before it sends anything. Operations
- * stay in the MCP server, which carries their idempotency keys.
+ * stay in the MCP server, which carries their idempotency keys. `brief --deploy` reads a deployed version's verdict,
+ * and with `--wait` waits for it, so that a coding agent that just deployed leaves it running instead of reading the
+ * brief each turn; its exit status is the verdict.
  *
  * The credential is `DOWNTRACE_TOKEN`, as the MCP server's is, unless it holds an ingestion token, which is what the
  * instrumentation reads from the same variable and reads nothing; otherwise the one `downtrace login` stored for the
@@ -37,8 +39,13 @@ export interface ReadDeps {
   fetchImpl?: typeof fetch;
   /** How long the request may take, its body included; `READ_TIMEOUT_MS` unless a test says less. */
   timeoutMs?: number | undefined;
-  /** The instant, in milliseconds since the epoch, a stored credential's expiry is compared with. */
+  /** The instant, in milliseconds since the epoch, a stored credential's expiry and a wait's deadline are read on. */
   now: () => number;
+  /**
+   * How `brief --wait` waits between two reads: a timer that the command's signal ends early, unless a test stands one
+   * in. It never throws.
+   */
+  sleep?: (ms: number, signal: AbortSignal | undefined) => Promise<void>;
 }
 
 /** The shape of a failure printed with `--json`, versioned so a coding agent can tell a change in it. */
@@ -46,6 +53,12 @@ export const READ_SCHEMA = "downtrace.read/1";
 
 /** How long one request to the cloud may take, its body included. */
 export const READ_TIMEOUT_MS = 30_000;
+
+/**
+ * How long `brief --wait` waits between two reads: what the cloud's `retryAfterSeconds` says, within these bounds, and
+ * the default when it says nothing or the read failed. The longest `--wait` is the day of deploys the brief says.
+ */
+export const WAIT_BOUNDS = { minMs: 5_000, maxMs: 300_000, defaultMs: 60_000, longestMs: 24 * 3_600_000 };
 
 /** What starts an ingestion token: it only sends, and the cloud's every read answers it as no credential at all. */
 const INGEST_PREFIX = "dt_";
@@ -62,6 +75,10 @@ interface ReadArgs {
   project: string | undefined;
   /** `brief`: `--since`, as given: the cloud says what it takes. */
   since: string | undefined;
+  /** `brief`: `--deploy`, the version whose verdict is read, as given: the cloud says what it takes. */
+  deploy: string | undefined;
+  /** `brief`: `--wait`, in milliseconds; 0 when not given, which is one read. */
+  waitMs: number;
   url: string | undefined;
   json: boolean;
 }
@@ -73,7 +90,7 @@ export function parseReadArgs(command: "brief" | "api", argv: readonly string[])
   const values: Record<string, string> = {};
   const words: string[] = [];
   let json = false;
-  const flags = command === "brief" ? ["--project", "--since", "--url"] : ["--url"];
+  const flags = command === "brief" ? ["--project", "--since", "--deploy", "--wait", "--url"] : ["--url"];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
     if (arg === "-h" || arg === "--help") return { kind: "help" };
@@ -88,10 +105,13 @@ export function parseReadArgs(command: "brief" | "api", argv: readonly string[])
       values[flag] = value;
     }
   }
+  const wait = values["--wait"] === undefined ? 0 : durationMs(values["--wait"]);
   const args: ReadArgs = {
     path: undefined,
     project: values["--project"],
     since: values["--since"],
+    deploy: values["--deploy"],
+    waitMs: wait ?? 0,
     url: values["--url"],
     json,
   };
@@ -101,10 +121,26 @@ export function parseReadArgs(command: "brief" | "api", argv: readonly string[])
     if (args.project !== undefined && !isSlug(args.project)) {
       return { kind: "error", message: `--project is not a project's slug: ${JSON.stringify(args.project)}` };
     }
+    if (wait === undefined || wait > WAIT_BOUNDS.longestMs) {
+      return {
+        kind: "error",
+        message: `--wait is a duration of 24 hours at most, such as 90s, 10m or 1h: ${JSON.stringify(printable(values["--wait"] ?? ""))}`,
+      };
+    }
+    if (values["--wait"] !== undefined && args.deploy === undefined) {
+      return { kind: "error", message: "--wait waits for a deploy's verdict: name its version with --deploy" };
+    }
     return { kind: "read", args };
   }
   if (words.length !== 1) return { kind: "error", message: "api reads one path: downtrace api /api/p/<slug>/<what>" };
   return { kind: "read", args: { ...args, path: words[0] } };
+}
+
+/** A duration as `--wait` takes it, in milliseconds: whole seconds, minutes or hours, seconds with no unit. */
+function durationMs(text: string): number | undefined {
+  const match = /^(\d{1,6})([smh]?)$/.exec(text);
+  if (match === null) return undefined;
+  return Number(match[1]) * { "": 1_000, s: 1_000, m: 60_000, h: 3_600_000 }[match[2] as "" | "s" | "m" | "h"];
 }
 
 /** A failure: what went wrong, said in a line, and the cloud's status when it was the cloud that refused. */
@@ -134,7 +170,8 @@ export async function runRead(deps: ReadDeps): Promise<number> {
   const said = (failure: Failure): number => {
     if (args.json) deps.stdout(`${JSON.stringify({ schema: READ_SCHEMA, status: "failed", ...failure }, null, 2)}\n`);
     else deps.stderr(`downtrace ${deps.command}: ${failure.message}\n`);
-    return failure.reason === "refused" ? 1 : 2;
+    // With --deploy, 1 is the verdict `worse` and nothing else: a refusal is one more way of having no verdict.
+    return failure.reason === "refused" && args.deploy === undefined ? 1 : 2;
   };
 
   const asked = args.path === undefined ? undefined : apiPath(args.path, cloud.url);
@@ -142,39 +179,212 @@ export async function runRead(deps: ReadDeps): Promise<number> {
   const credential = await credentialFor(cloud.url, asked?.project ?? args.project, deps);
   if ("reason" in credential) return said(credential);
   const { project } = credential;
-  const since = args.since === undefined ? "" : `?since=${encodeURIComponent(args.since)}`;
+  const query = Object.entries({ since: args.since, deploy: args.deploy })
+    .flatMap(([name, value]) => (value === undefined ? [] : [`${name}=${encodeURIComponent(value)}`]))
+    .join("&");
   // The brief's path is read as `api` reads any: a slug from the credentials file is held to the same rules.
-  const target = asked ?? apiPath(`/api/p/${project}/brief${since}`, cloud.url);
+  const target = asked ?? apiPath(`/api/p/${project}/brief${query === "" ? "" : `?${query}`}`, cloud.url);
   if ("reason" in target) return said(fail("refused-path", target.reason));
+  const url = `${cloud.url}${target.path}`;
+  if (args.deploy !== undefined) {
+    const waiting = { url, cloud: cloud.url, project, version: args.deploy, waitMs: args.waitMs, json: args.json };
+    return waitForVerdict(waiting, credential, said, deps);
+  }
 
-  const origin = new URL(cloud.url).origin;
-  const got = await get(`${cloud.url}${target.path}`, credential.token, deps);
+  const got = await readAnswer(url, credential, cloud.url, deps);
   if ("reason" in got) return said(got);
+  if (deps.command === "api" || args.json) deps.stdout(withNewline(got.text));
+  else deps.stdout(renderBrief(got.body, project));
+  return 0;
+}
+
+const withNewline = (text: string): string => (text.endsWith("\n") ? text : `${text}\n`);
+
+type Answered = { text: string; body: unknown };
+
+/** One read of the cloud: its answer as it came and as JSON, or why there is none. It never throws. */
+async function readAnswer(
+  url: string,
+  credential: Credential,
+  cloud: string,
+  deps: ReadDeps,
+): Promise<Answered | Failure> {
+  const origin = new URL(cloud).origin;
+  const got = await get(url, credential.token, deps);
+  if ("reason" in got) return got;
   const { status, text } = got;
   if (status >= 300 && status < 400) {
     const to = got.location === null ? "" : ` to ${JSON.stringify(printable(got.location))}`;
-    return said(
-      fail(
-        "bad-answer",
-        `the cloud at ${origin} answered ${status}, a redirect${to}, which is not followed: the credential goes to that cloud alone`,
-      ),
+    return fail(
+      "bad-answer",
+      `the cloud at ${origin} answered ${status}, a redirect${to}, which is not followed: the credential goes to that cloud alone`,
     );
   }
   if (status >= 400 && status < 500) {
-    const message = `the cloud at ${origin} answered ${status}: ${wordsOf(text)}${status === 401 ? notTaken(credential, cloud.url) : ""}`;
-    return said({ reason: "refused", httpStatus: status, message });
+    const message = `the cloud at ${origin} answered ${status}: ${wordsOf(text)}${status === 401 ? notTaken(credential, cloud) : ""}`;
+    return { reason: "refused", httpStatus: status, message };
   }
   if (status < 200 || status >= 300)
-    return said(fail("cloud-error", `the cloud at ${origin} answered ${status}: ${wordsOf(text)}`));
-  let body: unknown;
+    return fail("cloud-error", `the cloud at ${origin} answered ${status}: ${wordsOf(text)}`);
   try {
-    body = JSON.parse(text);
+    return { text, body: JSON.parse(text) };
   } catch {
-    return said(fail("bad-answer", `the cloud at ${origin} answered ${status} with something that is not JSON`));
+    return fail("bad-answer", `the cloud at ${origin} answered ${status} with something that is not JSON`);
   }
-  if (deps.command === "api" || args.json) deps.stdout(text.endsWith("\n") ? text : `${text}\n`);
-  else deps.stdout(renderBrief(body, project));
-  return 0;
+}
+
+/** What `brief --deploy` waits for: the brief's address, whose project and version, how long, and how it prints. */
+interface Waiting {
+  url: string;
+  cloud: string;
+  project: string;
+  version: string;
+  waitMs: number;
+  json: boolean;
+}
+
+/** The exit status of each verdict the cloud says: only `worse` is 1, and only `unchanged` is 0 (invariant 14). */
+const EXIT_OF = { worse: 1, unchanged: 0, pending: 2, none: 2 } as const;
+type Verdict = keyof typeof EXIT_OF;
+
+/** The failures a later read may not have: the cloud was slow, unreachable or failing. Any other ends the wait. */
+const PASSING = new Set(["timeout", "unreachable", "cloud-error"]);
+
+/**
+ * `brief --deploy <version> [--wait <duration>]`: reads the brief for that version until its verdict is not
+ * `pending`, or the duration ends, waiting between reads what the cloud's `retryAfterSeconds` says within
+ * `WAIT_BOUNDS`, and the last wait no further than the deadline. The credential is looked up again before each read,
+ * so an expired one is not sent, and one login renewed meanwhile is. While it waits it prints one line, on stderr; at
+ * the end, the verdict, or why there is none.
+ */
+async function waitForVerdict(
+  w: Waiting,
+  first: Credential,
+  said: (failure: Failure) => number,
+  deps: ReadDeps,
+): Promise<number> {
+  const sleep = deps.sleep ?? sleepFor;
+  const deadline = deps.now() + w.waitMs;
+  const by = instantOf(deadline);
+  const version = JSON.stringify(printable(w.version));
+  const origin = new URL(w.cloud).origin;
+  if (w.waitMs > 0) {
+    deps.stderr(`downtrace ${deps.command}: waiting until ${by} for the verdict of ${version} in ${w.project}\n`);
+  }
+  let credential: Credential | Failure = first;
+  for (;;) {
+    if ("reason" in credential) return said(credential);
+    const got = await readAnswer(w.url, credential, w.cloud, deps);
+    // What this read left to say if the deadline comes now: the pending verdict, or the failure that passes.
+    let last: { answered: Answered; deploy: unknown } | Failure;
+    let waitMs = WAIT_BOUNDS.defaultMs;
+    if ("reason" in got) {
+      if (!PASSING.has(got.reason)) return said(got);
+      last = got;
+    } else {
+      const deploy = memberOf(got.body, "deploy");
+      const verdict = memberOf(deploy, "verdict");
+      if (deploy === undefined) {
+        return said(
+          fail("bad-answer", `the cloud at ${origin} says no verdict of ${version}: it is older than this command`),
+        );
+      }
+      if (typeof verdict !== "string" || !Object.hasOwn(EXIT_OF, verdict)) {
+        const named = JSON.stringify(printable(String(verdict)));
+        return said(fail("bad-answer", `the cloud at ${origin} says a verdict this command does not know: ${named}`));
+      }
+      if (verdict !== "pending") return sayVerdict(w, got, deploy, verdict as Verdict, undefined, deps);
+      last = { answered: got, deploy };
+      const retry = memberOf(deploy, "retryAfterSeconds");
+      if (typeof retry === "number" && Number.isFinite(retry) && retry > 0) {
+        waitMs = Math.min(Math.max(retry * 1000, WAIT_BOUNDS.minMs), WAIT_BOUNDS.maxMs);
+      }
+    }
+    const left = deadline - deps.now();
+    if (left <= 0) {
+      if ("reason" in last) return said({ ...last, message: `no verdict of ${version} by ${by}: ${last.message}` });
+      return sayVerdict(w, last.answered, last.deploy, "pending", by, deps);
+    }
+    await sleep(Math.min(waitMs, left), deps.signal);
+    if (deps.signal?.aborted === true) {
+      return said(fail("interrupted", `interrupted while waiting for the verdict of ${version}`));
+    }
+    credential = await credentialFor(w.cloud, w.project, deps);
+  }
+}
+
+/** Prints a verdict: the cloud's answer as it came with --json, else a line for each environment. */
+function sayVerdict(
+  w: Waiting,
+  answered: Answered,
+  deploy: unknown,
+  verdict: Verdict,
+  by: string | undefined,
+  deps: ReadDeps,
+): number {
+  deps.stdout(w.json ? withNewline(answered.text) : renderVerdict(deploy, w.project, by));
+  return EXIT_OF[verdict];
+}
+
+/** A wait that ends at `ms`, or when the signal aborts; it never throws, and leaves no timer behind. */
+export function sleepFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) return resolve();
+    const done = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** An instant to the second, as RFC 3339 in UTC. */
+function instantOf(ms: number): string {
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
+}
+
+/**
+ * A deploy's verdict as text: one line for each environment that ran it, its comparison's counts or why it has none,
+ * and the command that reads the rows of one that got worse. A deadline that came first is said last. As the brief's
+ * text, what is not there is left out and the cloud's sentences are printed without what a terminal acts on.
+ */
+export function renderVerdict(deploy: unknown, project: string, by?: string): string {
+  const version = textOf(deploy, "version") ?? "";
+  const environments = memberOf(deploy, "environments");
+  const listed = memberOf(environments, "items");
+  const items = Array.isArray(listed) ? listed : [];
+  const says = textOf(deploy, "says");
+  const lines: string[] = [];
+  for (const item of items) {
+    const d = memberOf(item, "deploy");
+    const name = [project, textOf(d, "environment"), textOf(d, "version") ?? version].filter(Boolean).join(" ");
+    const counts = countsOf(memberOf(d, "comparison"));
+    const why = textOf(item, "says");
+    const verdict = textOf(d, "verdict");
+    if (counts === undefined) lines.push(`${name}: no comparison${why === undefined ? "" : `: ${why}`}`);
+    else lines.push(`${name}: ${counts}${verdict === "pending" && why !== undefined ? `; ${why}` : ""}`);
+    const read = readOf(item);
+    if (verdict === "worse" && read !== undefined) lines.push(`  its rows: ${read}`);
+  }
+  const total = memberOf(environments, "total");
+  if (typeof total === "number" && total > items.length) {
+    lines.push(
+      `… and ${total - items.length} more environment(s): downtrace brief --project ${project} --deploy ${shellJoin([version])} --json`,
+    );
+  }
+  if (items.length === 0)
+    lines.push(`${[project, version].filter(Boolean).join(" ")}: ${says ?? "no environment said"}`);
+  if (by !== undefined) lines.push(`No verdict by ${by}${items.length > 0 && says !== undefined ? `: ${says}` : "."}`);
+  return `${lines.join("\n")}\n`;
+}
+
+/** A comparison's counts in a line, or undefined when there is no comparison to count. */
+function countsOf(comparison: unknown): string | undefined {
+  const [rows, worse, unevaluable] = ["rows", "worse", "unevaluable"].map((key) => memberOf(comparison, key));
+  if (typeof rows !== "number" || typeof worse !== "number" || typeof unevaluable !== "number") return undefined;
+  return `${worse} ${worse === 1 ? "row" : "rows"} worse, ${rows - worse - unevaluable} unchanged, ${unevaluable} not evaluated`;
 }
 
 /**

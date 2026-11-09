@@ -114,9 +114,45 @@ it; a file others can read is not used, as above. Neither prints the credential.
 |---|---|
 | `--project <slug>` | `brief`: the project; the only one login stored for the cloud when not given |
 | `--since <instant>` | `brief`: what counts as new, RFC 3339; the last 24 hours when not given |
+| `--deploy <version>` | `brief`: the verdict of that deployed version, in each environment that ran it, as below |
+| `--wait <duration>` | `brief --deploy`: read again, when the cloud says to, until there is a verdict or the duration ends; 24 hours at most, such as `90s`, `10m` or `1h`; one read when not given |
 | `--url <cloud>` | The cloud, as for login |
 | `--json` | `brief`: the cloud's answer as it came. Both: a failure as JSON (`schema: "downtrace.read/1"`), its `reason` —`refused`, with the cloud's `httpStatus`, `no-credential`, `expired-credential`, `unreachable`, `timeout`…— and its `message` |
 
 Each request waits 30 seconds at most. Exit status of brief and api: 0 read, 1 the cloud refused (in its own words), 2
 nothing could be read (no credential, a path refused, a cloud that cannot be reached or does not answer in 30 s, or an
 answer that is not JSON).
+
+### Wait for a deploy's verdict: `downtrace brief --deploy`
+
+```sh
+npx downtrace stamp                                      # in the build: the deployed version is the commit
+npx downtrace brief --deploy "$(git rev-parse HEAD)" --wait 10m
+```
+
+After a deploy, the question is whether it broke something, and its answer takes a while: the version has to start
+sending, and to serve enough requests for its comparison with the one before it to mean anything. `--deploy` reads the
+brief for that version, and `--wait` reads it again until there is a verdict or the duration ends. A coding agent runs
+it in the background and reads the exit status when it ends, instead of reading the brief again each turn.
+
+Between two reads it waits what the cloud's answer says, `retryAfterSeconds`, but no less than 5 seconds and no more
+than 5 minutes, a minute when the answer says nothing or a read failed, and its last wait ends at the deadline, where
+one more read is made, which waits 30 seconds at most. A read that times out, that the cloud fails or that cannot
+reach it is read again; anything else ends the wait. The
+credential is looked up again before each read, so one that expires while it waits is not sent. While it waits it
+prints one line, on stderr, which says what it waits for and until when; Ctrl-C ends it, with 2.
+
+The verdict is the cloud's, read from the counts of each environment's comparison and never computed here: `worse`
+when a row got worse, `unchanged` when rows were evaluated and none got worse, `pending` while a comparison may still
+come or evaluated nothing, and `none` when none will come, because it is the first version the environment ran or a
+newer one replaced it. Rows that could not be evaluated are counted apart, because a row not evaluated is not one that
+did not get worse. As text it prints a line for each environment that ran the version, and, for one that got worse,
+the command that reads its rows:
+
+```
+nidus-api staging abc1234: 0 rows worse, 3 unchanged, 41 not evaluated
+```
+
+With `--json`, the cloud's last answer as it came: the brief, with the version's `deploy`. Exit status of brief
+--deploy: 0 nothing got worse, 1 something did, 2 no verdict (no comparison by then, the version did not appear, or
+nothing could be read; it says why, and a refusal of the cloud is 2).

@@ -349,8 +349,8 @@ the same dependency, target, queries and error. A newer version asks for the Nod
 | `libsql` | 0.5.29 | |
 | `@libsql/client` | 0.18.0, on a file | |
 | `sqlite3` | 5.1.7 | 6 declares Node 20.17 |
-| `tedious` | 19.2.2 | 20 declares Node 22 |
-| `mssql` | 12.7.14, over `tedious` 19.2.2, which it takes as it takes 20 | |
+| `tedious` | 19.2.2, given CommonJS proxy agents (below) | 20 declares Node 22 |
+| `mssql` | 12.7.14, over `tedious` 19.2.2, which it takes as it takes 20, given the same (below) | |
 | `mongodb` | 6.22.0 | 7 declares Node 20.19 |
 | Mongoose | 8.24.8 | 9 declares Node 20.19 |
 | `ioredis` | 5.11.1 | 6 declares Node 20 |
@@ -371,6 +371,18 @@ globalThis.crypto ??= require("node:crypto").webcrypto;
 
 Before Node 22 there is no global `WebSocket` either, and the driver takes the one you give it,
 `neonConfig.webSocketConstructor = ws`, as its own documentation says.
+
+**`tedious` 19 does not load on Node 18 by itself either**, nor `mssql` over it, with Downtrace or without: it requires
+`@typespec/ts-http-runtime` through `@azure/identity`, and from 0.3.10 the runtime requires `http-proxy-agent` and
+`https-proxy-agent` 9, which are ES modules only. Node 18 cannot `require()` one, and the process ends with
+`ERR_REQUIRE_ESM` as `tedious` loads. Their last CommonJS releases have what the runtime calls; hold them there, under
+the runtime alone, with npm's `overrides` in your `package.json`:
+
+```json
+"overrides": {
+  "@typespec/ts-http-runtime": { "http-proxy-agent": "7.0.2", "https-proxy-agent": "7.0.6" }
+}
+```
 
 ## Where the drivers are found
 

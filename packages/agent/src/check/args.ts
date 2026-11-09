@@ -41,6 +41,7 @@ export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace stamp [--commit <sha>]
        downtrace login --project <slug> [--env <environment>] [--level read|operate]   (downtrace login --help)
        downtrace brief [--project <slug>] [--since <instant>] [--url <cloud>] [--json]
+       downtrace brief --deploy <version> [--wait <duration>] [--project <slug>] [--url <cloud>] [--json]
        downtrace api <path> [--url <cloud>] [--json]
 
 check runs the tests of the project on a base and on the working tree with the instrumentation writing locally,
@@ -110,15 +111,24 @@ sends GET and nothing else: another method, another origin or a path outside a p
 anything is sent. The credential is DOWNTRACE_TOKEN, unless it holds an ingestion token, which reads nothing;
 otherwise the one downtrace login stored for the cloud and the project. It is never printed.
 
+After a deploy, brief --deploy <version> --wait 10m reads that version's verdict until there is one: run it in the
+background, and its exit status says whether the deploy broke something. While it waits it prints one line, on
+stderr, and at the end a line for each environment that ran the version: its comparison's counts, or why it has none.
+
 Options of brief and api:
   --project <slug>     brief: the project; default the only one downtrace login stored for the cloud (api reads
                        the project of its path)
   --since <instant>    brief: what counts as new, RFC 3339; default the last 24 hours
+  --deploy <version>   brief: read the verdict of that deployed version, in each environment that ran it
+  --wait <duration>    brief --deploy: read again, when the cloud says to, until there is a verdict or the duration
+                       ends, 24h at most: 90s, 10m, 1h; default one read
   --url <cloud>        the cloud; default DOWNTRACE_URL, and without it Downtrace's cloud, as login's
   --json               brief: the cloud's answer as it came; both: a failure as JSON
 
 Exit status of brief and api: 0 read, 1 the cloud refused (in its own words), 2 nothing could be read (no
 credential, a path refused, a cloud that cannot be reached or does not answer in 30 s, or an answer that is not JSON).
+Exit status of brief --deploy: 0 nothing got worse, 1 something did, 2 no verdict (no comparison by then, the version
+did not appear, or nothing could be read; it says why, and a refusal of the cloud is 2).
 
   -h, --help           this text
   -v, --version        the version
