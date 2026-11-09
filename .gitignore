@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# A declaration in a package's src/ is a build's leftover: none is written by hand there, and the versions PR, which
+# commits what the build left in the tree, committed one (DT-237).
+packages/*/src/**/*.d.ts
 coverage/
 *.log
 .env

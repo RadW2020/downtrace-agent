@@ -9,5 +9,9 @@ export default defineConfig({
   platform: "node",
   target: "node20",
   dts: true,
+  // The declarations are emitted from `src` alone. `tsconfig.json` takes `test` in too, for the typecheck, and a test
+  // imports the instrumentation's credential writer by path: `tsgo` gave that file, outside this package, its
+  // declaration beside its source, in `packages/agent/src`, and the versions PR committed it (DT-237).
+  tsconfig: "tsconfig.build.json",
   clean: true,
 });
