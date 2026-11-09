@@ -24,6 +24,12 @@ export interface Property {
   format?: "date-time";
   minimum?: number;
   maximum?: number;
+  /**
+   * What this server sends when the argument is not given, published so the client knows it. Only where the
+   * tool's reader needs another default than the API's: `project_status` reads a page of a project whose whole
+   * status can weigh hundreds of kilobytes (DT-214).
+   */
+  default?: string | number;
 }
 
 export interface Tool {
@@ -180,11 +186,55 @@ export const tools: Tool[] = [
       "and the data budget with its consumption. The endpoints come in the order you ask for, and the " +
       "answer says which order it applied under `endpointsSort`. Under `endings` it says how each process " +
       "of the last day ended: one that handed over what it was holding before leaving, or one that stopped " +
-      "sending without a word, with what that means was lost if it died. This is where to look after a crash.",
+      "sending without a word, with what that means was lost if it died. This is where to look after a crash. " +
+      "Unless you say otherwise it reads the first twenty endpoints in that order, each with its operations by " +
+      "hash —kind, hash, executions, total time and errors, without their text—, and the readiness and the " +
+      "dependencies of those twenty alone: `page` says how many endpoints there are (`total`) and how many come " +
+      "after these (`leftOut`), and `page.next` is the address of the next page, the same question with " +
+      "`offset` moved on. To read the rest pass `offset`, or a larger `limit`; `route`, with `method` if you " +
+      "want one, reads one route's endpoints, readiness and dependencies in every environment; `operations` " +
+      "`text` gives each operation's text under `fromService`, and `none` leaves the list out and counts it in " +
+      "`operationsTotal`. The traffic, the runtime, the instances, the coverage, the budget and the rest of the " +
+      "answer are the whole project's, whatever part of the endpoints you read.",
     inputSchema: {
       type: "object",
       properties: {
         project,
+        route: {
+          type: "string",
+          description:
+            "One route, as the endpoints name it (`/orders/:id`): its endpoints in every environment, their " +
+            "readiness and their dependencies, and no other route's.",
+        },
+        method: {
+          type: "string",
+          description: "With `route`, that method of the route alone. Refused without a route.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          default: 20,
+          description:
+            "How many endpoints to read, in the order asked. Twenty by default here; the API's own default is " +
+            "every endpoint, which for a large project weighs hundreds of kilobytes.",
+        },
+        offset: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "The place of the first endpoint to read, up to the endpoints asked for. 0 by default; `page.next` " +
+            "has the next one.",
+        },
+        operations: {
+          type: "string",
+          enum: ["text", "hash", "none"],
+          default: "hash",
+          description:
+            "How each endpoint's operations come. `hash` by default: each with its kind, hash, executions, total " +
+            "time and errors, without its text. `text` adds the text under `fromService`, which is most of the " +
+            "weight of a status; `none` leaves the list out and counts it in `operationsTotal`.",
+        },
         sort: {
           type: "string",
           enum: ["environment", "endpoint", "requests", "errors", "p50", "p95", "p99", "max"],
@@ -205,7 +255,7 @@ export const tools: Tool[] = [
     },
     method: "GET",
     path: "/api/p/{slug}/status",
-    query: ["sort", "order"],
+    query: ["sort", "order", "route", "method", "limit", "offset", "operations"],
   },
   {
     name: "changes_since",

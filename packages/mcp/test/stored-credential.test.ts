@@ -91,8 +91,8 @@ describe("the stored credential of the project asked about", () => {
     expect((await call("project_status", { project: "shop-api" })).isError).toBeUndefined();
     expect((await call("project_status", { project: "nidus-api" })).isError).toBeUndefined();
     expect(sent).toEqual([
-      { url: `${CLOUD}/api/p/shop-api/status`, authorization: "Bearer dtr_shop" },
-      { url: `${CLOUD}/api/p/nidus-api/status`, authorization: "Bearer dtr_nidus" },
+      { url: `${CLOUD}/api/p/shop-api/status?limit=20&operations=hash`, authorization: "Bearer dtr_shop" },
+      { url: `${CLOUD}/api/p/nidus-api/status?limit=20&operations=hash`, authorization: "Bearer dtr_nidus" },
     ]);
   });
 

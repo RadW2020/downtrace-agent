@@ -179,7 +179,8 @@ export function createServer(opts: ServerOptions) {
     const path = fill(tool.path, args);
     const url = new URL(opts.config.url + path);
     for (const name of tool.query ?? []) {
-      const value = args[name];
+      // The caller's value, or the default the schema publishes: a default the tool declares is one it sends.
+      const value = args[name] ?? tool.inputSchema.properties[name]?.default;
       if (value !== undefined) url.searchParams.set(name, String(value));
     }
     for (const [name, value] of Object.entries(tool.fixedQuery ?? {})) url.searchParams.set(name, value);

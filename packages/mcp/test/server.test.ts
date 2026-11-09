@@ -497,6 +497,20 @@ describe("the schemas", () => {
     }
   });
 
+  // A default the schema publishes is a value the client could have sent itself: in the enum, within the bounds and of
+  // the type declared. The server sends it when the argument is not given (DT-214).
+  it("publishes only defaults its own schema accepts", () => {
+    const defaults = properties.filter(({ p }) => p.default !== undefined);
+    expect(defaults.length).toBeGreaterThan(0);
+    for (const { at, p } of defaults) {
+      if (p.enum !== undefined) expect(p.enum, at).toContain(p.default);
+      if (p.type === "string") expect(typeof p.default, at).toBe("string");
+      if (p.type === "integer") expect(Number.isInteger(p.default), at).toBe(true);
+      if (p.minimum !== undefined) expect(Number(p.default), at).toBeGreaterThanOrEqual(p.minimum);
+      if (p.maximum !== undefined) expect(Number(p.default), at).toBeLessThanOrEqual(p.maximum);
+    }
+  });
+
   it("declares the length of the errors list as a whole number from 1 to 200", () => {
     expect(toolNamed("list_errors")?.inputSchema.properties.limit).toMatchObject({
       type: "integer",
@@ -2481,10 +2495,69 @@ describe("errors", () => {
       name: "project_status",
       arguments: { project: "tienda", sort: "p99", order: "asc" },
     });
-    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/status?sort=p99&order=asc");
-    // Neither is required: asking for nothing is the order the page shows by default.
+    // With the page this tool reads when its caller does not say (DT-214).
+    expect(only(calls, 0).url).toBe(
+      "https://cloud.test/api/p/tienda/status?sort=p99&order=asc&limit=20&operations=hash",
+    );
+    // Neither is required: asking for no order is the order the page shows by default.
     await s.handle("tools/call", { name: "project_status", arguments: { project: "tienda" } });
-    expect(only(calls, 1).url).toBe("https://cloud.test/api/p/tienda/status");
+    expect(only(calls, 1).url).toBe("https://cloud.test/api/p/tienda/status?limit=20&operations=hash");
+  });
+
+  /**
+   * DT-214, RF-522: the status of a backend of sixty-one routes weighed 394 KB, 344 KB of it the text of its queries,
+   * and the client that reads this tool's answer for a coding agent refuses one past its budget of tokens. The API
+   * keeps its default, the whole project, so the page and every caller written before see no change; this tool,
+   * whose reader has the budget, asks for twenty endpoints and their operations by hash unless told otherwise. The
+   * cloud's test of the same read, `TestTheToolsReadOfSixtyOneRoutesFits`, weighs what that answers.
+   */
+  it("asks for twenty endpoints and their operations by hash when its caller does not say", async () => {
+    // covers: RF-522
+    const { s, calls } = server([{}, {}]);
+    await s.handle("tools/call", { name: "project_status", arguments: { project: "tienda" } });
+    expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/status?limit=20&operations=hash");
+    await s.handle("tools/call", {
+      name: "project_status",
+      arguments: { project: "tienda", route: "/orders/:id", method: "GET", limit: 5, offset: 10, operations: "text" },
+    });
+    expect(only(calls, 1).url).toBe(
+      "https://cloud.test/api/p/tienda/status?route=%2Forders%2F%3Aid&method=GET&limit=5&offset=10&operations=text",
+    );
+  });
+
+  it("declares the parts of the status it reads, with their defaults and their bounds", () => {
+    // covers: RF-522
+    const p = toolNamed("project_status")?.inputSchema.properties ?? {};
+    expect(p.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 100, default: 20 });
+    // The place of a page goes up to the endpoints asked for, which only the cloud knows.
+    expect(p.offset).toMatchObject({ type: "integer", minimum: 0 });
+    expect(p.offset?.maximum).toBeUndefined();
+    expect(p.operations).toMatchObject({ type: "string", enum: ["text", "hash", "none"], default: "hash" });
+    expect(p.route?.type).toBe("string");
+    expect(p.method?.type).toBe("string");
+  });
+
+  // A coding agent chooses a tool, and its arguments, from the description and the schema alone: it is told what the
+  // tool reads when it says nothing, and how to read the rest.
+  it("says in project_status's description what it reads by default and how to read the rest", () => {
+    // covers: RF-522
+    const description = toolNamed("project_status")?.description ?? "";
+    for (const said of [
+      "twenty endpoints",
+      "by hash",
+      "`page`",
+      "`offset`",
+      "`page.next`",
+      "`route`",
+      "`method`",
+      "`operations`",
+      "`text`",
+      "`none`",
+      "`operationsTotal`",
+      "whole project",
+    ]) {
+      expect(description, said).toContain(said);
+    }
   });
 
   /**
