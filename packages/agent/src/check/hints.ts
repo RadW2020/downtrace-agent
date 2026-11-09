@@ -240,6 +240,7 @@ export const OBSERVER_PACKAGES: Readonly<Record<string, readonly string[]>> = {
     "pg",
     "@prisma/adapter-pg",
     "slonik",
+    "pg-promise",
     "postgres",
     "@mikro-orm/postgresql",
     "@neondatabase/serverless",

@@ -31,7 +31,7 @@ export const FRAMEWORK_PACKAGES = [
 
 /**
  * The packages whose work inside a request the instrumentation observes, beside outgoing HTTP, which it always
- * does: Postgres through `pg` (and Prisma's adapter for it, and slonik, which query through it), through
+ * does: Postgres through `pg` (and Prisma's adapter for it, slonik and pg-promise, which query through it), through
  * postgres.js (`postgres`) and through Neon's driver over its WebSocket (and `@vercel/postgres` and Prisma's adapter for
  * Neon, which query through it; its `neon()` over `fetch` is a call), MySQL through `mysql2`, `mysql` and `mariadb` (and Prisma's adapter for it), SQL Server through
  * `tedious` (and `mssql` and Prisma's adapter, which query through it), SQLite through `better-sqlite3` (and Prisma's
@@ -46,6 +46,7 @@ export const OBSERVED_PACKAGES = [
   "pg",
   "@prisma/adapter-pg",
   "slonik",
+  "pg-promise",
   "postgres",
   "@mikro-orm/postgresql",
   "@neondatabase/serverless",
@@ -83,6 +84,7 @@ export const OBSERVED_PACKAGES = [
  * - a protocol of its own over a socket: Oracle's (`oracledb`), Cassandra's (`cassandra-driver`, ScyllaDB's too),
  *   Neo4j's Bolt (`neo4j-driver`), Memcached's (`memjs`, `memcached`), Kafka's (`kafkajs`), AMQP 0-9-1 (`amqplib`, and
  *   `amqp-connection-manager` on it), AMQP 1.0 (`@azure/service-bus`), MQTT (`mqtt`) and NATS (`nats`);
+ * - Postgres compiled to WebAssembly and run in the process, with no protocol to observe (`@electric-sql/pglite`);
  * - a native binding, whose I/O is in C or C++: Couchbase's SDK (`couchbase`), and librdkafka's
  *   (`@confluentinc/kafka-javascript`, `node-rdkafka`);
  * - gRPC, which runs on `node:http2` and not on the channels the HTTP observer reads (undici's and `node:http`'s):
@@ -94,6 +96,7 @@ export const OBSERVED_PACKAGES = [
  */
 export const UNOBSERVED_PACKAGES = [
   "oracledb",
+  "@electric-sql/pglite",
   "cassandra-driver",
   "neo4j-driver",
   "couchbase",
@@ -171,22 +174,127 @@ const OBSERVED_FROM: Readonly<Record<string, readonly [major: number, minor: num
   "@neondatabase/serverless": [0, 9],
 };
 
+type Version = readonly [major: number, minor: number, patch: number];
+
+/** The first version a range does not install, or the last one it does, as `inclusive` says. */
+interface Bound {
+  at: Version;
+  inclusive: boolean;
+}
+
+/** A version as a range writes it, with the parts it leaves out. */
+interface PartialVersion {
+  major: number;
+  minor?: number;
+  patch?: number;
+}
+
+function partialVersion(text: string): PartialVersion | undefined {
+  const match = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(text);
+  if (match === null) return undefined;
+  const [, major, minor, patch] = match;
+  return {
+    major: Number(major),
+    ...(minor === undefined ? {} : { minor: Number(minor) }),
+    ...(patch === undefined ? {} : { patch: Number(patch) }),
+  };
+}
+
 /**
- * Whether the range a package is declared with cannot reach the first version observed: it starts at an earlier major
- * (`^5.7.7` of a package observed from 6: a caret does not cross a major), or at an earlier minor of the same major
- * and keeps the minor where it is (`~5.11.9`, `5.1.0` of one observed from 5.12). A range that lets the minor float
- * (`^5.1.0`, `^5`, `5.x`) installs a later minor as readily as an earlier one, and only the lockfile, which is not
- * read, would say which: it is taken as observed. A range that names no number — `latest`, `*`, a tag, a path — too.
+ * The upper bound one comparator sets, or undefined when it sets none. A caret lets the minor float from 1.0 on and
+ * keeps it on 0.x, where `^0.8` is below 0.9; a tilde keeps the minor and lets the patch float; a wildcard on the
+ * minor (`5.x`) floats it, and one on the patch (`5.8.x`) does not. A tag, a path or `*` names no version, and an
+ * npm alias is read as the range it aliases.
+ */
+function upperOf(token: string): Bound | undefined {
+  let text = token.trim();
+  if (text === "") return undefined;
+  if (text.startsWith("npm:")) {
+    const at = text.lastIndexOf("@");
+    if (at <= 4) return undefined;
+    text = text.slice(at + 1);
+  }
+  const operator = /^(>=|<=|>|<|=|\^|~)?/.exec(text)?.[1] ?? "";
+  const version = partialVersion(text.slice(operator.length).trim());
+  if (version === undefined) return undefined;
+  const { major, minor, patch } = version;
+  if (operator === "^") {
+    if (major > 0) return { at: [major + 1, 0, 0], inclusive: false };
+    if (minor === undefined) return { at: [1, 0, 0], inclusive: false };
+    if (minor > 0) return { at: [0, minor + 1, 0], inclusive: false };
+    if (patch === undefined) return { at: [0, 1, 0], inclusive: false };
+    return { at: [0, 0, patch + 1], inclusive: false };
+  }
+  if (operator === "~") {
+    if (minor === undefined) return { at: [major + 1, 0, 0], inclusive: false };
+    return { at: [major, minor + 1, 0], inclusive: false };
+  }
+  if (operator === ">" || operator === ">=") return undefined;
+  if (operator === "<" || operator === "<=") {
+    return { at: [major, minor ?? 0, patch ?? 0], inclusive: operator === "<=" };
+  }
+  if (operator === "=") return { at: [major, minor ?? 0, patch ?? 0], inclusive: true };
+  if (minor === undefined) return { at: [major + 1, 0, 0], inclusive: false };
+  if (/\.[x*]/i.test(text)) return { at: [major, minor + 1, 0], inclusive: false };
+  if (patch === undefined) return { at: [major + 1, 0, 0], inclusive: false };
+  return { at: [major, minor, patch], inclusive: true };
+}
+
+function compareVersions(a: Version, b: Version): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/** Whether `a` stops earlier than `b`, or at the same version without including it. */
+function earlier(a: Bound, b: Bound): boolean {
+  const order = compareVersions(a.at, b.at);
+  return order < 0 || (order === 0 && !a.inclusive && b.inclusive);
+}
+
+/** The upper bound of one part of a range: the tightest of its comparators, or none when it sets none. */
+function upperOfPart(part: string): Bound | undefined {
+  const text = part.trim();
+  if (text === "") return undefined;
+  const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
+  if (hyphen !== null) {
+    const version = partialVersion(hyphen[2] ?? "");
+    if (version === undefined) return undefined;
+    const { major, minor, patch } = version;
+    if (minor === undefined) return { at: [major, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER], inclusive: true };
+    if (patch === undefined) return { at: [major, minor, Number.MAX_SAFE_INTEGER], inclusive: true };
+    return { at: [major, minor, patch], inclusive: true };
+  }
+  const tokens = text
+    .replace(/(>=|<=|>|<|=|\^|~)\s+/g, "$1")
+    .replaceAll(",", " ")
+    .split(/\s+/)
+    .filter((token) => token !== "");
+  let upper: Bound | undefined;
+  for (const token of tokens) {
+    const bound = upperOf(token);
+    if (bound !== undefined && (upper === undefined || earlier(bound, upper))) upper = bound;
+  }
+  return upper;
+}
+
+/**
+ * Whether a range can install the first version observed or a later one. It is read by the upper bound it declares:
+ * one that stops at an earlier major (`^5.7.7` of a package observed from 6) or at an earlier minor (`~5.11.9`,
+ * `5.1.0`, `5.8.x`, `^0.8` of one observed from 0.9) cannot reach it, and one with no upper bound, or that names no
+ * version (`latest`, `*`, a tag, a path), may: only the lockfile, which is not read, would say which, so it is taken
+ * as observed. A range that names several, `^5.8.1 || ^5.12.0`, reaches it if any of them does.
  */
 function tooOld(name: string, ranges: ReadonlyMap<string, string>): boolean {
   const from = OBSERVED_FROM[name];
   const range = (ranges.get(name) ?? "").trim();
-  const start = /(\d+)(?:\.(\d+))?/.exec(range);
-  if (from === undefined || start === null) return false;
-  const [major, minor] = [Number(start[1]), Number(start[2] ?? 0)];
-  if (major !== from[0]) return major < from[0];
-  const floats = range.startsWith("^") || range.startsWith(">") || start[2] === undefined || /\.[x*]/i.test(range);
-  return !floats && minor < from[1];
+  if (from === undefined || range === "") return false;
+  const target: Version = [from[0], from[1], 0];
+  const reaches = (part: string): boolean => {
+    const upper = upperOfPart(part);
+    if (upper === undefined) return true;
+    const order = compareVersions(upper.at, target);
+    return order > 0 || (order === 0 && upper.inclusive);
+  };
+  return !range.split("||").some(reaches);
 }
 
 /**

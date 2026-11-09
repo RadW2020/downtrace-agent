@@ -146,6 +146,13 @@ describe("a project it can configure", () => {
     // Neon's driver is pg bundled, and seen over its WebSocket; `@vercel/postgres` and Prisma's adapter query through it.
     [{ express: "^5", "@vercel/postgres": "^0.10" }, []],
     [{ express: "^5", "@neondatabase/serverless": "0.8.1" }, ["@neondatabase/serverless"]],
+    // A caret keeps the minor on 0.x: `^0.8.1` never installs 0.9.
+    [{ express: "^5", "@neondatabase/serverless": "^0.8.1" }, ["@neondatabase/serverless"]],
+    [{ express: "^5", "@neondatabase/serverless": "^0.9.0" }, []],
+    // pg-promise queries through a pg of its own, which is found beside it.
+    [{ express: "^5", "pg-promise": "^12" }, []],
+    // Postgres compiled to WebAssembly, in the process.
+    [{ hono: "^4", "drizzle-orm": "^0.44", "@electric-sql/pglite": "^0.3" }, ["@electric-sql/pglite"]],
     [{ fastify: "^5", mqtt: "^5", nats: "^2" }, ["mqtt", "nats"]],
     // Over HTTP it is seen as calls, and a queue on ioredis as its commands; Neon's `neon()` too.
     [{ hono: "^4", "drizzle-orm": "^0.44", "@neondatabase/serverless": "^1" }, []],

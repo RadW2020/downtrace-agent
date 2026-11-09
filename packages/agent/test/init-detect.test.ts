@@ -244,6 +244,17 @@ describe("what the project runs", () => {
     ["redis", "^6", true],
     ["redis", "latest", true],
     ["redis", "workspace:*", true],
+    // A wildcard on the patch keeps the minor where it is, as `~5.8.0` does: neither reaches 5.12.
+    ["redis", "5.8.x", false],
+    ["redis", "~5.8.0", false],
+    // An upper bound that stops before the observed minor says so, and one range that reaches it is enough.
+    ["redis", ">=5.8.1 <5.9.0", false],
+    ["redis", "^5.8.1 || ^5.12.0", true],
+    // Neon is observed from 0.9, and on 0.x a caret keeps the minor: `^0.8` and `~0.8` never install 0.9.
+    ["@neondatabase/serverless", "^0.8", false],
+    ["@neondatabase/serverless", "~0.8", false],
+    ["@neondatabase/serverless", "0.8.x", false],
+    ["@neondatabase/serverless", "^0", true],
     ["mongodb", "^5.9.2", false],
     ["mongodb", "^6.0.0", true],
     ["mongodb", "6", true],

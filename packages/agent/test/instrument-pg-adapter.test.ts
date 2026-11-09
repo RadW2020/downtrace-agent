@@ -1,10 +1,13 @@
-import Module from "node:module";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import Module, { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { enterRequest } from "../src/context.ts";
 import { armDriver } from "../src/instrument/arm.ts";
 import { armPg } from "../src/instrument/pg.ts";
 import type { Logger } from "../src/log.ts";
-import { makeTree, type Tree, type TreeOptions } from "./support/prisma-layouts.ts";
+import { DRIVER, makeTree, type Tree, type TreeOptions } from "./support/prisma-layouts.ts";
 
 /**
  * The `pg` that `@prisma/adapter-pg` uses (DT-92). Prisma 7 has no query engine of its own and goes to the database
@@ -300,5 +303,41 @@ describe("armDriver from the runner's entry and the project", () => {
     const runner = await tree({});
     const t = await tree({});
     expect(armedFrom([runner.from, projectOf(t)]).state).toBe("unavailable");
+  });
+});
+
+/**
+ * pg-promise queries through `pg`, a dependency of its own: a package manager that keeps what the application did not
+ * declare out of its root leaves the application no `pg` at all, as with Prisma's adapter, and the copy pg-promise
+ * loads is the one its queries go through.
+ */
+describe("the pg pg-promise brings", () => {
+  it("is patched when the application has no pg of its own, as pnpm lays it out", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "downtrace-pg-promise-")));
+    const store = join(dir, "node_modules", ".pnpm", "pg-promise@12.0.0", "node_modules");
+    const write = async (root: string, name: string, source: string): Promise<void> => {
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, "package.json"), JSON.stringify({ name, version: "1.0.0", main: "index.js" }), "utf8");
+      await writeFile(join(root, "index.js"), source, "utf8");
+    };
+    try {
+      await write(join(store, "pg-promise"), "pg-promise", 'module.exports = { pg: require("pg") };');
+      await write(join(store, "pg"), "pg", DRIVER);
+      await symlink(join(store, "pg-promise"), join(dir, "node_modules", "pg-promise"), "dir");
+      const from = join(dir, "app.js");
+      const appRequire = createRequire(from);
+      expect(() => appRequire.resolve("pg")).toThrow();
+
+      const armed = armPg({ ...deps, from });
+      expect(armed.state, "pg-promise's copy is a driver to observe").toBe("on");
+      const { pg } = appRequire("pg-promise") as { pg: Driver };
+      armed.attach();
+      expect(patched(pg)).toBe(true);
+      const ctx = enterRequest();
+      await new pg.Client().query("select 1");
+      expect(callsOf(ctx)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
