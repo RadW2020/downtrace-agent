@@ -1996,6 +1996,104 @@ await sql.end();
   });
 });
 
+describe.skipIf(!process.env.DATABASE_URL)("an operation that got worse, and where the project runs it", () => {
+  // covers: RF-526
+  // An Express service whose route reads an order and then each of its lines, one query per line: the N+1, in a file
+  // of the project's own, through `pool.query`, which runs the query from a connection the pool hands over later.
+  const ORDERS = `import { readFileSync } from "node:fs";
+
+const lines = Number(readFileSync(new URL("../lines.txt", import.meta.url), "utf8"));
+
+export async function orderWithLines(pool, id) {
+  const { rows } = await pool.query("select $1::int as id", [id]);
+  const found = [];
+  for (let line = 0; line < lines; line += 1) {
+    const { rows: one } = await pool.query("select $1::int + $2::int as line", [id, line]);
+    found.push(one[0]);
+  }
+  return { order: rows[0], lines: found };
+}
+`;
+  /** The line of the query inside the loop, read from the fixture rather than counted by hand. */
+  const LOOP_LINE = ORDERS.split("\n").findIndex((line) => line.includes("$2::int as line")) + 1;
+  const ORDER_LINE = ORDERS.split("\n").findIndex((line) => line.includes("select $1::int as id")) + 1;
+  const APP = `import express from "express";
+import pg from "pg";
+import { orderWithLines } from "./src/orders.mjs";
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+const app = express();
+app.get("/orders/:id", async (req, res) => res.json(await orderWithLines(pool, Number(req.params.id))));
+app.get("/health", async (req, res) => {
+  await pool.query("select 1 as ok");
+  res.send("ok");
+});
+const server = await new Promise((resolve) => {
+  const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+});
+const base = \`http://127.0.0.1:\${server.address().port}\`;
+for (const path of ["/orders/1", "/orders/2", "/orders/3", "/health", "/health"]) {
+  const res = await fetch(base + path);
+  if (res.status !== 200) throw new Error(\`status \${res.status}\`);
+}
+server.close();
+await pool.end();
+`;
+  let checked: Checked;
+  let text: string;
+  beforeAll(async () => {
+    const made = await createProject({
+      "app.mjs": APP,
+      "src/orders.mjs": ORDERS,
+      "lines.txt": "1",
+      ".gitignore": "node_modules\n",
+      "downtrace.json": JSON.stringify({ check: { command: "node app.mjs" } }),
+    });
+    projects.push(made);
+    await mkdir(join(made.dir, "node_modules"), { recursive: true });
+    await symlink(EXPRESS_DIR, join(made.dir, "node_modules", "express"), "dir");
+    await symlink(PG_DIR, join(made.dir, "node_modules", "pg"), "dir");
+    // The change: an order of five lines, five queries a request where the base ran one.
+    await made.write("lines.txt", "5");
+    checked = await check(made, ["--base", "HEAD"]);
+    const { done } = downtrace(["check", "--base", "HEAD"], { cwd: made.dir, env: cleanEnv() });
+    text = (await done).stdout;
+  });
+
+  it("names the line of the loop that runs the query that multiplied, relative to the project", () => {
+    const orders = route(checked.report, "GET /orders/:id");
+    expect(orders.verdict).toBe("worse");
+    const multiplied = orders.operations.find((operation) => operation.worse);
+    expect(multiplied).toMatchObject({
+      kind: "query",
+      change: "multiplied",
+      perRequest: { base: 1, change: 5 },
+      sites: [`src/orders.mjs:${LOOP_LINE}`],
+    });
+    expect(checked.code).toBe(1);
+  });
+
+  it("names no place for an operation that did not get worse, beside it or on a route that did not", () => {
+    const unchanged = route(checked.report, "GET /orders/:id").operations.filter((operation) => !operation.worse);
+    expect(unchanged).toHaveLength(1);
+    expect(unchanged[0]).toMatchObject({ change: "unchanged", perRequest: { base: 1, change: 1 } });
+    expect(unchanged[0]).not.toHaveProperty("sites");
+    expect(route(checked.report, "GET /health").operations.every((operation) => !("sites" in operation))).toBe(true);
+    // The line of the query that ran once on both sides is in no place the report names.
+    expect(checked.stdout).not.toContain(`src/orders.mjs:${ORDER_LINE}`);
+  });
+
+  it("says no path of the machine: neither the project's nor a dependency's", () => {
+    expect(checked.stdout).not.toContain(dirname(PG_DIR));
+    expect(JSON.stringify(checked.report.routes)).not.toContain(tmpdir());
+    expect(JSON.stringify(checked.report.routes)).not.toContain("node_modules");
+  });
+
+  it("says the place in the text a person reads, under the operation", () => {
+    expect(text).toContain(`ran at src/orders.mjs:${LOOP_LINE}`);
+  });
+});
+
 /**
  * Jest runs a test file's modules in a registry of its own, where neither the Express the instrumentation arms nor
  * the drivers it patches from Node's module cache are the ones the tests use (`jest.ts`). A suite as most Express
@@ -2170,6 +2268,13 @@ describe.skipIf(!process.env.DATABASE_URL)("a suite Jest runs whose queries go t
       perRequest: { base: 1, change: 4 },
     });
     expect(checked.report.change?.observers.pg).toBe("on");
+  });
+
+  it("names the line of the test's own application that runs it, through the copy of pg Jest hands it", () => {
+    // covers: RF-526
+    const line = JEST_APP.split("\n").findIndex((text) => text.includes("await pg.query(")) + 1;
+    const users = route(checked.report, "GET /v1/users/:userId");
+    expect(users.operations.find((operation) => operation.kind === "query")?.sites).toEqual([`app.js:${line}`]);
   });
 });
 

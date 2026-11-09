@@ -24,13 +24,16 @@ const MAX_TEXT = 512;
 const FRAMES = 3;
 
 /** A frame's function, if it names one, and its place: `/abs/path/file.js:12:5`, or a `file:` URL. */
-interface Parts {
+export interface Parts {
   fn: string;
   where: string;
 }
 
-/** The parts of a line of a stack, or nothing for a line that is no frame. */
-function partsOf(line: string): Parts | undefined {
+/**
+ * The parts of a line of a stack, or nothing for a line that is no frame. Also what reads the place of a call under
+ * `check` (`sites.ts`): one reading of a frame, so the two never disagree on where one is.
+ */
+export function partsOf(line: string): Parts | undefined {
   const trimmed = line.trim();
   if (!trimmed.startsWith("at ")) return undefined;
   const body = trimmed.slice(3);

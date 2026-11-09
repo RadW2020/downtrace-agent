@@ -142,7 +142,7 @@ Each setting is an option of `init()` and a variable of the environment: an opti
 |---|---|---|
 | `dsn` | `DOWNTRACE_DSN` | The cloud's URL with the ingest token as its user: one string that connects. Or, apart, `token` and `url` (`DOWNTRACE_TOKEN`, `DOWNTRACE_URL`) |
 | `env` | `DOWNTRACE_ENV` | Environment; falls back to `NODE_ENV`, then `production`. The token's environment is what decides where the data lands (below) |
-| `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found with no configuration: the variable your platform or CI sets, the image's digest on ECS, or a fingerprint of your code ([how](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version)) |
+| `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found: a platform or CI variable, the commit `downtrace stamp` wrote, the image digest on ECS, or a fingerprint of your code ([how](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version)) |
 | `inspect` | `DOWNTRACE_INSPECT` | `stderr` or a file path: writes every batch exactly as it would be sent, and needs no DSN ([below](#see-exactly-what-would-leave-your-server)) |
 
 The rest — debug, the interval, the profile, which observers run, minimal mode, query text, exclusions, the benchmark's switches — and what a late or a second `init()` does are in [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md).

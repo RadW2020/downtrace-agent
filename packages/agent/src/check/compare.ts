@@ -148,6 +148,12 @@ export interface OperationResult {
   executions: Pair<number>;
   /** Data, never judged. */
   msPerExecution: Pair<number | null>;
+  /**
+   * Under `check`, on an operation that got worse: up to three places where the change run ran it, `file:line`
+   * relative to the project (RF-526), and empty when no call of it that was sampled had a frame of the project.
+   * Absent on every other operation, and in `downtrace compare`, whose files say nothing of the kind.
+   */
+  sites?: string[];
 }
 
 /** Everything one kind of dependency did for a route: all its queries, all its outgoing calls, all its commands. */

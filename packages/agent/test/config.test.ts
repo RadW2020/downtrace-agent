@@ -390,6 +390,23 @@ describe("the file check reads the declared routes from", () => {
   });
 });
 
+describe("the file check reads where the change ran its operations from", () => {
+  // covers: RF-526
+  const inspecting = { DOWNTRACE_INSPECT: "/tmp/run.jsonl" };
+
+  it("is what DOWNTRACE_CHECK_SITES says, and only check sets it", () => {
+    const result = configFromEnv({ ...inspecting, DOWNTRACE_CHECK_SITES: " /tmp/change.sites.jsonl " });
+    expect(result.ok && result.config.checkSites).toBe("/tmp/change.sites.jsonl");
+  });
+
+  it("is nothing when the variable is absent or blank: no stack is taken", () => {
+    for (const value of [undefined, "", "  "]) {
+      const result = configFromEnv({ ...inspecting, ...(value === undefined ? {} : { DOWNTRACE_CHECK_SITES: value }) });
+      expect(result.ok && result.config.checkSites).toBeUndefined();
+    }
+  });
+});
+
 describe("the project check runs the tests of", () => {
   const inspecting = { DOWNTRACE_INSPECT: "/tmp/run.jsonl" };
 

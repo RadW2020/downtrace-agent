@@ -58,6 +58,15 @@ describe("the environment of a run", () => {
     expect(env.DOWNTRACE_PROFILE_MS).toBe("1000");
   });
 
+  // covers: RF-526
+  it("has the change's run write where it ran its operations, and the base's take no stack", () => {
+    const change = runEnv({}, { ...run, side: "change", sitesFile: "/tmp/dt/change.sites.jsonl" });
+    expect(change.DOWNTRACE_CHECK_SITES).toBe("/tmp/dt/change.sites.jsonl");
+    expect(runEnv({}, run).DOWNTRACE_CHECK_SITES).toBeUndefined();
+    // And a variable of the caller's never reaches a run: it is dropped with every other `DOWNTRACE_`.
+    expect(runEnv({ DOWNTRACE_CHECK_SITES: "/elsewhere" }, run).DOWNTRACE_CHECK_SITES).toBeUndefined();
+  });
+
   it("loads the instrumentation through NODE_OPTIONS, which reaches every process and thread", () => {
     expect(runEnv({}, run).NODE_OPTIONS).toBe(`--import=${REGISTER}`);
   });

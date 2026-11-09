@@ -6,8 +6,10 @@
  *     downtrace report [--json] <file>
  *     downtrace compare [--json] <base file> <change file>
  *     downtrace verify [--dsn <dsn> | --token <token> --url <url>]
+ *     downtrace stamp [--commit <sha>]
  *
- * `login`, `brief` and `api` read their own words (`login/command.ts`, `read.ts`); their usage is here, with the rest.
+ * `login`, `brief`, `api` and `stamp` read their own words (`login/command.ts`, `read.ts`, `stamp.ts`); their usage is
+ * here, with the rest.
  *
  * The test command comes after `--` so that its own flags are its own and never this one's.
  */
@@ -36,6 +38,7 @@ export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace report [--json] <file>
        downtrace compare [--json] <base file> <change file>
        downtrace verify [--dsn <dsn> | --token <token> --url <url>]
+       downtrace stamp [--commit <sha>]
        downtrace login --project <slug> [--env <environment>] [--level read|operate]   (downtrace login --help)
        downtrace brief [--project <slug>] [--since <instant>] [--url <cloud>] [--json]
        downtrace api <path> [--url <cloud>] [--json]
@@ -89,6 +92,17 @@ Options of verify:
 Exit status of verify: 0 the token writes where it says, 1 the cloud refused the token, 2 nothing could be checked
 (no token, a cloud that cannot be reached or does not answer in time, or any other answer; it says which).
 
+stamp writes the commit the build is made from into .downtrace-version, in this directory, and the instrumentation
+reports it as the deployed version when no variable names one. Run it in the build, beside the app's package.json.
+The commit is --commit's, or git's HEAD, or the first CI variable that holds one (GITHUB_SHA,
+CODEBUILD_RESOLVED_SOURCE_VERSION, CI_COMMIT_SHA, ...).
+
+Options of stamp:
+  --commit <sha>       the commit to write, 7 to 40 hexadecimal digits
+
+Exit status of stamp: 0 written, 1 no commit was found and nothing was written, 2 a wrong option or a file that
+could not be written.
+
 brief reads a project's brief from the cloud: what a coding agent reads first. As text, its headline, what needs
 attention and the command that reads each item's detail; with --json, the cloud's answer as it came. api reads one
 path of a project's API, /api/p/<slug>/..., such as each item of a brief names, and prints the answer as it came. It
@@ -121,7 +135,7 @@ export function parseArgs(argv: readonly string[]): Parsed {
   if (first !== "check") {
     return {
       kind: "error",
-      message: `unknown command "${first}": the ones there are are "check", "init", "report", "compare", "verify", "login", "brief" and "api"`,
+      message: `unknown command "${first}": the ones there are are "check", "init", "report", "compare", "verify", "stamp", "login", "brief" and "api"`,
     };
   }
 

@@ -1,7 +1,7 @@
 import { AGGREGATES_SCHEMA_V0, DEPENDENCY_KINDS_V0, type Endpoint } from "@downtrace/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
-import { DATABASE_KINDS, identify, RunReader, readDeclared, readRun } from "../src/check/read.ts";
+import { DATABASE_KINDS, identify, RunReader, readDeclared, readRun, readSites } from "../src/check/read.ts";
 import {
   batch,
   dependency,
@@ -349,5 +349,59 @@ describe("reading the routes the applications of a run declared (ESC-18)", () =>
       "",
     ].join("\n");
     expect(readDeclared(text)).toEqual({ routes: ["GET /health", "GET /ok"], malformed: 5 });
+  });
+});
+
+describe("reading where the change run ran its operations (RF-526)", () => {
+  // covers: RF-526
+  const site = (route: string, at: unknown, more: Record<string, unknown> = {}) => ({
+    route,
+    kind: "query",
+    hash: "q1",
+    at,
+    ...more,
+  });
+
+  it("merges every process's lines by route and operation, each place once, in the order found", () => {
+    const text = [
+      JSON.stringify({ sites: [site("GET /orders/:id", "src/orders.ts:9"), site("GET /health", "src/health.ts:3")] }),
+      JSON.stringify({
+        sites: [site("GET /orders/:id", "src/orders.ts:9"), site("GET /orders/:id", "src/lines.ts:4")],
+      }),
+    ].join("\n");
+    const read = readSites(text);
+    expect(read.malformed).toBe(0);
+    expect(read.sites.get("GET /orders/:id")?.get("query:q1")).toEqual(["src/orders.ts:9", "src/lines.ts:4"]);
+    expect(read.sites.get("GET /health")?.get("query:q1")).toEqual(["src/health.ts:3"]);
+  });
+
+  it("names an operation as the comparison does, a call to this machine by its place and not its port", () => {
+    const call = { kind: "call", hash: "c9", text: "GET 127.0.0.1:41234" };
+    const read = readSites(JSON.stringify({ sites: [site("POST /checkout", "src/pay.ts:12", call)] }));
+    expect(read.sites.get("POST /checkout")?.get(identify("call", "c9", "GET 127.0.0.1:41234").id)).toEqual([
+      "src/pay.ts:12",
+    ]);
+  });
+
+  it("takes no place that is absolute, above the project or in a node_modules, whatever wrote the file", () => {
+    const text = [
+      JSON.stringify({
+        sites: [
+          site("GET /a", "/home/someone/app/src/a.ts:1"),
+          site("GET /a", "../outside/a.ts:2"),
+          site("GET /a", "src/../../a.ts:3"),
+          site("GET /a", "node_modules/pg/lib/client.js:4"),
+          site("GET /a", "src/a.ts"),
+          site("GET /a", 42),
+          site("GET /a", "src/a.ts:5"),
+        ],
+      }),
+      '{"sites":[{"route":"GET /a","ki',
+      JSON.stringify({ sites: "src/a.ts:6" }),
+      JSON.stringify({ sites: [{ route: "GET /a", kind: "error", hash: "e", at: "src/a.ts:7" }] }),
+    ].join("\n");
+    const read = readSites(text);
+    expect(read.sites.get("GET /a")?.get("query:q1")).toEqual(["src/a.ts:5"]);
+    expect(read.malformed).toBe(9);
   });
 });

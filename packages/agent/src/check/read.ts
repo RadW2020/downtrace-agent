@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { CALLS_PER_REQUEST_BUCKETS_V0 } from "@downtrace/protocol";
 import { METHODS } from "../routes.ts";
@@ -527,6 +528,82 @@ export async function readDeclaredFile(path: string): Promise<DeclaredRead> {
     return readDeclared(await readFile(path, "utf8"));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { routes: [], malformed: 0 };
+    throw err;
+  }
+}
+
+/** Where the change run ran its operations, read back: by route, then by operation, each place once, as found. */
+export interface SitesRead {
+  sites: Map<string, Map<string, string[]>>;
+  malformed: number;
+}
+
+/**
+ * A place as the instrumentation writes it: a file relative to the project and a line, `src/users.ts:42`. Never one
+ * that is absolute, above the project or in a `node_modules`, whatever wrote the file: the report says no path of the
+ * machine (RF-526).
+ */
+function isPlace(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[^\n]+:\d+$/.test(value) || isAbsolute(value)) return false;
+  const parts = value.split("/");
+  return !parts.includes("..") && !parts.includes("node_modules");
+}
+
+/**
+ * Folds the file the instrumentation wrote the places to (`DOWNTRACE_CHECK_SITES`). Every process of the run appends
+ * to it, as to the declared routes' file, so a line can be cut by one that ended; what cannot be read is counted. An
+ * operation is named as the comparison names it (`identify`), so its places are found by the same id.
+ */
+export function readSites(text: string): SitesRead {
+  const sites = new Map<string, Map<string, string[]>>();
+  let malformed = 0;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      malformed += 1;
+      continue;
+    }
+    const listed = isRecord(value) ? value.sites : undefined;
+    if (!Array.isArray(listed)) {
+      malformed += 1;
+      continue;
+    }
+    for (const entry of listed) {
+      const kind = isRecord(entry) ? compositionKind(entry.kind) : undefined;
+      if (
+        !isRecord(entry) ||
+        kind === undefined ||
+        typeof entry.route !== "string" ||
+        typeof entry.hash !== "string" ||
+        (entry.text !== undefined && typeof entry.text !== "string") ||
+        !isPlace(entry.at)
+      ) {
+        malformed += 1;
+        continue;
+      }
+      const { id } = identify(kind, entry.hash, entry.text);
+      let operations = sites.get(entry.route);
+      if (operations === undefined) {
+        operations = new Map();
+        sites.set(entry.route, operations);
+      }
+      const places = operations.get(id) ?? [];
+      if (!places.includes(entry.at)) places.push(entry.at);
+      operations.set(id, places);
+    }
+  }
+  return { sites, malformed };
+}
+
+/** The same, from the file. A run in which no sampled call had a frame of the project leaves none. */
+export async function readSitesFile(path: string): Promise<SitesRead> {
+  try {
+    return readSites(await readFile(path, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { sites: new Map(), malformed: 0 };
     throw err;
   }
 }

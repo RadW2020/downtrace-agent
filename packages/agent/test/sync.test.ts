@@ -78,6 +78,10 @@ const WAIT = /\bAtomics\.wait\b/;
  *   routes the applications declare are written beside the inspection file, only under `downtrace check`, which
  *   names the file. `DeclaredRoutes.writeOnExit` has one caller, the `exit` handler the agent registers only when
  *   it writes and sends nothing, and an exception that is killing the process writes nothing there either.
+ * - `appendFileSync`, in `sites.ts` (RF-526), for the reason `declared.ts` has it, beside it and on the same two ways
+ *   out: the places of the change run's operations are written beside its inspection file, only under `downtrace
+ *   check`, which names the file for that run alone. `CallSites.writeOnExit` is called where
+ *   `DeclaredRoutes.writeOnExit` is, and only where the agent was given the file.
  */
 const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [
   { file: "entry.ts", name: "realpathSync" },
@@ -85,6 +89,7 @@ const ALLOWED: ReadonlyArray<{ file: string; name: string }> = [
   { file: "inspect.ts", name: "appendFileSync" },
   { file: "inspect.ts", name: "writeSync" },
   { file: "declared.ts", name: "appendFileSync" },
+  { file: "sites.ts", name: "appendFileSync" },
 ];
 
 /** Every name of the convention on a line, where `SYNC` stops at the first. */

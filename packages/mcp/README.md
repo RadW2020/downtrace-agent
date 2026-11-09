@@ -30,7 +30,7 @@ The token is read from the environment and never from an argument: an argument e
 
 ## What it speaks
 
-Standard input and output, JSON-RPC 2.0. Tools only — no resources, no prompts.
+Standard input and output, JSON-RPC 2.0, or HTTP with `--http` (below). Tools only — no resources, no prompts.
 
 **Each message is answered when its own work is done**, not after the one before it: a `ping` is answered at once while a slow read is still waiting for the cloud, and two calls are answered in the order they finish, each carrying the `id` of its request. How many are in flight is up to the client; each call waits for the cloud for at most 30 seconds. When the input ends, the calls still in flight are answered before the server exits.
 
@@ -49,6 +49,28 @@ A failure is a result with `isError`, the HTTP status and the cloud's own senten
 An answer cut short is a result with `isError` too: its status came, and then the connection dropped or the 30 seconds ran out before the whole body did. It says the status the cloud answered, that its answer was cut short, and what cut it. An operation's then says it may or may not have been applied, and names the `idempotencyKey` it was sent with, the one this server generated when the call passed none: called again with the same arguments and that key, it is not applied a second time.
 
 **No dependencies.** The protocol a tools-only server needs is three methods, and it is written out here. See ADR 0078 for the argument and for the risk.
+
+## Served over HTTP
+
+`downtrace-mcp --http` serves the same tools over MCP's Streamable HTTP transport, for an agent environment that adds a remote server by its URL: `<origin>/mcp/<project>`, where `environment` and `level` may follow as query parameters to name what the credential is asked for. The tools, their schemas and hints, and the answer to each call are the stdio server's with the same credential.
+
+**The credential is the request's.** Each POST carries one JSON-RPC message and its own `Authorization: Bearer <access credential>`, which every call of that request sends in place of `DOWNTRACE_TOKEN`. Over HTTP the server reads neither `DOWNTRACE_TOKEN` nor the credentials `downtrace login` stored. Nothing is kept between requests: there is no session id, a request is answered in the revision its `MCP-Protocol-Version` names (one this server does not speak is a 400; with none, `2024-11-05`, because the transport has a server assume `2025-03-26`), and a credential revoked since the last call is refused by the cloud on the next.
+
+**Without one, the answer is 401** with `WWW-Authenticate: Bearer resource_metadata="…"`, naming the server's Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp/<project>`: its `resource` is the URL the client used, query included, and its `authorization_servers` is `DOWNTRACE_URL`, where the client gets a credential through OAuth. A credential the cloud refuses —invented, expired or revoked— is the cloud's 401 as the call's result, asked of the cloud on each call, as over stdio.
+
+**The URL names the project.** A call that names no `project` is about it; a call that names another is refused, and nothing is sent: answering it about the URL's project would read one project's findings as another's.
+
+A request is answered with one JSON body, and a notification with 202 and none. A `GET`, or any method but `POST`, is a 405: a server of tools sends nothing unasked, so there is no stream to open.
+
+| Variable | Default | |
+|---|---|---|
+| `DOWNTRACE_URL` | required | The cloud, where every call goes, and the authorization server the metadata names |
+| `DOWNTRACE_MCP_HOST` | `127.0.0.1` | The address it listens on |
+| `DOWNTRACE_MCP_PORT` | `8787` | The port; `0` takes a free one, and the line on stderr says which |
+| `DOWNTRACE_MCP_PUBLIC_URL` | none | The origin clients reach it at, such as `https://downtrace.example.com`: the metadata names it, and `Origin` may be it. Required off the loopback. Behind a proxy, the origin clients use, and the proxy passes `/mcp/` and `/.well-known/oauth-protected-resource/mcp/` through as they came. TLS is the proxy's: this server speaks plain HTTP |
+| `DOWNTRACE_MCP_ORIGINS` | none | Other origins `Origin` may be, separated by commas |
+
+What it guards against. A request with no `Origin` is accepted, because native clients send none; one with an `Origin` that is neither the server's own nor listed is a 403, so a web page cannot drive it. Without a public URL it answers only a loopback `Host` (`localhost`, `127.0.0.1`, `[::1]`), so a name rebound to it (DNS rebinding) is a 403 too. A body is at most 1 MiB (413), `application/json` (415), and the whole request arrives within 10 seconds (408). A body that is not one JSON-RPC message gets a 400 with the JSON-RPC error and nothing of the parser's; there are no batches. It logs only its own failures, and never a credential.
 
 ## The tools
 

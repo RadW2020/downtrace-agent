@@ -542,6 +542,29 @@ describe("instrumentPg, building the profile", () => {
     expect(fingerprints.misses).toBe(1);
   });
 
+  // covers: RF-526
+  it("outside check, takes no stack at the call and leaves the pool's own query as pg wrote it", async () => {
+    const pg = fakePg();
+    const poolQuery = function query(): unknown {
+      return undefined;
+    };
+    pg.module.Pool.prototype.query = poolQuery;
+    instrumentPg({ ...deps, moduleImpl: pg.module, fingerprints: new FingerprintCache() });
+    expect(pg.module.Pool.prototype.query).toBe(poolQuery);
+    const client = clientOf(pg.module);
+    const ctx = enterRequest();
+    const captured = vi.spyOn(Error, "captureStackTrace");
+    try {
+      await client.query("SELECT id FROM t WHERE id = $1", [1]);
+      await new Promise((resolve) => client.query("SELECT id FROM t WHERE id = $1", [2], resolve));
+      expect(captured).not.toHaveBeenCalled();
+    } finally {
+      captured.mockRestore();
+    }
+    // Recorded as ever, with nothing beside it: the place is check's alone.
+    expect([...(ctx.operations?.values() ?? [])].map((operation) => operation.count)).toEqual([2]);
+  });
+
   it("does not look at the query text when no profile is being built", async () => {
     const pg = fakePg();
     instrumentPg({ ...deps, moduleImpl: pg.module });

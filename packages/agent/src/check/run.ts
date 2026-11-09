@@ -3,6 +3,7 @@ import { lstat, mkdtemp, readdir, readFile, realpath, rm, stat, symlink } from "
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { commandFor, LOCKFILES, type PackageManager, packageManagerOf, parsePackageJson } from "../init/detect.ts";
+import { SITES_PER_OPERATION } from "../sites.ts";
 import { compareRuns, type RouteResult, summarize } from "./compare.ts";
 import { CONFIG_FILE } from "./config.ts";
 import {
@@ -13,7 +14,7 @@ import {
   UNPROFILED,
   unseenObservers,
 } from "./hints.ts";
-import { type RunTally, readDeclaredFile, readRunFile } from "./read.ts";
+import { type RunTally, readDeclaredFile, readRunFile, readSitesFile, type SitesRead } from "./read.ts";
 import {
   type CheckReport,
   compared,
@@ -272,7 +273,15 @@ function withoutDowntrace(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  */
 export function runEnv(
   parent: NodeJS.ProcessEnv,
-  run: { registerUrl: string; inspectFile: string; routesFile: string; project: string; side: Side },
+  run: {
+    registerUrl: string;
+    inspectFile: string;
+    routesFile: string;
+    project: string;
+    side: Side;
+    /** Where the change's run writes where it ran its operations (RF-526). The base's run is given none. */
+    sitesFile?: string | undefined;
+  },
 ): NodeJS.ProcessEnv {
   const env = withoutDowntrace(parent);
   const preload = `--import=${run.registerUrl}`;
@@ -283,6 +292,7 @@ export function runEnv(
   // Where the tests run: the application's modules resolve from there too, and not only from the runner, which a
   // package manager may keep where nothing of the project resolves (`resolutionBases`).
   env.DOWNTRACE_CHECK_PROJECT = run.project;
+  if (run.sitesFile !== undefined) env.DOWNTRACE_CHECK_SITES = run.sitesFile;
   env.DOWNTRACE_INTERVAL_MS = WINDOW_MS;
   env.DOWNTRACE_PROFILE_MS = WINDOW_MS;
   env.DOWNTRACE_ENV = "check";
@@ -763,17 +773,27 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
   const tallies = new Map<Side, RunTally>();
   // The routes the configuration lists, and the ones the applications of either run said they have.
   const declared = new Set(options.routes);
+  let sites: SitesRead["sites"] = new Map();
   for (const [side, dir, label, sha] of [
     ["base", baseProject, ref, commit],
     ["change", cwd, "working tree", head],
   ] as const) {
     const file = join(tmp, `${side}.jsonl`);
     const routesFile = join(tmp, `${side}.routes.jsonl`);
+    // Only the change's: the places are of what got worse, which is what the change runs.
+    const sitesFile = side === "change" ? join(tmp, "change.sites.jsonl") : undefined;
     options.progress(`${side}: running ${options.command}`);
     const ran = await runCommand({
       command: options.command,
       cwd: dir,
-      env: runEnv(options.env, { registerUrl: options.registerUrl, inspectFile: file, routesFile, project: dir, side }),
+      env: runEnv(options.env, {
+        registerUrl: options.registerUrl,
+        inspectFile: file,
+        routesFile,
+        project: dir,
+        side,
+        sitesFile,
+      }),
       timeoutMs: options.timeoutMs,
       signal: options.signal,
     }).catch((err: unknown) => {
@@ -783,6 +803,11 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     const said = await readDeclaredFile(routesFile);
     for (const route of said.routes) declared.add(route);
     tally.malformed += said.malformed;
+    if (sitesFile !== undefined) {
+      const placed = await readSitesFile(sitesFile);
+      sites = placed.sites;
+      tally.malformed += placed.malformed;
+    }
     tallies.set(side, tally);
     made.sides[side] = sideReport(label, sha, options.command, ran, tally);
     if (ran.timedOut) {
@@ -826,5 +851,22 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
     const { code, side, message, ...rest } = judged.failure;
     throw new CheckFailure(code, side, message, { ...rest, routes: judged.routes });
   }
-  return compared({ base: made.sides.base, change: made.sides.change, routes: judged.routes, notes: judged.notes });
+  return compared({
+    base: made.sides.base,
+    change: made.sides.change,
+    routes: withSites(judged.routes, sites),
+    notes: judged.notes,
+  });
+}
+
+/** Each operation that got worse, with where the change run ran it (RF-526); every other one as it was. */
+function withSites(routes: readonly RouteResult[], sites: SitesRead["sites"]): RouteResult[] {
+  return routes.map((route) => ({
+    ...route,
+    operations: route.operations.map((operation) =>
+      operation.worse
+        ? { ...operation, sites: (sites.get(route.id)?.get(operation.id) ?? []).slice(0, SITES_PER_OPERATION) }
+        : operation,
+    ),
+  }));
 }

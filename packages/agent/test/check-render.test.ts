@@ -99,6 +99,21 @@ describe("the report as text", () => {
     expect(text).toMatch(/appeared\s+SELECT n1 FROM t WHERE id = \?\s+\[query n1\]\s+0 -> 12 per request/);
   });
 
+  // covers: RF-526
+  it("says under an operation that got worse where the change ran it, when check found where", () => {
+    const report = reportOf();
+    const checkout = report.routes.find((route) => route.id === "POST /checkout");
+    const worse = checkout?.operations.find((operation) => operation.worse);
+    if (worse === undefined) throw new Error("the report has no operation that got worse");
+    worse.sites = ["src/orders.ts:42", "src/lines.ts:7"];
+    const lines = renderText(report).split("\n");
+    const at = lines.findIndex((line) => line.includes("SELECT n1 FROM t"));
+    expect(lines[at + 1]?.trim()).toBe("ran at src/orders.ts:42, src/lines.ts:7");
+    // With none found there is no line for it, and nothing else in the report changes.
+    worse.sites = [];
+    expect(renderText(report)).toBe(text);
+  });
+
   it("says what did not get worse beside what did", () => {
     expect(text).toContain("did not get worse: outgoing calls 2 per request · Redis commands 3 per request");
   });

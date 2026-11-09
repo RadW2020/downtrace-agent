@@ -256,6 +256,14 @@ export function recordWait(kind: DependencyKind, target: string, ms: number): vo
 }
 
 /**
+ * Where the application made a call, under `check` (`sites.ts`): told, once the call is an operation, which one it was.
+ * Nothing in production builds one.
+ */
+export interface CallSite {
+  ran(ctx: RequestContext, operation: OperationWork): void;
+}
+
+/**
  * One finished operation, as the instrumentation reports it. An object rather than six positional arguments,
  * two of which would be numbers that mean different things (repo rule).
  */
@@ -281,6 +289,8 @@ export interface FinishedOperation {
   failed?: boolean;
   /** Sanitised and bounded already, or absent: this file decides nothing about what text may travel. */
   context?: Record<string, string> | undefined;
+  /** Under `check`, where the application made the call (RF-526); absent everywhere else, and never in a batch. */
+  site?: CallSite | undefined;
 }
 
 /**
@@ -336,6 +346,7 @@ export function recordOperationIn(ctx: RequestContext, op: FinishedOperation): v
   entry.count += 1;
   entry.totalMs += ms;
   if (op.failed) entry.errors += 1;
+  if (op.site !== undefined) op.site.ran(ctx, entry);
 
   // And into the black box, which keeps the sequence the map above throws away: an aggregate says a route ran
   // fifty-six queries, and only starts and ends say whether they ran one after another (ATR-01).

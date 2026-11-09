@@ -16,6 +16,7 @@ import {
   IMAGE_PREFIX,
   imageDigest,
   lookFurther,
+  STAMP_FILE,
 } from "../src/deployed.ts";
 import type { Logger } from "../src/log.ts";
 import { testConfig } from "./support/agent-config.ts";
@@ -144,6 +145,16 @@ describe("the image digest, from the ECS task metadata", () => {
   it("is passed over when the endpoint is slow, at its timeout", async () => {
     // The server never answers: without the timeout this would not return at all, and the test would time out.
     expect(await ask("/slow", 150)).toEqual({ passed: "the ECS task metadata did not answer within 150 ms" });
+  });
+
+  // covers: RF-107
+  it("is read after a synchronous start longer than its timeout: the application's load counts once, however long", async () => {
+    // DT-223: on Fargate the digest was never used. The question is asked as the instrumentation starts, and then the
+    // application loads its modules in one synchronous stretch, seconds on a small task. A timer on the wall clock
+    // expired during it and fired as soon as it ended, before the answer was read.
+    const asked = ask("/ok", 150);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+    expect(await asked).toEqual({ version: `${IMAGE_PREFIX}${DIGEST}`, source: "the ECS task metadata" });
   });
 
   it.each([
@@ -318,6 +329,7 @@ describe("the chain past the variables", () => {
       entry: await entryOf(),
       fetchImpl: fetch,
       signal: new AbortController().signal,
+      warn: quiet.warn,
     });
     expect(chosen).toEqual({ version: `${IMAGE_PREFIX}${DIGEST}`, source: "the ECS task metadata" });
   });
@@ -332,6 +344,7 @@ describe("the chain past the variables", () => {
       entry: await entryOf(),
       fetchImpl: fetch,
       signal: new AbortController().signal,
+      warn: quiet.warn,
       metadataTimeoutMs: 150,
     });
     expect(chosen.version).toMatch(CODE);
@@ -346,6 +359,7 @@ describe("the chain past the variables", () => {
         throw new Error("nothing is asked off ECS");
       },
       signal: new AbortController().signal,
+      warn: quiet.warn,
     });
     expect(chosen.version.startsWith(CODE_PREFIX)).toBe(true);
   });
@@ -357,9 +371,117 @@ describe("the chain past the variables", () => {
       entry: `${dir}${sep}`,
       fetchImpl: fetch,
       signal: new AbortController().signal,
+      warn: quiet.warn,
     });
     expect(chosen.version).toBe("unknown");
-    expect(chosen.source).toMatch(/^the ECS task metadata answered 500; no code to fingerprint/);
+    expect(
+      chosen.source.startsWith(
+        `no ${STAMP_FILE} in ${dir}; the ECS task metadata answered 500; no code to fingerprint`,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("the commit downtrace stamp wrote", () => {
+  const COMMIT = "3f2a9c1e5b7d4a6f8e0c2b4d6f8a0c2e4b6d8f0a";
+
+  /** The chain on a build with `files`, on an ECS task whose endpoint answers with a digest; and what it warned. */
+  async function chainOn(files: Record<string, string>, entry = "dist/main.js") {
+    const root = await scratchDir();
+    await write(root, files);
+    const warnings: string[] = [];
+    const chosen = await lookFurther({
+      ecsMetadataUri: `${base}/ok`,
+      entry: join(root, entry),
+      fetchImpl: fetch,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    });
+    return { root, chosen, warnings };
+  }
+
+  // covers: RF-122
+  it("is the version, before the image digest and the fingerprint, with no prefix: it is a commit", async () => {
+    const { root, chosen, warnings } = await chainOn({ ...BUILD, [STAMP_FILE]: `${COMMIT}\n` });
+    expect(chosen).toEqual({ version: COMMIT, source: `${join(root, STAMP_FILE)}, which downtrace stamp wrote` });
+    expect(warnings).toEqual([]);
+  });
+
+  // covers: RF-122
+  it("takes an abbreviated commit, and one in capitals, as the same commit in small letters", async () => {
+    expect((await chainOn({ ...BUILD, [STAMP_FILE]: "3f2a9c1" })).chosen.version).toBe("3f2a9c1");
+    expect((await chainOn({ ...BUILD, [STAMP_FILE]: `  ${COMMIT.toUpperCase()}\r\n` })).chosen.version).toBe(COMMIT);
+  });
+
+  // covers: RF-122
+  it("is read from the code's root, the closest directory above the entry with a package.json, and not beside it", async () => {
+    const atRoot = await chainOn({ ...BUILD, [STAMP_FILE]: COMMIT }, "dist/main.js");
+    expect(atRoot.chosen.version).toBe(COMMIT);
+    const besideEntry = await chainOn({ ...BUILD, [`dist/${STAMP_FILE}`]: COMMIT }, "dist/main.js");
+    expect(besideEntry.chosen.version).toBe(`${IMAGE_PREFIX}${DIGEST}`);
+  });
+
+  // covers: RF-122
+  it("is read beside the entry when no package.json is above it: a bundle copied alone", async () => {
+    const { chosen } = await chainOn({ "server.js": "require('http');", [STAMP_FILE]: COMMIT }, "server.js");
+    expect(chosen.version).toBe(COMMIT);
+  });
+
+  // covers: RF-122
+  it("is passed over without a word when there is none, and the debug line says where it was looked for", async () => {
+    const { root, chosen, warnings } = await chainOn(BUILD);
+    expect(chosen.version).toBe(`${IMAGE_PREFIX}${DIGEST}`);
+    expect(warnings).toEqual([]);
+    const fingerprinted = await lookFurther({
+      ecsMetadataUri: undefined,
+      entry: join(root, "dist/main.js"),
+      fetchImpl: fetch,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    });
+    expect(fingerprinted.version).toMatch(CODE);
+    expect(fingerprinted.source.endsWith(`(no ${STAMP_FILE} in ${root})`)).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  // covers: RF-122
+  it.each([
+    ["a version that is not a commit", "v1.4.2"],
+    ["six hexadecimal digits", "3f2a9c"],
+    ["forty-one", `${COMMIT}0`],
+    ["an empty file", ""],
+    ["a commit and a second line", `${COMMIT}\nsecret=hunter2`],
+    ["a commit and a long tail", `${COMMIT}${" ".repeat(4_000)}secret=hunter2`],
+  ])(
+    "is ignored with one warning, which does not repeat it, when it holds %s, and the chain goes on",
+    async (_what, content) => {
+      const { root, chosen, warnings } = await chainOn({ ...BUILD, [STAMP_FILE]: content });
+      expect(chosen.version).toBe(`${IMAGE_PREFIX}${DIGEST}`);
+      expect(warnings).toEqual([
+        `${join(root, STAMP_FILE)} holds no commit (7 to 40 hexadecimal digits): it is ignored, and the version is looked for further`,
+      ]);
+      expect(warnings.join("")).not.toContain("hunter2");
+    },
+  );
+
+  // covers: RF-122
+  it("is ignored with one warning when it cannot be read, and the chain goes on", async () => {
+    const root = await scratchDir();
+    await write(root, BUILD);
+    await mkdir(join(root, STAMP_FILE));
+    const warnings: string[] = [];
+    const chosen = await lookFurther({
+      ecsMetadataUri: undefined,
+      entry: join(root, "dist/main.js"),
+      fetchImpl: fetch,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    });
+    expect(chosen.version).toMatch(CODE);
+    expect(warnings).toEqual([
+      `${join(root, STAMP_FILE)} could not be read (EISDIR): the version is looked for further`,
+    ]);
+    expect(chosen.source).toContain(`${join(root, STAMP_FILE)} could not be read (EISDIR)`);
   });
 });
 

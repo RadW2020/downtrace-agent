@@ -58,6 +58,17 @@ export interface ServerOptions {
    * configuration has no token (`credentials.ts`). Without it, a server with no token sends none, as it always did.
    */
   credentials?: (project: string | undefined) => Promise<StoredLookup>;
+  /**
+   * The project the server's URL names, over HTTP (RF-513). Every call is about it: one that names no `project` is
+   * given this one, and one that names another is refused before anything is sent, because answering it about this
+   * project would hand a coding agent one project's findings as another's.
+   */
+  project?: string;
+  /**
+   * The revision the session speaks until an `initialize` negotiates one. Over HTTP each request is a session of its
+   * own and names its revision in `MCP-Protocol-Version`; over stdio, the newest.
+   */
+  revision?: ProtocolVersion;
 }
 
 /**
@@ -87,11 +98,11 @@ export function createServer(opts: ServerOptions) {
   const newKey = opts.newKey ?? (() => crypto.randomUUID());
   const timeoutMs = opts.timeoutMs ?? 30_000;
   /**
-   * The revision this session speaks, which `initialize` negotiates. One process is one session over stdio.
-   * Before a client initializes, the newest: the protocol has it initialize first, and a client that names
-   * no revision gets that one anyway.
+   * The revision this session speaks, which `initialize` negotiates. One process is one session over stdio, and
+   * one request is one over HTTP. Before a client initializes, the one the options name or the newest: the protocol
+   * has it initialize first, and a client that names no revision gets that one anyway.
    */
-  let revision: ProtocolVersion = PROTOCOL_VERSION;
+  let revision: ProtocolVersion = opts.revision ?? PROTOCOL_VERSION;
   const annotated = () => revision >= ANNOTATED_SINCE;
 
   /**
@@ -309,7 +320,19 @@ export function createServer(opts: ServerOptions) {
         const p = (params ?? {}) as { name?: unknown; arguments?: unknown };
         const tool = typeof p.name === "string" ? toolNamed(p.name) : undefined;
         if (!tool) return text(`unknown tool ${String(p.name)}`, true);
-        const args = (p.arguments ?? {}) as Record<string, unknown>;
+        let args = (p.arguments ?? {}) as Record<string, unknown>;
+        if (opts.project !== undefined) {
+          const named = args.project;
+          if (named !== undefined && named !== "" && named !== opts.project) {
+            return text(
+              `this server serves the project ${opts.project}, the one its URL names, and the call names ` +
+                `${JSON.stringify(named)}: nothing was sent. Call it with \`project\` ${opts.project}, or add the ` +
+                "server at the URL of the other project.",
+              true,
+            );
+          }
+          if (tool.inputSchema.properties.project !== undefined) args = { ...args, project: opts.project };
+        }
         const missing = (tool.inputSchema.required ?? []).filter((k) => args[k] === undefined || args[k] === "");
         if (missing.length > 0) return text(`missing required argument(s): ${missing.join(", ")}`, true);
         if (tool.versioned) {

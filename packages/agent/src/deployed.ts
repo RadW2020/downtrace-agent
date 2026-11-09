@@ -13,13 +13,16 @@ import type { Logger } from "./log.ts";
  * environment and its start command belong to someone else. So the start-up looks further, from the most explicit
  * source to the most generic:
  *
- * 1. the runtime's own metadata, where it exists with no configuration: on ECS, the digest of the container's image,
+ * 1. the commit `downtrace stamp` wrote into the build, where the build had git or a CI's variables (DT-223);
+ * 2. the runtime's own metadata, where it exists with no configuration: on ECS, the digest of the container's image,
  *    from the task metadata endpoint;
- * 2. a fingerprint of the deployed code, which works anywhere.
+ * 3. a fingerprint of the deployed code, which works anywhere.
  *
- * Neither is a commit, and each says what it is with a prefix on the value, `image:sha256:…` and `code:…`, so that
- * whoever reads it in the cloud or through the MCP server does not take it for one. A prefix and not a field of its
- * own: the protocol carries the version as a string, and what the string says of itself changes no contract.
+ * The stamp is a commit and travels as a variable's would, bare: the cloud and the MCP server read a version with no
+ * prefix as the commit or the name a deploy was given, and one commit, stamped or named by a variable, is one deploy.
+ * The other two are not commits, and each says what it is with a prefix on the value, `image:sha256:…` and `code:…`,
+ * so that whoever reads it in the cloud or through the MCP server does not take it for one. A prefix and not a field
+ * of its own: the protocol carries the version as a string, and what the string says of itself changes no contract.
  *
  * Kubernetes has no metadata of the kind with no configuration. The name of a Deployment's pod carries the hash of
  * its template, which changes when the template does, but `kubectl rollout restart` changes the template too, so a
@@ -44,6 +47,15 @@ export const IMAGE_PREFIX = "image:";
 /** Before a fingerprint of the deployed code: `code:<16 hex>`. */
 export const CODE_PREFIX = "code:";
 
+/** The file `downtrace stamp` writes into a build, with the commit the build was made from (DT-223). */
+export const STAMP_FILE = ".downtrace-version";
+
+/** What a commit looks like: git's object name, abbreviated or whole, in hexadecimal. */
+export const COMMIT = /^[0-9a-f]{7,40}$/i;
+
+/** The most of a stamp that is read: a commit and its line ending, and room to spare. */
+const STAMP_MAX_BYTES = 256;
+
 /**
  * How long the whole search may take, from the start. The first batch waits for it, and never longer: past this, the
  * version is `unknown` for the life of the process. Generous on purpose: the search runs off the path of any request,
@@ -51,8 +63,21 @@ export const CODE_PREFIX = "code:";
  */
 export const VERSION_BUDGET_MS = 10_000;
 
-/** How long the ECS task metadata endpoint has to answer. It is the ECS agent, on the same host: milliseconds. */
+/**
+ * How long the ECS task metadata endpoint has to answer. It is the ECS agent, on the same host: milliseconds. Counted
+ * on the event loop and not on the wall clock (`loopTimeout`).
+ */
 export const METADATA_TIMEOUT_MS = 1_000;
+
+/**
+ * The steps the endpoint's timeout is counted in (DT-223). The question is asked as the instrumentation starts, before
+ * the application has loaded, and an application loads its modules in one synchronous stretch: seconds, on a small
+ * Fargate task. A timer on the wall clock expired during that stretch and fired as soon as it ended, before the answer
+ * that had come meanwhile was read, because the timers come first in a turn of the loop: the digest was lost on every
+ * start longer than the timeout, and the fingerprint answered instead. Counted in steps, a stretch is one step however
+ * long it is, and the endpoint has the loop's own time to answer in.
+ */
+const METADATA_STEP_MS = 100;
 
 /** The most of its answer that is read: the container's metadata is a few kilobytes. */
 const METADATA_MAX_BYTES = 64 * 1024;
@@ -101,17 +126,22 @@ export interface LookOptions {
   fetchImpl: typeof fetch;
   /** The search's budget. Past it the fingerprint stops, and the search has found nothing. */
   signal: AbortSignal;
+  /** Says what the user must know whether or not debug is on: a stamp that holds no commit, or cannot be read. */
+  warn: (message: string) => void;
   /** Tests make these small; production leaves them alone. */
   metadataTimeoutMs?: number | undefined;
   limits?: FingerprintLimits | undefined;
 }
 
 /**
- * The chain past the variables: the image's digest on ECS, then a fingerprint of the code. Never rejects: a source
- * that fails is passed over, and what it said is kept for the debug line.
+ * The chain past the variables: the stamped commit, then the image's digest on ECS, then a fingerprint of the code.
+ * Never rejects: a source that fails is passed over, and what it said is kept for the debug line.
  */
 export async function lookFurther(options: LookOptions): Promise<Chosen> {
   const passed: string[] = [];
+  const stamped = await stampedCommit({ entry: options.entry, warn: options.warn });
+  if (!("passed" in stamped)) return stamped;
+  passed.push(stamped.passed);
   if (options.ecsMetadataUri !== undefined) {
     const answer = await imageDigest({
       uri: options.ecsMetadataUri,
@@ -123,7 +153,51 @@ export async function lookFurther(options: LookOptions): Promise<Chosen> {
   }
   const answer = await codeFingerprint({ entry: options.entry, signal: options.signal, limits: options.limits });
   if ("passed" in answer) return { version: UNKNOWN, source: [...passed, answer.passed].join("; ") };
-  return passed.length === 0 ? answer : { ...answer, source: `${answer.source} (${passed.join("; ")})` };
+  return { ...answer, source: `${answer.source} (${passed.join("; ")})` };
+}
+
+/**
+ * The commit `downtrace stamp` wrote: `.downtrace-version` in the code's root, the directory the fingerprint reads —
+ * the closest above the entry with a `package.json`, where a package manager runs the `build` script that stamps — or
+ * beside the entry when there is none, as for a bundle copied alone. One place, so a stamp elsewhere is not half read.
+ *
+ * Read once, at start-up, asynchronously and off the path of every request (invariant 1), and never thrown from: a
+ * stamp that is not there is the common case and passes in silence, and one that cannot be read or holds no commit is
+ * ignored with a warning, since someone meant it to be read. The warning names the file and not what it holds.
+ */
+export async function stampedCommit(options: { entry: string; warn: (message: string) => void }): Promise<Answer> {
+  let file = STAMP_FILE;
+  try {
+    const root = await rootOf(options.entry);
+    const dir = root === undefined ? path.resolve(options.entry) : "dir" in root ? root.dir : path.dirname(root.file);
+    file = path.join(dir, STAMP_FILE);
+    const bytes = await head(file, STAMP_MAX_BYTES + 1);
+    const commit = bytes.toString("utf8").trim();
+    if (bytes.length > STAMP_MAX_BYTES || !COMMIT.test(commit)) {
+      const why = `${file} holds no commit (7 to 40 hexadecimal digits)`;
+      options.warn(`${why}: it is ignored, and the version is looked for further`);
+      return { passed: why };
+    }
+    return { version: commit.toLowerCase(), source: `${file}, which downtrace stamp wrote` };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { passed: `no ${STAMP_FILE} in ${path.dirname(file)}` };
+    const why = `${file} could not be read (${code ?? (err instanceof Error ? err.message : "a thrown value")})`;
+    options.warn(`${why}: the version is looked for further`);
+    return { passed: why };
+  }
+}
+
+/** The first `max` bytes of a file, or all of it when it is shorter. */
+async function head(file: string, max: number): Promise<Buffer> {
+  const handle = await open(file, "r");
+  try {
+    const buffer = Buffer.alloc(max);
+    const { bytesRead } = await handle.read(buffer, 0, max, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -140,8 +214,9 @@ export async function imageDigest(options: {
   timeoutMs: number;
 }): Promise<Answer> {
   const source = "the ECS task metadata";
+  const timeout = loopTimeout(options.timeoutMs);
   try {
-    const res = await options.fetchImpl(options.uri, { signal: AbortSignal.timeout(options.timeoutMs) });
+    const res = await options.fetchImpl(options.uri, { signal: timeout.signal });
     if (!res.ok) {
       // The body of a refusal is not read, only let go of.
       await res.body?.cancel();
@@ -157,7 +232,28 @@ export async function imageDigest(options: {
       return { passed: `${source} did not answer within ${options.timeoutMs} ms` };
     }
     return { passed: `${source} could not be read: ${err instanceof Error ? err.message : "a thrown value"}` };
+  } finally {
+    timeout.clear();
   }
+}
+
+/**
+ * A signal that aborts once `ms` of the event loop's own time have passed, in steps of `METADATA_STEP_MS`: a step is a
+ * timer that starts the next when it fires, so a synchronous stretch of any length delays one step and is not counted.
+ * Unreferenced, as `AbortSignal.timeout`'s timer is, so it never keeps a process alive. `clear` stops it.
+ */
+function loopTimeout(ms: number): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const steps = Math.max(1, Math.ceil(ms / METADATA_STEP_MS));
+  const step = ms / steps;
+  let left = steps;
+  const tick = (): void => {
+    left -= 1;
+    if (left > 0) timer = setTimeout(tick, step).unref();
+    else controller.abort(new DOMException(`no answer within ${ms} ms`, "TimeoutError"));
+  };
+  let timer = setTimeout(tick, step).unref();
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
 }
 
 /** The `ImageID` of the container's metadata, when the text is JSON and the field a digest; undefined otherwise. */

@@ -78,8 +78,11 @@ function read(line: string): Incoming | Failure {
   return message;
 }
 
-/** Says what to answer a message with, or nothing when it was a notification. */
-async function answer(message: Incoming, handle: Handler, signal: AbortSignal): Promise<Outgoing | undefined> {
+/**
+ * Says what to answer a message with, or nothing when it was a notification. Each line over stdio, and each POST over
+ * HTTP (`http.ts`).
+ */
+export async function answer(message: Incoming, handle: Handler, signal: AbortSignal): Promise<Outgoing | undefined> {
   // A notification has no id and must not be answered, however it went.
   const id = message.id;
   try {

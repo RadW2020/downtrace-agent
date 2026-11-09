@@ -68,7 +68,12 @@ function requestsLine(route: RouteResult): string {
 function evaluatedBlock(route: RouteResult): string[] {
   const lines = [`  ${route.id}   ${requestsLine(route)}`];
   const moved = route.operations.filter((operation) => operation.change !== "unchanged");
-  for (const operation of moved) lines.push(operationLine(operation));
+  for (const operation of moved) {
+    lines.push(operationLine(operation));
+    if (operation.sites !== undefined && operation.sites.length > 0) {
+      lines.push(`               ran at ${operation.sites.join(", ")}`);
+    }
+  }
   const rest = route.dependencies.filter((dependency) => !dependency.worse);
   if (rest.length > 0) {
     const verdict = route.verdict === "worse" ? "did not get worse: " : "";

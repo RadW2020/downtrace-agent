@@ -49,7 +49,7 @@ describe("the command line of downtrace", () => {
     [["check", "npm", "test"], 'unexpected "npm": the test command goes after --'],
     [
       ["deploy"],
-      'unknown command "deploy": the ones there are are "check", "init", "report", "compare", "verify", "login", "brief" and "api"',
+      'unknown command "deploy": the ones there are are "check", "init", "report", "compare", "verify", "stamp", "login", "brief" and "api"',
     ],
     [["init", "--frobnicate"], "unknown option --frobnicate for init"],
     [["init", "src"], 'unexpected "src": init looks at the directory it runs in'],

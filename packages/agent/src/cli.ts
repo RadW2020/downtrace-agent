@@ -7,7 +7,8 @@ import { unsupportedNode } from "./node-floor.ts";
 /**
  * `downtrace`: the command of this package. `check` compares two runs of the project's tests before a deploy, `init`
  * writes what `check` and a pruning build need to know, and `report` and `compare` read files `DOWNTRACE_INSPECT` wrote.
- * `login` connects a coding agent to a cloud, and `brief` and `api` read it with the credential login stored.
+ * `login` connects a coding agent to a cloud, and `brief` and `api` read it with the credential login stored. `stamp`
+ * writes the commit a build is made from into it.
  *
  * Everything it reads from the process it runs in is read here, once, and handed on; the rest of it only returns
  * a status. A signal stops the runs, takes the temporary worktree away and ends with the status that says no
@@ -49,6 +50,10 @@ if (unsupported !== undefined) {
       uid: process.getuid?.(),
       now: defaultNow,
     });
+  } else if (command === "stamp") {
+    // `stamp` runs in a build, and writes the commit into it for the instrumentation to report (`stamp.ts`).
+    const { runStamp } = await import("./stamp.ts");
+    process.exitCode = await runStamp({ ...io, argv: words, cwd: process.cwd() });
   } else {
     const { runCli } = await import("./check/command.ts");
     const { AGENT_VERSION } = await import("./version.ts");

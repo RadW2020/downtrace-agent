@@ -60,6 +60,11 @@ export interface AgentConfig {
    */
   checkProject: string | undefined;
   /**
+   * Where to write the places in the project where the application ran its operations, or nothing:
+   * `DOWNTRACE_CHECK_SITES`, which only `check` sets, for the run of the change (RF-526). Absent, no stack is taken.
+   */
+  checkSites: string | undefined;
+  /**
    * Whether the normalised query text travels with the profile. `DOWNTRACE_QUERY_TEXT=off` suppresses it and
    * changes nothing else: the hash is the identity, so the analysis stays whole (ADR 0017, invariant 5).
    */
@@ -452,6 +457,7 @@ function configFrom(input: {
   const inspect = read("inspect")?.trim();
   const checkRoutes = env.DOWNTRACE_CHECK_ROUTES?.trim();
   const checkProject = env.DOWNTRACE_CHECK_PROJECT?.trim();
+  const checkSites = env.DOWNTRACE_CHECK_SITES?.trim();
   const connection = connectionOf(given, env, input.fromCode);
   // Inspecting without a cloud is the path that matters: install, set one variable, run the application, read the
   // file — before handing anything to anyone. Half a cloud is still a mistake worth naming, inspection or not.
@@ -507,6 +513,7 @@ function configFrom(input: {
       inspect: inspect === "" ? undefined : inspect,
       checkRoutes: checkRoutes === "" ? undefined : checkRoutes,
       checkProject: checkProject !== undefined && isAbsolute(checkProject) ? checkProject : undefined,
+      checkSites: checkSites === "" ? undefined : checkSites,
     },
     warnings,
   };

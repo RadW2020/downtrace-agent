@@ -16,6 +16,7 @@ import { applicationEntry, basesOf, type From } from "../entry.ts";
 import type { ErrorFingerprintCache } from "../errors.ts";
 import type { FingerprintCache } from "../fingerprint.ts";
 import type { Logger } from "../log.ts";
+import type { CallSites } from "../sites.ts";
 import { type Armed, armDriver } from "./arm.ts";
 
 /** `pg` takes the query as a string or as a config object; anything else is not a query text we can read. */
@@ -31,11 +32,13 @@ function queryTextOf(args: readonly unknown[]): string | undefined {
 
 const MARK = Symbol.for("downtrace.pg.instrumented");
 const WAIT_MARK = Symbol.for("downtrace.pg.pool.instrumented");
+const SITES_MARK = Symbol.for("downtrace.pg.pool.sites");
 
 /** Shape of the part of `pg` we touch. Anything else about the module is none of our business. */
 interface PgProto extends Record<string, unknown> {
   [MARK]?: boolean;
   [WAIT_MARK]?: boolean;
+  [SITES_MARK]?: boolean;
 }
 
 interface PgModule {
@@ -76,6 +79,11 @@ export interface InstrumentPgDeps {
    * application's query does, and an operator leaves it alone.
    */
   depth?: PgDepth | undefined;
+  /**
+   * Under `check`, where each query's place in the application is taken, at its call (RF-526). Absent in production,
+   * where the wrapper takes nothing and `pool.query` is not wrapped.
+   */
+  sites?: CallSites | undefined;
 }
 
 /**
@@ -191,7 +199,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
   }
   if (proto[MARK] === true) return;
 
-  const { fingerprints, internalError } = deps;
+  const { fingerprints, internalError, sites } = deps;
   if (deps.depth === "wrapper") {
     // The floor of the observer: the patch is in place and the wrapper runs, and records nothing — no timing,
     // no attribution, no pool wrap, because those exist to charge the work to a request. The benchmark
@@ -224,6 +232,8 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
       const target = targetOfClient(this);
       const started = performance.now();
       const sql = fingerprints ? queryTextOf(args) : undefined;
+      // At the call, where the application's frames are; under `check` only, where `sites` exists.
+      const site = sql === undefined || sites === undefined ? undefined : sites.capture(sql);
       let counted = false;
       const record = (failed = false, err?: unknown) => {
         if (counted) return;
@@ -245,6 +255,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
                 endedAt: started + ms,
                 failed,
                 target,
+                site,
               });
               recordErrorIn(ctx, deps.errors, failed, err, target, started, started + ms);
             }
@@ -277,6 +288,7 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
                   endedAt: started + ms,
                   failed,
                   target,
+                  site,
                 });
                 recordErrorIn(ctx, deps.errors, failed, cbArgs[0], target, started, started + ms);
               }
@@ -319,7 +331,32 @@ function patchClientAndPool(pg: PgModule, version: string, deps: InstrumentPgDep
   proto.query = wrapped;
   proto[MARK] = true;
   wrapPoolConnect(pg, deps);
+  if (sites !== undefined) wrapPoolQuery(pg, sites, internalError);
   deps.log.debug(`instrumented ${driver} ${version}`);
+}
+
+/**
+ * Under `check` only (RF-526): `pool.query()` asks the pool for a connection and runs the query on it later, from
+ * whichever connection the pool hands over, so the stack the client's `query` sees is the pool's and nothing of the
+ * application's. The place is taken here, where the application calls, and the client's `query` takes it from here.
+ */
+function wrapPoolQuery(pg: PgModule, sites: CallSites, internalError: (err: unknown) => void): void {
+  const proto = pg.Pool?.prototype;
+  if (!proto || typeof proto.query !== "function" || proto[SITES_MARK] === true) return;
+  const original = proto.query as (...args: unknown[]) => unknown;
+  proto.query = function (this: unknown, ...args: unknown[]): unknown {
+    let site: ReturnType<CallSites["capture"]>;
+    try {
+      const text = queryTextOf(args);
+      site = text === undefined ? undefined : sites.capture(text);
+    } catch (err) {
+      // The place was not taken: the pool is asked as the application asked it, and the client's own stack is read.
+      internalError(err);
+      return original.apply(this, args);
+    }
+    return sites.within(site, () => original.apply(this, args));
+  };
+  proto[SITES_MARK] = true;
 }
 
 /**

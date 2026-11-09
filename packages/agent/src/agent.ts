@@ -75,6 +75,7 @@ import { clientError, sanitizeContext } from "./report.ts";
 import { onResponseEnd } from "./response-end.ts";
 import { normalizeMethod, routeOf } from "./routes.ts";
 import { RuntimeSampler } from "./runtime.ts";
+import { CallSites } from "./sites.ts";
 import { type Ending, Sender } from "./transport.ts";
 import { ARM_FOR_MS, LocalTriggers } from "./trigger.ts";
 import { AGENT_VERSION } from "./version.ts";
@@ -138,8 +139,8 @@ export interface AgentDeps {
   loopTickMs?: number;
   /**
    * Where the version is looked for when no variable names it, and how long the search may take (DT-130). In
-   * production, `lookFurther`: the ECS task metadata, then a fingerprint of the code, within `VERSION_BUDGET_MS`. A
-   * test hands over a search that answers late, fails or never answers.
+   * production, `lookFurther`: the stamped commit, the ECS task metadata, then a fingerprint of the code, within
+   * `VERSION_BUDGET_MS`. A test hands over a search that answers late, fails or never answers.
    */
   lookForVersion?: ((signal: AbortSignal) => Promise<Chosen>) | undefined;
   versionBudgetMs?: number | undefined;
@@ -289,6 +290,8 @@ export class Agent {
   private readonly excludedEndpoints: Excluded;
   /** The routes the applications declare, written only under `downtrace check` (ESC-18). */
   private readonly declared: DeclaredRoutes | undefined;
+  /** Under `check`, in the run of the change, where the application ran its operations (RF-526); nothing elsewhere. */
+  private readonly sites: CallSites | undefined;
   private readonly excludedDependencies: Excluded;
   private instrumented = false;
   /**
@@ -380,6 +383,7 @@ export class Agent {
       this.enqueueHeld({ leaving: true });
       this.sender.dumpOnExit("exit");
       this.declared?.writeOnExit();
+      this.sites?.writeOnExit();
     } catch (err) {
       this.internalError(err);
     }
@@ -400,6 +404,10 @@ export class Agent {
       log: this.log,
       observed: (route) => !this.excludedEndpoints.has(route),
     });
+    this.sites =
+      config.checkSites !== undefined && config.checkProject !== undefined
+        ? new CallSites({ file: config.checkSites, project: config.checkProject, log: this.log })
+        : undefined;
     // The hostname is the user's; the id is ours, generated here. In minimal mode the first travels as a
     // digest of itself, which keeps two machines apart without naming either (ADR 0105).
     const host = hostname() || "unknown";
@@ -626,8 +634,9 @@ export class Agent {
     if (this.deployed.open) {
       const fetchImpl = this.fetchImpl;
       const ecsMetadataUri = this.config.ecsMetadataUri;
+      const warn = (message: string): void => this.log.warn(message);
       this.deployed.search(
-        this.lookForVersion ?? ((signal) => lookFurther({ ecsMetadataUri, entry, fetchImpl, signal })),
+        this.lookForVersion ?? ((signal) => lookFurther({ ecsMetadataUri, entry, fetchImpl, signal, warn })),
         this.versionBudgetMs,
       );
     }
@@ -699,6 +708,7 @@ export class Agent {
           errors: this.errors,
           moduleImpl: this.pgModule,
           depth: this.config.pgDepth,
+          sites: this.sites,
         });
         observers.pg = version === undefined ? "unavailable" : "on";
       } else {
@@ -713,6 +723,7 @@ export class Agent {
           errors: this.errors,
           depth: this.config.pgDepth,
           from,
+          sites: this.sites,
         };
         // Neon's driver is `pg` bundled, and the same patch: its ES module copy is imported as postgres.js's is.
         const armed = armedTogether([
@@ -778,6 +789,7 @@ export class Agent {
         fingerprints: this.fingerprints,
         errors: this.errors,
         depth: this.config.pgDepth,
+        sites: this.sites,
       };
       sandbox.push(
         {
@@ -1188,6 +1200,7 @@ export class Agent {
       }
       // Only under `check`, and after the batch: a flush with nothing to write waits for nothing more than it did.
       if (this.declared !== undefined) await this.declared.write();
+      if (this.sites !== undefined) await this.sites.write();
       // Evidence after the batch and not with it: it goes on its own path, for its own size (ADR 0073).
       // Leaving hands over everything under way, because partial evidence is an answer and silence is not —
       // for as long as the deadline lasts, and not a request longer.
@@ -1597,6 +1610,8 @@ export class Agent {
     // not against a digest of it, and after the black box has its own copy: what the coarse and fine
     // registers hold never leaves the process except in a capture (ADR 0105).
     const named = this.nameOf(route);
+    // Under `check`, where the application ran what this request ran, under the name its profile has (RF-526).
+    if (this.sites !== undefined && ctx !== undefined) this.sites.finished(ctx, `${method} ${named}`);
     this.recorder.record(method, named, response?.statusCode ?? 0, ms, ctx?.work);
     this.coarse.record(method, route, response?.statusCode ?? 0, ms, callsOf(ctx?.work));
     // Recorded even with nothing instrumented: a request with no operations is still a request, and its timing
@@ -1672,6 +1687,7 @@ export class Agent {
       this.enqueueHeld({ leaving: true });
       this.sender.writeHeld();
       this.declared.writeOnExit();
+      this.sites?.writeOnExit();
     }
   }
 

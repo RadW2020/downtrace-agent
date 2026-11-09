@@ -176,9 +176,12 @@ and the first that answers chooses it:
    order. A CI's variables exist during the build, so they count when the build passes them on to the application, with
    `ARG` and `ENV` in a Dockerfile for instance. Where a platform sets no commit, the name it gives the deploy: Fly.io's
    image, Cloud Run's revision, App Engine's version.
-3. On ECS, the digest of the container's image, from the task metadata endpoint the ECS agent gives every container:
-   `image:sha256:…`. One request to that endpoint at start-up, with a one-second timeout.
-4. Anywhere else, a fingerprint of your code: `code:` and 16 hexadecimal digits. It is a hash of the content of your
+3. The commit `downtrace stamp` wrote into your build, in `.downtrace-version`:
+   [below](#stamping-the-commit-into-the-build).
+4. On ECS, the digest of the container's image, from the task metadata endpoint the ECS agent gives every container:
+   `image:sha256:…`. One request to that endpoint at start-up, with a one-second timeout that the time your
+   application spends loading its modules does not count against.
+5. Anywhere else, a fingerprint of your code: `code:` and 16 hexadecimal digits. It is a hash of the content of your
    code files (`.js`, `.ts` and their kin), `package.json` files and lockfile, under the closest directory above your
    entry that has a `package.json`. `node_modules`, version control and every other file are left out, so neither a
    restart nor a log, an upload or a newer file time changes it, and two instances of one build agree on it. A new
@@ -186,8 +189,9 @@ and the first that answers chooses it:
    the path of every request; a larger application is fingerprinted by what fits, read in the same order on every
    instance. Only the hash leaves your server. Kubernetes sets nothing of the kind, and this is what covers it.
 
-The prefixes are there so that nobody reads an image digest or a fingerprint as a commit: in the cloud, through the MCP
-server and in a batch you inspect, a version that begins `image:` or `code:` says what it is.
+A commit travels as it is, whichever source named it. The prefixes are there so that nobody reads an image digest or a
+fingerprint as a commit: in the cloud, through the MCP server and in a batch you inspect, a version that begins `image:`
+or `code:` says what it is.
 
 A process says one version for its whole life, never `unknown` first and the real one after: that would read as two
 deploys. So the first batch waits for the search, ten seconds at most from the start, and nothing in the search delays
@@ -196,10 +200,60 @@ your application's start or reaches it if it fails. A process that leaves before
 With `DOWNTRACE_DEBUG=1`, one line says which source chose the version, and what it passed over on the way:
 
 ```
-[downtrace] version: code:5e884898da280471, from a fingerprint of 812 files under /app (the ECS task metadata answered 404)
+[downtrace] version: code:5e884898da280471, from a fingerprint of 812 files under /app (no .downtrace-version in /app; the ECS task metadata answered 404)
 ```
 
 In minimal mode, below, the version travels as a digest of itself, whichever source chose it.
+
+### Stamping the commit into the build
+
+Where you cannot set a variable on the running application and its platform sets none, an ECS task whose environment
+and start command belong to someone else for instance, your build still knows the commit. `downtrace stamp`, run in the
+build, writes it into `.downtrace-version`, and the instrumentation reports it as it would report `GITHUB_SHA`: a commit
+a coding agent can go from to `git diff`.
+
+It takes the commit from `--commit <sha>` when you give one, then from git's `HEAD`, then from the first variable of the
+list above that holds a commit (`GITHUB_SHA`, `CODEBUILD_RESOLVED_SOURCE_VERSION`, `CI_COMMIT_SHA`, `GIT_COMMIT`…). Git
+comes before the variables because a workflow may check out another commit than the one that started it. It writes the
+file in the directory it runs in.
+
+The instrumentation reads `.downtrace-version` once, at start-up, from the closest directory above your entry that has a
+`package.json`, which is where your package manager runs your `build` script, or from beside the entry when there is
+none. A file that holds anything but a commit, 7 to 40 hexadecimal digits, or that cannot be read, is ignored with one
+warning that does not repeat what it holds, and the search goes on to the image digest and the fingerprint. Add
+`.downtrace-version` to your `.gitignore`.
+
+In a `build` script, after the compiler:
+
+```json
+"build": "tsc && downtrace stamp"
+```
+
+In a workspace, that script already runs in the app's own directory, beside its `package.json`, which is where the file
+has to be.
+
+In a Dockerfile, run it where the commit is known, in the stage and the directory whose files reach the image. Where
+the build stage has `.git`, `RUN npx downtrace stamp` after `COPY . .` reads git's `HEAD`. A `.dockerignore` usually
+leaves `.git` out, though, and then inside `docker build` git has nothing to read: pass the CI's commit in as a build
+argument, which a `RUN` sees as a variable,
+
+```dockerfile
+COPY . .
+ARG GITHUB_SHA
+RUN npx downtrace stamp
+```
+
+with `docker build --build-arg GITHUB_SHA=$GITHUB_SHA .`, or `CODEBUILD_RESOLVED_SOURCE_VERSION` on CodeBuild. Or run
+`npx downtrace stamp` in the CI step before `docker build`, where git and the variables are, and let `COPY . .` carry the
+file in, as long as `.dockerignore` does not leave it out. In a multi-stage build, copy it into the final stage beside
+the `package.json` there, before the `CMD`:
+
+```dockerfile
+COPY --from=build /app/.downtrace-version ./
+```
+
+With no commit to write, it says how to give one and writes nothing. Exit status of stamp: 0 written, 1 no commit was
+found and nothing was written, 2 a wrong option or a file that could not be written.
 
 ## Sending no free text at all
 
