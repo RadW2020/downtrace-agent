@@ -72,6 +72,11 @@ A request is answered with one JSON body, and a notification with 202 and none. 
 
 What it guards against. A request with no `Origin` is accepted, because native clients send none; one with an `Origin` that is neither the server's own nor listed is a 403, so a web page cannot drive it. Without a public URL it answers only a loopback `Host` (`localhost`, `127.0.0.1`, `[::1]`), so a name rebound to it (DNS rebinding) is a 403 too. A body is at most 1 MiB (413), `application/json` (415), and the whole request arrives within 10 seconds (408). A body that is not one JSON-RPC message gets a 400 with the JSON-RPC error and nothing of the parser's; there are no batches. It logs only its own failures, and never a credential.
 
+**As a container**, `Dockerfile` in this package's directory of the repository runs this package as npm publishes it
+—the version its `DOWNTRACE_MCP_VERSION` names, not the source beside it— with `--http`, listening on `0.0.0.0:8787`
+as a user that is not root, on an image with no shell and a health check of its own. Set `DOWNTRACE_URL` and
+`DOWNTRACE_MCP_PUBLIC_URL`; the proxy in front carries TLS.
+
 ## The tools
 
 Named after the capability, not the route: an agent looks for "verify the recovery", not for `GET /findings/{id}/verification`.
