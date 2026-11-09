@@ -124,7 +124,7 @@ function parsed(body: string): unknown {
 }
 
 /** What made the request fail, in a line: Node's `fetch` says only «fetch failed», and the reason is its cause. */
-function causeOf(err: unknown): string {
+export function causeOf(err: unknown): string {
   const cause = err instanceof Error ? err.cause : undefined;
   if (cause instanceof Error) {
     const code = (cause as { code?: unknown }).code;

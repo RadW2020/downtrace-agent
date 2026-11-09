@@ -108,7 +108,7 @@ describe("the agent's clock", () => {
   // test that drives `AgentDeps.now`: each piece tested, the wiring not, which is gh-498 (ADR 0126).
   it("reads the clock's origin in one file, the one that defines the clock", () => {
     const readers = sources().filter((file) => /\bperformance\.timeOrigin\b/.test(code(file)));
-    expect(readers, "the origin of the agent's clock is read once, here, and passed down").toEqual(["agent.ts"]);
+    expect(readers, "the origin of the agent's clock is read once, here, and passed down").toEqual(["clock.ts"]);
   });
 
   // What catches a wire left unconnected is the compiler, and only while the parameter is required (ADR 0126).

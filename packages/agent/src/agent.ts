@@ -16,6 +16,7 @@ import {
 import { IntervalAggregator, type Recorder } from "./aggregator.ts";
 import { CallFingerprints } from "./calls.ts";
 import { Captures, type LiveCapture, type PrearmReserve, sliceFor } from "./captures.ts";
+import { defaultNow, EPOCH } from "./clock.ts";
 import { CoarseRegister } from "./coarse.ts";
 import { type AgentConfig, INSTRUMENTS, type Instrument } from "./config.ts";
 import {
@@ -85,18 +86,6 @@ const SHUTDOWN_FLUSH_MS = 1_000;
 /** How long the read of the application's `package.json` may take (RF-110): one small file, read once. */
 const MANIFEST_BUDGET_MS = 500;
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
-/**
- * When this process started, in the clock the rest of the world reads. `performance.now()` measures
- * durations and never jumps; adding this to one turns it into the instant it happened, which is what an
- * instant in the evidence has to be (gh-399).
- */
-const EPOCH = performance.timeOrigin;
-
-/**
- * The clock in production. `EPOCH + performance.now()` and not `Date.now()`: it is the one the fine register
- * already dates requests with, and an instant that is compared with those has to come from the same place.
- */
-const defaultNow = () => EPOCH + performance.now();
 
 export interface AgentDeps {
   /** The coarse register, so a test can drive its clock. */

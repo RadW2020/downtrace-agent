@@ -130,10 +130,9 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
   }
   const project = values["--project"];
   if (project === undefined) return { kind: "error", message: "--project is required: the project to connect to" };
-  // A DOWNTRACE_URL set to nothing names no cloud; an empty --url is refused above.
-  const url = (values["--url"] ?? env.DOWNTRACE_URL ?? "").trim().replace(/\/+$/, "") || DOWNTRACE_CLOUD;
-  const reason = unusableUrl(url);
-  if (reason !== undefined) return { kind: "error", message: reason };
+  const cloud = resolveCloud(values["--url"], env);
+  if ("reason" in cloud) return { kind: "error", message: cloud.reason };
+  const { url } = cloud;
   const level = values["--level"] ?? "read";
   if (level !== "read" && level !== "operate") {
     return { kind: "error", message: `--level is read or operate, not "${level}"` };
@@ -154,8 +153,19 @@ export function parseLoginArgs(argv: readonly string[], env: NodeJS.ProcessEnv):
 }
 
 /**
- * Why a cloud's address is not one to send a sign-up to, or undefined when it is: https://, or http:// to this machine
- * only, where nothing on the way can read what comes back.
+ * The cloud a command of `downtrace` speaks to: `--url`, else `DOWNTRACE_URL`, else Downtrace's cloud, without its
+ * trailing slashes; or why it is not one to send a credential to. `login`, `brief` and `api` resolve it here.
+ */
+export function resolveCloud(flag: string | undefined, env: NodeJS.ProcessEnv): { url: string } | { reason: string } {
+  // A DOWNTRACE_URL set to nothing names no cloud; an empty --url is refused by the parsers.
+  const url = (flag ?? env.DOWNTRACE_URL ?? "").trim().replace(/\/+$/, "") || DOWNTRACE_CLOUD;
+  const reason = unusableUrl(url);
+  return reason === undefined ? { url } : { reason };
+}
+
+/**
+ * Why a cloud's address is not one to send a sign-up or a credential to, or undefined when it is: https://, or http://
+ * to this machine only, where nothing on the way can read what travels.
  */
 function unusableUrl(url: string): string | undefined {
   let parsed: URL;
@@ -167,7 +177,7 @@ function unusableUrl(url: string): string | undefined {
   if (parsed.protocol === "https:") return undefined;
   if (parsed.protocol === "http:" && LOCAL_HOSTS.has(parsed.hostname)) return undefined;
   if (parsed.protocol === "http:") {
-    return `the cloud's URL must be https:// (http:// only for localhost), not "${url}": the credentials come back over it`;
+    return `the cloud's URL must be https:// (http:// only for localhost), not "${url}": credentials travel over it`;
   }
   return `the cloud's URL must be https://, not "${url}"`;
 }

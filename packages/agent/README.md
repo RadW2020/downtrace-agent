@@ -294,7 +294,7 @@ The reference pages live beside this README, in `guide/` of the package:
 - [Databases](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md) — Postgres, Neon, postgres.js, MySQL, SQL Server, SQLite, MongoDB and Prisma, driver by driver
 - [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md) — each framework, the heuristic, and what is wrapped
 - [Errors](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/errors.md) — the two calls, sanitising, how a process ends, beside your error tracker
-- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`login`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/login.md)
+- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`login`, `brief`, `api`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/login.md)
 
 ## Changelog
 

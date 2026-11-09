@@ -7,6 +7,7 @@ import { unsupportedNode } from "./node-floor.ts";
 /**
  * `downtrace`: the command of this package. `check` compares two runs of the project's tests before a deploy, `init`
  * writes what `check` and a pruning build need to know, and `report` and `compare` read files `DOWNTRACE_INSPECT` wrote.
+ * `login` connects a coding agent to a cloud, and `brief` and `api` read it with the credential login stored.
  *
  * Everything it reads from the process it runs in is read here, once, and handed on; the rest of it only returns
  * a status. A signal stops the runs, takes the temporary worktree away and ends with the status that says no
@@ -19,42 +20,49 @@ const unsupported = unsupportedNode(process.versions.node);
 if (unsupported !== undefined) {
   process.stderr.write(`downtrace: ${unsupported}\n`);
   process.exitCode = 2;
-} else if (process.argv[2] === "login") {
-  // `login` is a command of its own: it speaks to a cloud, which none of the others does.
-  const { runLogin } = await import("./login/command.ts");
-  const abort = new AbortController();
-  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => abort.abort());
-  process.exitCode = await runLogin({
-    argv: process.argv.slice(3),
-    env: process.env,
-    home: homedir(),
-    uid: process.getuid?.(),
-    stdout: (text) => process.stdout.write(text),
-    stderr: (text) => process.stderr.write(text),
-    signal: abort.signal,
-  });
 } else {
-  const { runCli } = await import("./check/command.ts");
-  const { AGENT_VERSION } = await import("./version.ts");
   const abort = new AbortController();
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => abort.abort());
-
-  process.exitCode = await runCli({
-    argv: process.argv.slice(2),
+  const io = {
     env: process.env,
-    cwd: process.cwd(),
-    tmpRoot: tmpdir(),
-    // The package's own `register` entry, wherever it is installed: `src/register.ts` here, `dist/register.js` published.
-    // Found as `require` finds it, which every supported Node can: Node 20 has `import.meta.resolve` without a flag
-    // only from 20.6, and before it every command ended in a stack trace (DT-142).
-    registerUrl: pathToFileURL(createRequire(import.meta.url).resolve("@downtrace/agent/register")).href,
-    version: AGENT_VERSION,
-    stdout: (text) => {
+    stdout: (text: string): void => {
       process.stdout.write(text);
     },
-    stderr: (text) => {
+    stderr: (text: string): void => {
       process.stderr.write(text);
     },
     signal: abort.signal,
-  });
+  };
+  const [command, ...words] = process.argv.slice(2);
+  if (command === "login") {
+    // `login`, `brief` and `api` speak to a cloud with the user's credentials file, which none of the others reads.
+    const { runLogin } = await import("./login/command.ts");
+    process.exitCode = await runLogin({ ...io, argv: words, home: homedir(), uid: process.getuid?.() });
+  } else if (command === "brief" || command === "api") {
+    const { runRead } = await import("./read.ts");
+    const { defaultNow } = await import("./clock.ts");
+    process.exitCode = await runRead({
+      ...io,
+      command,
+      argv: words,
+      home: homedir(),
+      uid: process.getuid?.(),
+      now: defaultNow,
+    });
+  } else {
+    const { runCli } = await import("./check/command.ts");
+    const { AGENT_VERSION } = await import("./version.ts");
+
+    process.exitCode = await runCli({
+      ...io,
+      argv: process.argv.slice(2),
+      cwd: process.cwd(),
+      tmpRoot: tmpdir(),
+      // The package's own `register` entry, wherever it is installed: `src/register.ts` here, `dist/register.js`
+      // published. Found as `require` finds it, which every supported Node can: Node 20 has `import.meta.resolve`
+      // without a flag only from 20.6, and before it every command ended in a stack trace (DT-142).
+      registerUrl: pathToFileURL(createRequire(import.meta.url).resolve("@downtrace/agent/register")).href,
+      version: AGENT_VERSION,
+    });
+  }
 }

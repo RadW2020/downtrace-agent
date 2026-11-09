@@ -7,6 +7,8 @@
  *     downtrace compare [--json] <base file> <change file>
  *     downtrace verify [--dsn <dsn> | --token <token> --url <url>]
  *
+ * `login`, `brief` and `api` read their own words (`login/command.ts`, `read.ts`); their usage is here, with the rest.
+ *
  * The test command comes after `--` so that its own flags are its own and never this one's.
  */
 
@@ -35,6 +37,8 @@ export const USAGE = `Usage: downtrace check [options] [-- <test command>]
        downtrace compare [--json] <base file> <change file>
        downtrace verify [--dsn <dsn> | --token <token> --url <url>]
        downtrace login --project <slug> [--env <environment>] [--level read|operate]   (downtrace login --help)
+       downtrace brief [--project <slug>] [--since <instant>] [--url <cloud>] [--json]
+       downtrace api <path> [--url <cloud>] [--json]
 
 check runs the tests of the project on a base and on the working tree with the instrumentation writing locally,
 and compares them route by route, by composition: which queries, outgoing calls and Redis commands each request
@@ -85,6 +89,23 @@ Options of verify:
 Exit status of verify: 0 the token writes where it says, 1 the cloud refused the token, 2 nothing could be checked
 (no token, a cloud that cannot be reached or does not answer in time, or any other answer; it says which).
 
+brief reads a project's brief from the cloud: what a coding agent reads first. As text, its headline, what needs
+attention and the command that reads each item's detail; with --json, the cloud's answer as it came. api reads one
+path of a project's API, /api/p/<slug>/..., such as each item of a brief names, and prints the answer as it came. It
+sends GET and nothing else: another method, another origin or a path outside a project's API is refused before
+anything is sent. The credential is DOWNTRACE_TOKEN, unless it holds an ingestion token, which reads nothing;
+otherwise the one downtrace login stored for the cloud and the project. It is never printed.
+
+Options of brief and api:
+  --project <slug>     brief: the project; default the only one downtrace login stored for the cloud (api reads
+                       the project of its path)
+  --since <instant>    brief: what counts as new, RFC 3339; default the last 24 hours
+  --url <cloud>        the cloud; default DOWNTRACE_URL, and without it Downtrace's cloud, as login's
+  --json               brief: the cloud's answer as it came; both: a failure as JSON
+
+Exit status of brief and api: 0 read, 1 the cloud refused (in its own words), 2 nothing could be read (no
+credential, a path refused, a cloud that cannot be reached or does not answer in 30 s, or an answer that is not JSON).
+
   -h, --help           this text
   -v, --version        the version
 `;
@@ -100,7 +121,7 @@ export function parseArgs(argv: readonly string[]): Parsed {
   if (first !== "check") {
     return {
       kind: "error",
-      message: `unknown command "${first}": the ones there are are "check", "init", "report", "compare" and "verify"`,
+      message: `unknown command "${first}": the ones there are are "check", "init", "report", "compare", "verify", "login", "brief" and "api"`,
     };
   }
 

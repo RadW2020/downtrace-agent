@@ -1,4 +1,4 @@
-# Connect to a cloud: `downtrace login`
+# Connect to a cloud and read it: `downtrace login`, `brief` and `api`
 
 Part of the documentation of [`@downtrace/agent`](../README.md).
 
@@ -66,3 +66,57 @@ operator creates projects instead.
 
 Exit status of login: 0 approved, 1 not approved (denied, expired, refused, the cloud unreachable or interrupted), 2 a
 usage error.
+
+## Read the project from the shell: `downtrace brief` and `downtrace api`
+
+```sh
+npx downtrace brief                       # the project login stored for Downtrace's cloud
+npx downtrace brief --project nidus-api --json
+npx downtrace api /api/p/nidus-api/findings/42/report
+```
+
+A coding agent reads its project with these two where the MCP server is not there yet —in Claude Code, a server added
+during a session is there only in the next— or not at all, as in Codex, Cursor or a CI job. They read with the
+credential login stored, and need no configuration.
+
+`brief` reads the project's brief: what a coding agent reads first, within a fixed size, each item saying where its
+detail is. As text it prints the headline, what needs attention with the command that reads each item's detail, and
+the read that follows; with `--json`, the cloud's answer as it came, which also has the busiest routes, the routes
+whose requests run one operation many times, the telemetry of each environment, what the brief cannot say, and each
+item's MCP tool with its arguments.
+
+```
+nidus-api: Telemetry arrived in the last 24 hours from 1 of 1 environment(s). 1 open finding(s); 1 error(s) first seen.
+
+Needs attention (2 of 3):
+  finding "42": slower, or failing more, than this route usually is
+    downtrace api /api/p/nidus-api/findings/42/report
+  error "9f3c": an error first seen in this window
+    downtrace api /api/p/nidus-api/errors/9f3c
+
+Next: downtrace api '/api/p/nidus-api/changes?since=2026-11-09T16%3A04%3A00Z'
+Routes, hotspots, telemetry and what the brief cannot say: downtrace brief --project nidus-api --json
+```
+
+`api` reads one path of a project's API, `/api/p/<slug>/…`, such as each item of a brief names, or the same path as a
+URL of the cloud, and prints the answer as it came. It only reads: it sends `GET` and takes no method. A path outside a
+project's API, another origin, and a segment that is `.` or `..` or hides a separator in an escape are refused before
+anything is sent, and a redirect is not followed. Operations —closing a finding, asking for a capture— stay in the MCP
+server, which carries their idempotency keys.
+
+The cloud is `--url`, `DOWNTRACE_URL` without it, and Downtrace's cloud without either, as for login. The credential
+is `DOWNTRACE_TOKEN` when it is set, unless it holds an ingestion token, `dt_…`, which reads nothing and is not sent;
+otherwise the one login stored for that cloud and the project: `--project`, or the only one stored for the cloud, for
+`brief`; the project of its path, for `api`. An expired one is not sent, and the command prints the login that renews
+it; a file others can read is not used, as above. Neither prints the credential.
+
+| Option | What it is |
+|---|---|
+| `--project <slug>` | `brief`: the project; the only one login stored for the cloud when not given |
+| `--since <instant>` | `brief`: what counts as new, RFC 3339; the last 24 hours when not given |
+| `--url <cloud>` | The cloud, as for login |
+| `--json` | `brief`: the cloud's answer as it came. Both: a failure as JSON (`schema: "downtrace.read/1"`), its `reason` —`refused`, with the cloud's `httpStatus`, `no-credential`, `expired-credential`, `unreachable`, `timeout`…— and its `message` |
+
+Each request waits 30 seconds at most. Exit status of brief and api: 0 read, 1 the cloud refused (in its own words), 2
+nothing could be read (no credential, a path refused, a cloud that cannot be reached or does not answer in 30 s, or an
+answer that is not JSON).
