@@ -4,11 +4,13 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseArgs, USAGE } from "../../agent/src/check/args.ts";
-import { evaluateRoute } from "../../agent/src/check/compare.ts";
+import { evaluateRoute, type OperationResult } from "../../agent/src/check/compare.ts";
 import { feedbackFor } from "../../agent/src/check/feedback.ts";
 import { renderJson } from "../../agent/src/check/render.ts";
 import { failed } from "../../agent/src/check/report.ts";
 import { runInit } from "../../agent/src/init/command.ts";
+import { parseReadArgs } from "../../agent/src/read.ts";
+import { parseStampArgs } from "../../agent/src/stamp.ts";
 import { tools } from "../../mcp/src/tools.ts";
 
 /**
@@ -79,6 +81,25 @@ function words(line: string): string[] {
   return [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? "");
 }
 
+/**
+ * A command read by the parser `cli.ts` hands it to: `brief` and `api` by `read.ts`'s, `stamp` by its own, the rest
+ * by `check/args.ts`'s. What it gives is the kind the command runs as, or `error` with the reason it refuses.
+ */
+function parse(command: string[]): { kind: string; message?: string } {
+  const [name, ...rest] = command;
+  if (name === "brief" || name === "api") return parseReadArgs(name, rest);
+  if (name === "stamp") return parseStampArgs(rest);
+  return parseArgs(command);
+}
+
+/** The kind each command runs as, where its parser does not name it after the command. */
+const RUNS_AS: Record<string, string> = { brief: "read", api: "read" };
+
+/** The numbered rule of a text, from its number to the next one. */
+function rule(text: string, n: number): string {
+  return new RegExp(`^${n}\\. [\\s\\S]*?(?=^\\d+\\. |^<!--|(?![\\s\\S]))`, "m").exec(text)?.[0] ?? "";
+}
+
 describe("the AGENTS.md block", () => {
   it("is fenced by its markers, so that pasting it again replaces it", () => {
     expect(block.trimStart().startsWith(BEGIN)).toBe(true);
@@ -90,8 +111,9 @@ describe("the AGENTS.md block", () => {
     const commands = commandsOf(block);
     expect(commands.map((c) => c[0])).toEqual(expect.arrayContaining(["init", "check"]));
     for (const command of commands) {
-      const parsed = parseArgs(command);
-      expect(parsed.kind, command.join(" ")).toBe(command[0]);
+      const parsed = parse(command);
+      const name = command[0] ?? "";
+      expect(parsed.kind, `${command.join(" ")}: ${parsed.message ?? ""}`).toBe(RUNS_AS[name] ?? name);
     }
   });
 
@@ -113,6 +135,41 @@ describe("the AGENTS.md block", () => {
       expect(USAGE).toContain(status);
       expect(block).toContain(status);
     }
+    for (const status of ["0 read", "1 the cloud refused", "2 nothing could be read"]) {
+      expect(USAGE).toContain(status);
+      expect(block).toContain(status);
+    }
+    for (const status of ["0 nothing got worse", "1 something did", "2 no verdict"]) {
+      expect(USAGE).toContain(status);
+      expect(block).toContain(status);
+    }
+  });
+
+  it("asks, of each route that got worse, where the change runs what made it worse: check's `sites`", () => {
+    // covers: RF-526
+    // A field `check` writes on an operation that got worse; renamed there, this stops compiling (`make typecheck`).
+    const field: keyof OperationResult = "sites";
+    expect(rule(block, 1)).toContain(`\`${field}\``);
+    expect(rule(block, 1)).toContain("`file:line`");
+  });
+
+  it("reads the brief from the shell where the MCP server is not there, and each path it names", () => {
+    // covers: RF-523
+    const commands = commandsOf(block).map((command) => command.join(" "));
+    expect(commands).toContain("brief --json");
+    expect(commands.some((command) => command.startsWith("api "))).toBe(true);
+    expect(rule(block, 5)).toContain("`brief --json`");
+    expect(block).toContain("`next.api`");
+  });
+
+  it("waits for a deploy's verdict in the background, and proposes stamp, never running it unasked", () => {
+    const commands = commandsOf(block);
+    const deploy = commands.find((command) => command[0] === "brief" && command.includes("--deploy"));
+    expect(deploy, "a brief --deploy").toBeDefined();
+    expect(deploy).toEqual(expect.arrayContaining(["--wait", "--json"]));
+    expect(block).toMatch(/in the background/);
+    expect(commands.map((command) => command[0])).toContain("stamp");
+    expect(rule(block, 7)).toMatch(/`stamp`[^.]*: propose it[^.]*never/);
   });
 
   it("asks for the routes that were not evaluated, and names the fields of check's JSON that hold them", async () => {
@@ -226,6 +283,35 @@ describe("every text a coding agent is handed", () => {
     }
   });
 
+  it("starts a session at the brief, says in one line what it found, and when no telemetry arrived", () => {
+    // covers: RF-523
+    for (const { name, text } of [
+      { name: "rule 5 of AGENTS-block.md", text: rule(block, 5) },
+      { name: "rule 5 of SKILL.md", text: rule(skillBody, 5) },
+      { name: "session-start.md", text: hookText },
+    ]) {
+      expect(text, name).toMatch(/When a session starts|when a session starts|before the first task/);
+      expect(text, name).toContain("`project_brief`");
+      // The slug the tool takes, named by the credential when the coding agent does not know it.
+      expect(text, name).toMatch(/`read_credential` names it/);
+      expect(text, name).toMatch(/in one line what it found/);
+      expect(text, name).toContain("`telemetry.arrivedSince` is false");
+      expect(text, name).toMatch(/no telemetry arrived, never that there is nothing to report/);
+      // The brief first; what changed since the last look after it, from an `until`.
+      expect(text.indexOf("`changes_since`"), name).toBeGreaterThan(text.indexOf("`project_brief`"));
+      expect(text, name).toMatch(/`changes_since`[^.]*`until`|`until`[^.]*`changes_since`/);
+    }
+    for (const { name, text } of texts) {
+      for (const said of text.matchAll(/[^.]*\bnothing (?:to report|changed)\b[^.]*/g)) {
+        expect(said[0], name).toMatch(/never that/);
+      }
+    }
+    const brief = tools.find((tool) => tool.name === "project_brief");
+    for (const field of ["`telemetry.arrivedSince`", "`until`", "`next`", "`api`", "`headline`"]) {
+      expect(brief?.description, field).toContain(field);
+    }
+  });
+
   it("names only tools the MCP server lists, and the fields of changes_since it relies on", () => {
     const names = new Set(tools.map((tool) => tool.name));
     for (const { name, text } of texts) {
@@ -301,6 +387,23 @@ describe("what a coding agent runs, which is what npm serves and not the source"
 });
 
 describe("the README", () => {
+  it("connects the MCP server with downtrace login, and DOWNTRACE_TOKEN is only the override", async () => {
+    // covers: RF-514
+    const readme = await read("README.md");
+    const { version, commands, flags } = ((await readJson("released.json")) as Released)["@downtrace/agent"];
+    const login = commandsOf(readme).find((command) => command[0] === "login");
+    expect(login, "a downtrace login").toEqual(expect.arrayContaining(["--project"]));
+    expect(commandsOf(readme).map((command) => command.join(" "))).toContain("brief --json");
+    // What a person or a coding agent copies from here runs what npm serves, as the texts do.
+    for (const { written, version: named } of versionsOf(readme)) expect(named, written).toBe(version);
+    // Claude Code's own flags, such as `claude --plugin-dir`, are Claude Code's to read.
+    for (const command of commandsOf(readme)) {
+      expect(commands, command.join(" ")).toContain(command[0]);
+      for (const flag of command.filter((word) => word.startsWith("--"))) expect(flags, flag).toContain(flag);
+    }
+    expect(readme).toMatch(/`DOWNTRACE_TOKEN` is only an override/);
+  });
+
   it("says its limits, and nothing that tells a reader to stay away", async () => {
     // It opened with a banner that called Downtrace a closed pilot, which a coding agent reads as «not for this
     // project» (DT-185). The limits are what a reader needs to decide.

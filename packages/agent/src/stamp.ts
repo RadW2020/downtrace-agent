@@ -76,7 +76,7 @@ export async function runStamp(deps: StampDeps): Promise<number> {
 type Parsed = { kind: "help" } | { kind: "error"; message: string } | { kind: "stamp"; commit: string | undefined };
 
 /** Reads what comes after `downtrace stamp`: `--commit <sha>`, or nothing. */
-function parseStampArgs(argv: readonly string[]): Parsed {
+export function parseStampArgs(argv: readonly string[]): Parsed {
   let commit: string | undefined;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";

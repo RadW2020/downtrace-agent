@@ -1,5 +1,5 @@
 {
-  "description": "At the start of a session, the step that asks Downtrace what changed in production since the last look",
+  "description": "At the start of a session, the step that reads the project's brief from Downtrace and says in one line what it found",
   "hooks": {
     "SessionStart": [
       {
