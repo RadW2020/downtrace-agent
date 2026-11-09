@@ -1,5 +1,11 @@
 # @downtrace/protocol
 
+## 0.14.1
+
+### Patch Changes
+
+- 1f508fc: The README and the npm description open with what Downtrace does: it tells you when a change breaks the performance of your Node.js backend, before you deploy (a query that now runs once per row, one more outgoing call per request) and after (which route got slower, and what changed). The banner that called Downtrace a closed pilot is gone; its limits are still said: free, with no plans, no billing and no SLA, and an ingestion protocol at `v0`.
+
 ## 0.14.0
 
 ### Minor Changes

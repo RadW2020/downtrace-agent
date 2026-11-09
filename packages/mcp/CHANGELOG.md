@@ -1,5 +1,19 @@
 # @downtrace/mcp
 
+## 0.4.0
+
+### Minor Changes
+
+- 2d1a799: `project_brief` is where a session starts, and the first tool the server lists: the project's state in one answer of at most 16 KiB, whatever its size — a headline of counts, whether telemetry arrived, what needs attention, the busiest routes, the routes whose requests run one operation more than once each, and what cannot be said —, every list with its `total` and how many it `leftOut`, and every item with its `next`: the tool of this server and the arguments that read its detail. It takes the project's slug and an optional `since`, the last 24 hours without it. `changes_since` is for what changed since you last looked, from the brief's `until`, and `read_report` comes before any decision on a finding.
+- 1bf48a7: With no `DOWNTRACE_TOKEN`, the server sends, on each call, the access credential `downtrace login` stored for its `DOWNTRACE_URL` and the call's `project`, from `credentials.json` under `$XDG_CONFIG_HOME/downtrace` (`~/.config/downtrace` without it), so its configuration carries no secret. The file is read on each call that needs it, so a login made during a session is used without a restart. An expired entry is not sent, and the call says to run login again, with the command; a file other users can read or write, of another user, or a symbolic link is not used, and the call says why. `read_credential` takes an optional `project`, to pick among several stored for the cloud; with none it sends the only one. With `DOWNTRACE_TOKEN` set, nothing changes.
+- 43f824a: `project_status` reads twenty endpoints with their operations by hash unless told otherwise, and takes `route`, `method`, `limit`, `offset` and `operations` to read one route, another page, or the operations with their text or counted. A tool whose argument is not given sends the `default` its schema publishes.
+- 7dbd3d4: `downtrace-mcp --http` serves the same tools over MCP's Streamable HTTP transport, at `/mcp/<project>`, for an agent environment that adds a remote server by its URL. Each request carries its own access credential as a Bearer token, which its calls send in place of `DOWNTRACE_TOKEN`; without one the answer is 401 naming the server's Protected Resource Metadata, whose authorization server is `DOWNTRACE_URL`. The URL names the project: a call that names another is refused. It listens on `DOWNTRACE_MCP_HOST` and `DOWNTRACE_MCP_PORT` (`127.0.0.1:8787`), names `DOWNTRACE_MCP_PUBLIC_URL` as its origin off the loopback, and refuses an `Origin` that is neither that nor one of `DOWNTRACE_MCP_ORIGINS`. The stdio server answers as before; an argument other than `--http` is now refused instead of ignored.
+
+### Patch Changes
+
+- The captures an hour, and those that may run at once, are each environment's now, as the rows a day, the evidence a day and the error signatures already were: a load test on staging no longer spends production's captures. The README's section on the ingestion token, and `downtrace init` in its text and in `--json`, say that a spent budget stops its environment alone, production untouched, until it refills; the MCP server's `list_captures` and `request_capture` say that a capture refused with 429 is refused for its environment.
+- 0db4d10: The README, the npm description and the MCP Registry's listing open with the same sentence, what Downtrace does: it tells you when a change breaks the performance of your Node.js backend. The README goes on with what it finds before and after a deploy, and that this package is its MCP server: what Downtrace found in production, and why, as tools a coding agent can discover and use. The keywords name the question (performance, regression, N+1, deploy). The banner that called Downtrace a closed pilot is gone; its limits are still said: free, with no plans, no billing and no SLA.
+
 ## 0.3.2
 
 ### Patch Changes

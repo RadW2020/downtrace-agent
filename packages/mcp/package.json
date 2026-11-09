@@ -1,6 +1,6 @@
 {
   "name": "@downtrace/mcp",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "mcpName": "io.github.RadW2020/downtrace",
   "description": "Downtrace tells you when a change breaks the performance of your Node.js backend. This is its MCP server: which route got slower after a deploy, what changed and why, as tools a coding agent can discover and use. No dependencies.",
   "type": "module",

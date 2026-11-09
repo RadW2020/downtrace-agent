@@ -9,11 +9,11 @@ Write them exactly as here, with the version they name: these are all the flags 
 
 | To | Run |
 |---|---|
-| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent@0.21.0 init --json` |
-| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent@0.21.0 check --json` |
-| Compare a branch with the point where it left main | `npx @downtrace/agent@0.21.0 check --json --base "$(git merge-base origin/main HEAD)"` |
-| Give the test command when `downtrace.json` has none | `npx @downtrace/agent@0.21.0 check --json -- npm test` |
-| Allow each test run more than the default 900 seconds | `npx @downtrace/agent@0.21.0 check --json --timeout 1800` |
+| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent@0.22.0 init --json` |
+| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent@0.22.0 check --json` |
+| Compare a branch with the point where it left main | `npx @downtrace/agent@0.22.0 check --json --base "$(git merge-base origin/main HEAD)"` |
+| Give the test command when `downtrace.json` has none | `npx @downtrace/agent@0.22.0 check --json -- npm test` |
+| Allow each test run more than the default 900 seconds | `npx @downtrace/agent@0.22.0 check --json --timeout 1800` |
 
 Never shorten them to `npx downtrace` unless `@downtrace/agent` is a dependency of the project: without it, that name on the registry is not Downtrace's, and npx would run whatever is published under it.
 

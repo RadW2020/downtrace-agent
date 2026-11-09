@@ -2,7 +2,7 @@
   "mcpServers": {
     "downtrace": {
       "command": "npx",
-      "args": ["-y", "@downtrace/mcp@0.3.2"],
+      "args": ["-y", "@downtrace/mcp@0.4.0"],
       "env": {
         "DOWNTRACE_URL": "${DOWNTRACE_URL:-}",
         "DOWNTRACE_TOKEN": "${DOWNTRACE_TOKEN:-}"
