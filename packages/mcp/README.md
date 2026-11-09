@@ -14,16 +14,15 @@ Reading is not all of it: a coding agent operates Downtrace from here too — it
     "downtrace": {
       "command": "npx",
       "args": ["-y", "@downtrace/mcp"],
-      "env": {
-        "DOWNTRACE_URL": "https://your-downtrace",
-        "DOWNTRACE_TOKEN": "an access credential of level operate"
-      }
+      "env": { "DOWNTRACE_URL": "https://your-downtrace" }
     }
   }
 }
 ```
 
-`DOWNTRACE_URL` is required. `DOWNTRACE_TOKEN` is not: without it the server comes up **read-only**, every operation is still listed, and calling one says what credential it would need. That is more use than refusing to start.
+`DOWNTRACE_URL` is required, and the credential is not in the configuration. `npx @downtrace/agent login --project <slug>` keeps the access credential it collects in `credentials.json` under `$XDG_CONFIG_HOME/downtrace` (`~/.config/downtrace` without it), readable by you alone, and with no `DOWNTRACE_TOKEN` this server sends, on each call, the one stored for its `DOWNTRACE_URL` and the call's `project`. It reads the file on each call that needs it, so a login made during a session is used at the next call, without a restart. An expired entry is not sent: the call says to run login again, with the command. `read_credential` sends the only credential stored for the cloud, or, when there are several, the one of the `project` you name. A file that other users can read or write, that belongs to another user or that is a symbolic link is not used, and the call says why.
+
+`DOWNTRACE_TOKEN`, when it is set, is the credential every call sends, as before, and the file is not read. With neither, the server comes up **read-only**: reads go without a credential, every operation is still listed, and calling one says what credential it would need and the login that stores it. That is more use than refusing to start.
 
 The shared administration password is not the token for a project. This server sends its token as a Bearer token, and in that shape the password opens `list_projects` and `read_credential` and no tool about a project: those answer it a 403 with `needs: "access credential"`, because a project's reads and operations need an access credential of that project.
 
@@ -57,7 +56,7 @@ Named after the capability, not the route: an agent looks for "verify the recove
 
 | | |
 |---|---|
-| `read_credential` | **ask it first** when you do not know the project's slug: the project your credential belongs to, its level and expiry, the environments it reaches, and every route of the project with the level it needs and whether your credential opens it. Given the administration password, level `admin`, no project and every route closed |
+| `read_credential` | **ask it first** when you do not know the project's slug: the project your credential belongs to, its level and expiry, the environments it reaches, and every route of the project with the level it needs and whether your credential opens it. Given the administration password, level `admin`, no project and every route closed. With no `DOWNTRACE_TOKEN`, the credential `downtrace login` stored: the only one for the cloud, or the one of the `project` you name |
 | `list_projects` | every project's slug, with its open findings and its last batch, as the front page reads them. Only the administration password opens it, and the password opens no tool about a project |
 | `project_status` | traffic, endpoints —ordered by the column you name, as on the page—, dependencies, runtime, coverage, budget |
 | `changes_since` | **ask it first when a session starts**, with the instant you last looked: what opened, closed or was first seen after it, in one bounded answer instead of four lists to diff. A `finding` opened (when a second check confirmed it) or closed, an `error` first seen, a `deploy` first seen —with the version it followed and, when it is the newest of its environment, its comparison with that one as counts, or why there is none— and an episode of lost coverage (`coverage`) opened or ended. Newest first, one item for each thing with its `events` in the window, its `id` —the one the other tools take— and, under `resource`, where to read what it is about and the version it has there: a finding's is its report's, the one `read_report` gives and `close_finding` takes; a deploy's and an episode's are null, because they are records of the status. Something that was already there and still is, is not a change: `list_findings`, `list_errors` and `project_status` say how the project is now. The window is `(since, until]`, and the `until` of an answer is the `since` of the next. It never cuts the window without saying so: `total` is the window's, `leftOut` is how many this page does not hold and `next` is the address of the page that does, with `offset` moved on and `until` fixed. When no batch arrived after `since`, `telemetry.arrivedSince` is false and the answer is missing telemetry, **not** a project where nothing changed, however short the list; `telemetry.environments` says it for each environment |

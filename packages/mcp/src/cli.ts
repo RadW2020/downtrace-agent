@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { ConfigError, configFrom } from "./config.ts";
+import { homedir } from "node:os";
+import { ConfigError, configFrom, credentialsPathFrom } from "./config.ts";
+import { readStoredCredential } from "./credentials.ts";
 import { linesOf } from "./rpc.ts";
 import { createServer } from "./server.ts";
 import { VERSION } from "./version.ts";
@@ -10,11 +12,21 @@ import { VERSION } from "./version.ts";
  * go to stderr, which is what a client shows the user.
  */
 try {
-  const config = configFrom((name) => process.env[name]);
+  const get = (name: string) => process.env[name];
+  const config = configFrom(get);
+  const path = credentialsPathFrom(get, homedir());
+  const uid = process.getuid?.();
   if (config.token === "") {
-    process.stderr.write("downtrace-mcp: no DOWNTRACE_TOKEN, so this session can read but not operate\n");
+    process.stderr.write(
+      `downtrace-mcp: no DOWNTRACE_TOKEN, so each call sends the credential downtrace login stored in ${path} ` +
+        `for ${config.url} and the call's project\n`,
+    );
   }
-  const server = createServer({ config, version: VERSION });
+  const server = createServer({
+    config,
+    version: VERSION,
+    credentials: (project) => readStoredCredential({ url: config.url, project }, { path, uid, now: Date.now() }),
+  });
   await server.run(linesOf(process.stdin), (line) => process.stdout.write(line));
 } catch (err) {
   if (err instanceof ConfigError) {

@@ -141,8 +141,19 @@ export const tools: Tool[] = [
       "server the password opens `list_projects` and this, and a project's reads and operations need an access " +
       "credential of that project. An operation refused for its level answers 403 with the level the credential " +
       "has and the level the operation needs; a token that is not a usable credential —invented, expired or " +
-      "revoked— answers 401.",
-    inputSchema: { type: "object", properties: {} },
+      "revoked— answers 401. With no DOWNTRACE_TOKEN, the credential is the one `downtrace login` stored for this " +
+      "server's cloud: the only one, or the project's you name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "string",
+          description:
+            "Only when this server has no DOWNTRACE_TOKEN and `downtrace login` stored credentials of several " +
+            "projects for its cloud: the slug of the one to describe. It is not sent to the cloud.",
+        },
+      },
+    },
     method: "GET",
     path: "/api/credential",
   },

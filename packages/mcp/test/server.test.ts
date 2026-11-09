@@ -1699,11 +1699,15 @@ describe("what the credential can do", () => {
     expect(only(calls, 0).headers["idempotency-key"]).toBeUndefined();
   });
 
-  it("is a read that takes no argument, not even the project it is the way to learn", () => {
+  it("is a read that requires no argument, not even the project it is the way to learn", () => {
     const tool = toolNamed("read_credential");
     expect(tool?.operates).toBeUndefined();
-    expect(tool?.inputSchema.properties).toEqual({});
+    // `project` only picks among the credentials `downtrace login` stored, when there is no DOWNTRACE_TOKEN and
+    // several are; it is not sent (RF-611).
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["project"]);
     expect(tool?.inputSchema.required ?? []).toEqual([]);
+    expect(tool?.path).not.toContain("{slug}");
+    expect(tool?.query ?? []).toEqual([]);
   });
 
   it("says in its description that it is the first call when the slug is not known", () => {

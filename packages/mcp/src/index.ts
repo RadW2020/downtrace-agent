@@ -1,4 +1,5 @@
-export { type Config, ConfigError, configFrom } from "./config.ts";
+export { type Config, ConfigError, configFrom, credentialsPathFrom } from "./config.ts";
+export { readStoredCredential, type StoredCredential, type StoredLookup } from "./credentials.ts";
 export { linesOf } from "./rpc.ts";
 export {
   createServer,

@@ -1,4 +1,5 @@
 import type { Config } from "./config.ts";
+import type { StoredCredential, StoredLookup } from "./credentials.ts";
 import { InternalError, type Outgoing, serve } from "./rpc.ts";
 import { type Tool, toolNamed, tools } from "./tools.ts";
 
@@ -52,6 +53,11 @@ export interface ServerOptions {
   /** Where the idempotency keys come from. Injected for the same reason. */
   newKey?: () => string;
   timeoutMs?: number;
+  /**
+   * The credential `downtrace login` stored for this server's cloud and a project, asked on each call when the
+   * configuration has no token (`credentials.ts`). Without it, a server with no token sends none, as it always did.
+   */
+  credentials?: (project: string | undefined) => Promise<StoredLookup>;
 }
 
 /**
@@ -88,10 +94,82 @@ export function createServer(opts: ServerOptions) {
   let revision: ProtocolVersion = PROTOCOL_VERSION;
   const annotated = () => revision >= ANNOTATED_SINCE;
 
+  /**
+   * The credential a call sends: `DOWNTRACE_TOKEN`, or the one `downtrace login` stored for this cloud and the call's
+   * project, or none (`""`) when neither is there. An expired entry is not sent, and neither is anything from a file
+   * that cannot be used: the call says why instead.
+   */
+  async function credentialFor(
+    project: string | undefined,
+  ): Promise<{ token: string; storedFor: string[] } | { refusal: string }> {
+    if (opts.config.token !== "" || opts.credentials === undefined) return { token: opts.config.token, storedFor: [] };
+    let stored: StoredLookup;
+    try {
+      stored = await opts.credentials(project);
+    } catch (err) {
+      // The reader says what is wrong in a result of its own; one that throws is said here, as a result too.
+      return {
+        refusal: `this server has no DOWNTRACE_TOKEN, and the stored credentials could not be read: ${messageOf(err)}`,
+      };
+    }
+    switch (stored.kind) {
+      case "found":
+        return { token: stored.credential.token, storedFor: [] };
+      case "missing":
+        return { token: "", storedFor: stored.projects };
+      case "expired":
+        return {
+          refusal:
+            `the credential \`downtrace login\` stored for ${stored.credential.project} at ${opts.config.url} expired ` +
+            `at ${stored.credential.expiresAt}, so it was not sent. Run \`${loginCommand(stored.credential)}\` ` +
+            "again: this server reads the new one at the next call, without a restart.",
+        };
+      case "ambiguous":
+        return {
+          refusal:
+            `this server has no DOWNTRACE_TOKEN, and \`downtrace login\` stored credentials of several projects for ` +
+            `${opts.config.url}: ${stored.projects.join(", ")}. Name the project with \`project\`.`,
+        };
+      case "unusable":
+        return {
+          refusal: `this server has no DOWNTRACE_TOKEN, and the credentials \`downtrace login\` stored are not used: ${stored.reason}.`,
+        };
+    }
+  }
+
+  /** The login that stores a credential for this cloud: of `project`, with the environment and level given. */
+  function loginCommand(c: Pick<StoredCredential, "project" | "environment" | "level">): string {
+    const env = c.environment === "" ? "" : ` --env ${c.environment}`;
+    const level = c.level === "" ? "" : ` --level ${c.level}`;
+    return `npx @downtrace/agent login --project ${c.project}${env}${level} --url ${opts.config.url}`;
+  }
+
+  /** What a call with no credential to send says it lacks, when this server can find a stored one. */
+  function noneStored(project: string | undefined, level: string, storedFor: string[]): string {
+    const stored = storedFor.length === 0 ? "" : ` It stored credentials of ${storedFor.join(", ")}.`;
+    return (
+      `this server has no DOWNTRACE_TOKEN, and \`downtrace login\` stored no credential for ` +
+      `${project ?? "a project"} at ${opts.config.url}.${stored} Run ` +
+      `\`${loginCommand({ project: project ?? "<slug>", environment: "", level })}\`: this server reads it at the ` +
+      "next call, without a restart."
+    );
+  }
+
   async function call(tool: Tool, args: Record<string, unknown>, signal: AbortSignal): Promise<ToolResult> {
-    if (tool.operates && opts.config.token === "") {
+    const project = typeof args.project === "string" && args.project !== "" ? args.project : undefined;
+    const credential = await credentialFor(project);
+    if ("refusal" in credential) return text(credential.refusal, true);
+    const { token, storedFor } = credential;
+    if (tool.operates && token === "") {
       // Said when it is called rather than by refusing to start: a read-only session is useful, and a
       // coding agent that finds the tool and is told what it needs can go and get it.
+      if (opts.credentials !== undefined) {
+        return text(
+          `${noneStored(project, "operate", storedFor)} Or set DOWNTRACE_TOKEN to an access credential of level ` +
+            "`operate` and restart. Until then it can read but not operate.",
+          true,
+        );
+      }
       return text(
         "this server has no DOWNTRACE_TOKEN, so it can read but not operate. Set one with an access " +
           "credential of level `operate` and restart.",
@@ -107,7 +185,7 @@ export function createServer(opts: ServerOptions) {
     for (const [name, value] of Object.entries(tool.fixedQuery ?? {})) url.searchParams.set(name, value);
 
     const headers: Record<string, string> = { accept: "application/json" };
-    if (opts.config.token !== "") headers.authorization = `Bearer ${opts.config.token}`;
+    if (token !== "") headers.authorization = `Bearer ${token}`;
     let body: string | undefined;
     if (tool.method !== "GET" && tool.method !== "DELETE") {
       headers["content-type"] = "application/json";
@@ -158,7 +236,12 @@ export function createServer(opts: ServerOptions) {
       return text(cutShort(res.status, err, key), true);
     }
     if (!res.ok) {
-      return text(`the cloud answered ${res.status}: ${payload}`, true);
+      // A read sent with no credential, refused for it: what would have given it one.
+      const hint =
+        res.status === 401 && token === "" && opts.credentials !== undefined
+          ? ` ${noneStored(project, "", storedFor)}`
+          : "";
+      return text(`the cloud answered ${res.status}: ${payload}${hint}`, true);
     }
     const result = text(payload);
     if (annotated()) {
