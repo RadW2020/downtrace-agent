@@ -67,8 +67,15 @@ describe("the README on downtrace check", () => {
     expect(says(MIN_RISE_PER_REQUEST === 0.5 ? "half an execution" : String(MIN_RISE_PER_REQUEST))).toBe(true);
   });
 
-  it("documents every option of the command", () => {
-    for (const option of USAGE.match(/--[a-z]+/g) ?? []) {
+  // The commands in focus: login, brief, api, stamp and verify are frozen and their pages were taken out.
+  it("documents every option of check, init, report and compare", () => {
+    const lines = USAGE.split("\n");
+    const heads = lines.filter((line) => /^(?:Usage:)?\s*downtrace (?:check|init|report|compare)\b/.test(line));
+    const start = lines.indexOf("Options of check:");
+    expect(heads).toHaveLength(4);
+    expect(start).toBeGreaterThan(0);
+    const options = [...heads, ...lines.slice(start + 1, lines.indexOf("", start))].join("\n");
+    for (const option of options.match(/--[a-z]+/g) ?? []) {
       if (option === "--help" || option === "--version") continue;
       expect(says(option), option).toBe(true);
     }

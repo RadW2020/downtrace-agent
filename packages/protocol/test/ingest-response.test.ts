@@ -114,7 +114,6 @@ describe("the ingest response schema", () => {
 describe("the destination", () => {
   const destinations = fileURLToPath(new URL("../schema/v0/fixtures/destination/", import.meta.url));
 
-  // covers: RF-506
   it("names the project and the environment, and nothing else a token could read", () => {
     const destination = schema.$defs.Destination;
     expect(Object.keys(destination.properties).sort()).toEqual(["environment", "project"]);
@@ -123,7 +122,6 @@ describe("the destination", () => {
     expect(destination.required).toEqual(["project"]);
   });
 
-  // covers: RF-506
   it("rides on the answer to a batch, and an agent that ignores it behaves as before", () => {
     expect(schema.properties.destination?.$ref).toBe("#/$defs/Destination");
     expect(schema.required).not.toContain("destination");
@@ -131,7 +129,6 @@ describe("the destination", () => {
     expect(validate({ accepted: 1, inserted: 1 })).toBe(true);
   });
 
-  // covers: RF-506
   it("accepts every valid answer to a check, and rejects every invalid one", async () => {
     const valid = await load("valid", destinations);
     expect(valid.length).toBeGreaterThan(0);

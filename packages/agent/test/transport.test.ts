@@ -1161,7 +1161,6 @@ describe("Sender, saying that data arrives", () => {
   const landed = (destination: unknown) =>
     JSON.stringify({ accepted: 1, inserted: 1, ...(destination === undefined ? {} : { destination }) });
 
-  // covers: RF-118
   it("says once, with debug off, where the first accepted batch landed", async () => {
     const { s, lines } = answering([
       { status: 202, body: landed({ project: "shop-api", environment: "staging" }) },
@@ -1174,7 +1173,6 @@ describe("Sender, saying that data arrives", () => {
     expect(lines).toEqual(["[downtrace] connected: shop-api / staging"]);
   });
 
-  // covers: RF-118
   it("says the cloud accepted it, and names nothing, when the answer does not say where", async () => {
     // A cloud older than protocol 0.14.0, whose answer has no `destination`.
     const { s, lines } = answering([{ status: 202, body: landed(undefined) }]);
@@ -1183,7 +1181,6 @@ describe("Sender, saying that data arrives", () => {
     expect(lines).toEqual(["[downtrace] connected: the cloud accepted the first batch"]);
   });
 
-  // covers: RF-118
   it("names nothing it cannot read as a project and an environment", async () => {
     // What the cloud answers is external input: an answer that is not one, or a name that would write control
     // characters to the application's stderr, names nothing.
@@ -1203,7 +1200,6 @@ describe("Sender, saying that data arrives", () => {
     }
   });
 
-  // covers: RF-118
   it("names the project alone when the answer names no environment", async () => {
     const { s, lines } = answering([{ status: 202, body: landed({ project: "shop-api" }) }]);
     s.enqueue(interval(1));
@@ -1211,7 +1207,6 @@ describe("Sender, saying that data arrives", () => {
     expect(lines).toEqual(["[downtrace] connected: shop-api"]);
   });
 
-  // covers: RF-118
   it("waits for a batch that lands: a refused, failed or unreachable one says nothing of the kind", async () => {
     const { s, lines } = answering([
       { status: 500 },
@@ -1226,7 +1221,6 @@ describe("Sender, saying that data arrives", () => {
     expect(lines.filter((l) => l.includes("connected"))).toEqual(["[downtrace] connected: shop-api / staging"]);
   });
 
-  // covers: RF-118
   it("still hands over the captures the same answer asks for", async () => {
     const { s, lines } = answering([
       {
@@ -1247,7 +1241,6 @@ describe("Sender, saying that data arrives", () => {
     expect(lines).toEqual(["[downtrace] connected: shop-api / staging"]);
   });
 
-  // covers: RF-119
   it("says once that the token was refused, and the token is in no line", async () => {
     const { s, lines } = answering([{ status: 401 }, { status: 401 }, { status: 401 }], { debug: true });
     s.enqueue(interval(1));

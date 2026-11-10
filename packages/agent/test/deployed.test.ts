@@ -147,7 +147,6 @@ describe("the image digest, from the ECS task metadata", () => {
     expect(await ask("/slow", 150)).toEqual({ passed: "the ECS task metadata did not answer within 150 ms" });
   });
 
-  // covers: RF-107
   it("is read after a synchronous start longer than its timeout: the application's load counts once, however long", async () => {
     // DT-223: on Fargate the digest was never used. The question is asked as the instrumentation starts, and then the
     // application loads its modules in one synchronous stretch, seconds on a small task. A timer on the wall clock
@@ -400,20 +399,17 @@ describe("the commit downtrace stamp wrote", () => {
     return { root, chosen, warnings };
   }
 
-  // covers: RF-122
   it("is the version, before the image digest and the fingerprint, with no prefix: it is a commit", async () => {
     const { root, chosen, warnings } = await chainOn({ ...BUILD, [STAMP_FILE]: `${COMMIT}\n` });
     expect(chosen).toEqual({ version: COMMIT, source: `${join(root, STAMP_FILE)}, which downtrace stamp wrote` });
     expect(warnings).toEqual([]);
   });
 
-  // covers: RF-122
   it("takes an abbreviated commit, and one in capitals, as the same commit in small letters", async () => {
     expect((await chainOn({ ...BUILD, [STAMP_FILE]: "3f2a9c1" })).chosen.version).toBe("3f2a9c1");
     expect((await chainOn({ ...BUILD, [STAMP_FILE]: `  ${COMMIT.toUpperCase()}\r\n` })).chosen.version).toBe(COMMIT);
   });
 
-  // covers: RF-122
   it("is read from the code's root, the closest directory above the entry with a package.json, and not beside it", async () => {
     const atRoot = await chainOn({ ...BUILD, [STAMP_FILE]: COMMIT }, "dist/main.js");
     expect(atRoot.chosen.version).toBe(COMMIT);
@@ -421,13 +417,11 @@ describe("the commit downtrace stamp wrote", () => {
     expect(besideEntry.chosen.version).toBe(`${IMAGE_PREFIX}${DIGEST}`);
   });
 
-  // covers: RF-122
   it("is read beside the entry when no package.json is above it: a bundle copied alone", async () => {
     const { chosen } = await chainOn({ "server.js": "require('http');", [STAMP_FILE]: COMMIT }, "server.js");
     expect(chosen.version).toBe(COMMIT);
   });
 
-  // covers: RF-122
   it("is passed over without a word when there is none, and the debug line says where it was looked for", async () => {
     const { root, chosen, warnings } = await chainOn(BUILD);
     expect(chosen.version).toBe(`${IMAGE_PREFIX}${DIGEST}`);
@@ -444,7 +438,6 @@ describe("the commit downtrace stamp wrote", () => {
     expect(warnings).toEqual([]);
   });
 
-  // covers: RF-122
   it.each([
     ["a version that is not a commit", "v1.4.2"],
     ["six hexadecimal digits", "3f2a9c"],
@@ -464,7 +457,6 @@ describe("the commit downtrace stamp wrote", () => {
     },
   );
 
-  // covers: RF-122
   it("is ignored with one warning when it cannot be read, and the chain goes on", async () => {
     const root = await scratchDir();
     await write(root, BUILD);

@@ -9,7 +9,6 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { DOWNTRACE_CLOUD, LOGIN_SCHEMA, LOGIN_USAGE, parseLoginArgs, runLogin } from "../src/login/command.ts";
 import { CREDENTIALS_SCHEMA, credentialsPath } from "../src/login/store.ts";
-import { readDocumentation } from "./support/documentation.ts";
 
 /**
  * `downtrace login` against a cloud that speaks the device flow (RFC 8628): a server on this machine that answers
@@ -333,7 +332,6 @@ const modeOf = async (path: string): Promise<number> => (await stat(path)).mode 
 
 describe("downtrace login keeps the credential it collected", () => {
   it("in a file only its user reads, and prints it no second time", async () => {
-    // covers: RF-611
     const c = await cloud(aCode, [approved]);
     const run = await login(["--project", "nidus-api", "--env", "staging", "--url", c.url, "--json"]);
     expect(run.code).toBe(0);
@@ -376,7 +374,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("says where in its text, with the MCP server's configuration and no credential in it", async () => {
-    // covers: RF-611
     const c = await cloud(aCode, [approved]);
     const run = await login(["--project", "nidus-api", "--env", "staging", "--url", c.url]);
     expect(run.code).toBe(0);
@@ -389,7 +386,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("under $XDG_CONFIG_HOME when it names a directory", async () => {
-    // covers: RF-611
     const xdg = await aHome();
     const c = await cloud(aCode, [approved]);
     const run = await login(["--project", "nidus-api", "--url", c.url, "--json"], { XDG_CONFIG_HOME: xdg });
@@ -398,7 +394,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("writes nothing with --no-store, and prints the credential as it did", async () => {
-    // covers: RF-611
     const c = await cloud(aCode, [approved]);
     const run = await login(["--project", "nidus-api", "--url", c.url, "--no-store"]);
     expect(run.code).toBe(0);
@@ -408,7 +403,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("replaces the entry of the same cloud and project, and keeps another project's", async () => {
-    // covers: RF-611
     const home = await aHome();
     const withCredential = (project: string, token: string): Answer => ({
       status: 200,
@@ -438,7 +432,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("says why when it cannot keep it, prints it instead, and still exits 0", async () => {
-    // covers: RF-611
     // Approved and collected: the code cannot be collected twice, so the credential is printed rather than lost.
     const home = await aHome();
     await writeFile(join(home, ".config"), "a file where the directory would be");
@@ -459,7 +452,6 @@ describe("downtrace login keeps the credential it collected", () => {
   });
 
   it("leaves a file it cannot read as it is", async () => {
-    // covers: RF-611
     const home = await aHome();
     const file = credentialsPath({}, home);
     await mkdir(dirname(file), { recursive: true, mode: 0o700 });
@@ -519,7 +511,6 @@ async function loginToDowntraceCloud(argv: string[], answers: Record<string, Ans
 
 describe("downtrace login with no cloud named", () => {
   it("asks Downtrace's cloud, and hands over what it approved for that address", async () => {
-    // covers: RF-519
     const run = await loginToDowntraceCloud(["--project", "nidus-api", "--env", "staging"], {
       "/login/device/code": aCode,
       "/login/device/token": approved,
@@ -531,7 +522,6 @@ describe("downtrace login with no cloud named", () => {
   });
 
   it("names the cloud that refused, which the person did not name", async () => {
-    // covers: RF-519
     // Downtrace's cloud before its operator opens sign-up: the request reaches it, and what it says is said.
     const closed = await loginToDowntraceCloud(["--project", "nidus-api"], {
       "/login/device/code": {
@@ -582,7 +572,6 @@ describe("downtrace login with no cloud named", () => {
 
 describe("the address of Downtrace's cloud", () => {
   it("is written in one place of packages/, and everything else takes it from there", async () => {
-    // covers: RF-519
     // A later domain is a second name of the same cloud: what writes the address by hand is what would be left behind.
     // The public text of packages/ is what git tracks there and what it would add; nothing it ignores is published.
     const packages = fileURLToPath(new URL("../../", import.meta.url));
@@ -645,7 +634,6 @@ describe("the command line of downtrace login", () => {
   });
 
   it("asks Downtrace's cloud when neither --url nor DOWNTRACE_URL names one, and the one named otherwise", () => {
-    // covers: RF-519
     const cloudOf = (argv: string[], env: NodeJS.ProcessEnv): string => {
       const parsed = parseLoginArgs(argv, env);
       return parsed.kind === "login" ? parsed.args.url : parsed.kind;
@@ -671,27 +659,13 @@ describe("the command line of downtrace login", () => {
 });
 
 describe("the documentation of downtrace login", () => {
-  it("documents every option of the command, and its exit statuses", async () => {
-    const docs = (await readDocumentation()).replaceAll("`", "");
-    for (const option of LOGIN_USAGE.match(/--[a-z]+/g) ?? []) {
-      if (option === "--help") continue;
-      expect(docs.includes(option), option).toBe(true);
-    }
-    expect(docs).toContain("Exit status of login: 0 approved, 1 not approved");
-    expect(docs).toContain(`schema: "${LOGIN_SCHEMA}"`);
-  });
-
   it("says how to get a token with downtrace login, with no address to fill in", async () => {
-    // covers: RF-519
     const page = (path: string): Promise<string> => readFile(new URL(`../${path}`, import.meta.url), "utf8");
     const readme = await page("README.md");
     const start = readme.indexOf("\n## Install\n");
     expect(start).toBeGreaterThanOrEqual(0);
     const install = readme.slice(start, readme.indexOf("\n## ", start + 1));
-    for (const [where, text] of [
-      ["the README's install section", install],
-      ["guide/login.md", await page("guide/login.md")],
-    ] as const) {
+    for (const [where, text] of [["the README's install section", install]] as const) {
       const commands = fenced(text).filter((line) => /\blogin --project\b/.test(line));
       expect(commands, where).not.toEqual([]);
       for (const command of commands) {

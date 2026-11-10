@@ -25,8 +25,6 @@ import { SANITISER_CASES } from "./support/sanitiser-cases.ts";
  * `product.md:372` (ERR-02): the application hands over an error it handled itself, with structural context,
  * sanitised, omitted in doubt, withheld in minimal mode and attributed to the request in progress when there
  * is one. And the exception a framework turns into a 5xx, which the priorities put with it.
- *
- * covers: ERR-02
  */
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };

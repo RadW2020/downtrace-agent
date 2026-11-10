@@ -113,8 +113,6 @@ const afterRequests = (ending: string): string => `
 describe("a process that exits without waiting, when the instrumentation only writes", () => {
   // The explicit exit, the second of ERR-04's three ways a process ends, in the mode the comparison before the
   // deploy runs in.
-  //
-  // covers: ERR-04
   it("keeps the profile of everything the tests called, and says it left by exit", async () => {
     const left = await run(afterRequests("process.exit(0);"));
 
@@ -194,8 +192,6 @@ describe("the other ways of ending, in the same mode", () => {
   // The exception that kills the process is lost, in every mode: ERR-04 says so, and a write on the way out is
   // not allowed to turn it into the one mode in which it is not (ADR 0230). The process ends exactly as it would
   // have, and what the interval in hand held goes with it.
-  //
-  // covers: ERR-04
   it.each([
     ["an exception nobody caught", 'setTimeout(() => { throw new TypeError("boom in a timer"); }, 5);'],
     ["a promise rejected with nothing to catch it", 'Promise.reject(new TypeError("boom in a promise"));'],
@@ -246,8 +242,6 @@ describe("the same process with a cloud behind it", () => {
   // The README says of the inspection mode with a cloud that what you read is what actually went out. A batch
   // written on the way out and sent nowhere would make it say what never left, and the loss the table of endings
   // states would stop being true for the one mode a deployment is audited in.
-  //
-  // covers: ERR-04
   it("loses its last batch as the table of endings says, and writes nothing in its place", async () => {
     const cloud = await sink();
     const left = await run(afterRequests("process.exit(0);"), {

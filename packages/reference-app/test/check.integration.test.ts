@@ -16,7 +16,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * four queries are operations the base never ran, twelve times each per request, and the provider and Redis are
  * what they were.
  */
-// covers: LOC-01, ESC-17, ESC-18
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";

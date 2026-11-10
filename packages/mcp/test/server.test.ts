@@ -2513,7 +2513,6 @@ describe("errors", () => {
    * cloud's test of the same read, `TestTheToolsReadOfSixtyOneRoutesFits`, weighs what that answers.
    */
   it("asks for twenty endpoints and their operations by hash when its caller does not say", async () => {
-    // covers: RF-522
     const { s, calls } = server([{}, {}]);
     await s.handle("tools/call", { name: "project_status", arguments: { project: "tienda" } });
     expect(only(calls, 0).url).toBe("https://cloud.test/api/p/tienda/status?limit=20&operations=hash");
@@ -2527,7 +2526,6 @@ describe("errors", () => {
   });
 
   it("declares the parts of the status it reads, with their defaults and their bounds", () => {
-    // covers: RF-522
     const p = toolNamed("project_status")?.inputSchema.properties ?? {};
     expect(p.limit).toMatchObject({ type: "integer", minimum: 1, maximum: 100, default: 20 });
     // The place of a page goes up to the endpoints asked for, which only the cloud knows.
@@ -2541,7 +2539,6 @@ describe("errors", () => {
   // A coding agent chooses a tool, and its arguments, from the description and the schema alone: it is told what the
   // tool reads when it says nothing, and how to read the rest.
   it("says in project_status's description what it reads by default and how to read the rest", () => {
-    // covers: RF-522
     const description = toolNamed("project_status")?.description ?? "";
     for (const said of [
       "twenty endpoints",
@@ -2773,7 +2770,6 @@ describe("what changed since an instant", () => {
   // RF-523: a session starts at the brief, which says how the project is; this is what changed after an instant, the
   // question for the rest of the session, from the brief's `until` or the last answer's.
   it("is for what changed since you last looked, once the brief has said how the project is", () => {
-    // covers: RF-523
     const description = String(tool?.description ?? "");
     expect(description).toContain("since you last looked");
     expect(description).toContain("`project_brief`");
@@ -2792,7 +2788,6 @@ describe("the brief, where a session starts", () => {
 
   for (const v of ["2024-11-05", "2025-06-18", "2025-11-25"]) {
     it(`is the first tool listed, in a session of ${v}`, async () => {
-      // covers: RF-523
       const { s } = server();
       expect(await opened(s, v)).toBe(v);
       const listed = (await s.handle("tools/list", {})) as Listed;
@@ -2801,7 +2796,6 @@ describe("the brief, where a session starts", () => {
   }
 
   it("is a read of the project's brief, with the project required and an optional instant", async () => {
-    // covers: RF-523
     expect(tool?.operates).toBeUndefined();
     expect(tool?.method).toBe("GET");
     expect(tool?.path).toBe("/api/p/{slug}/brief");
@@ -2823,7 +2817,6 @@ describe("the brief, where a session starts", () => {
   // A coding agent chooses where to start from the descriptions alone: this one says to start here, what the answer
   // carries, that missing telemetry is not a project with nothing to attend to, and that each item names its next read.
   it("says in its description to start there, what it carries, and that each item says what to read next", () => {
-    // covers: RF-523
     const description = tool?.description ?? "";
     expect(description).toMatch(/^Start here/);
     for (const said of [
@@ -2859,14 +2852,12 @@ describe("the brief, where a session starts", () => {
   // Enumerated from the source: a second tool that says a session starts at it would leave the coding agent two
   // places to start, and `read_report` needs a finding's id that a session has not read yet.
   it("is the only tool that says a session starts at it", () => {
-    // covers: RF-523
     for (const t of tools.filter((t) => t.name !== "project_brief")) {
       expect(t.description, t.name).not.toMatch(/start here|when a session starts|ask it first/i);
     }
   });
 
   it("is named in the greeting as where a session starts", async () => {
-    // covers: RF-523
     const { s } = server();
     const out = handshake(await s.handle("initialize", {}));
     const sentence = out.instructions.split(". ").find((candidate) => candidate.includes("`project_brief`")) ?? "";
@@ -2874,7 +2865,6 @@ describe("the brief, where a session starts", () => {
   });
 
   it("asks the cloud for the brief, with the instant only when it is given", async () => {
-    // covers: RF-523
     const { s, calls } = server([{}, {}]);
     await s.handle("tools/call", { name: "project_brief", arguments: { project: "tienda" } });
     expect(only(calls, 0).method).toBe("GET");
@@ -2887,7 +2877,6 @@ describe("the brief, where a session starts", () => {
   });
 
   it("refuses to call the cloud without the project, and says which argument is missing", async () => {
-    // covers: RF-523
     const { s, calls } = server();
     const out = (await s.handle("tools/call", { name: "project_brief", arguments: {} })) as Called;
     expect(out.isError).toBe(true);
@@ -2896,7 +2885,6 @@ describe("the brief, where a session starts", () => {
   });
 
   it("hands back the brief as the cloud answered it, each item's next and the error's text still wrapped", async () => {
-    // covers: RF-523
     const answer = JSON.stringify({
       version: "b1",
       since: "2026-11-08T10:00:00Z",
@@ -2934,7 +2922,6 @@ describe("the brief, where a session starts", () => {
   });
 
   it("hands back a refusal of the instant as a failure with its status and the cloud's own sentence", async () => {
-    // covers: RF-523
     const refusal = JSON.stringify({ error: "`since` must be in the past: it starts the window of what is new" });
     const { s } = server([{ status: 400, body: refusal }]);
     const out = (await s.handle("tools/call", {

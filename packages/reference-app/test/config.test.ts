@@ -7,7 +7,7 @@ describe("configFromEnv: host", () => {
     expect(configFromEnv({ HOST: "  " }).host).toBe("127.0.0.1");
   });
 
-  it("listens where HOST says, for a deployment reached from another container (the canary's)", () => {
+  it("listens where HOST says, for a deployment reached from another container", () => {
     expect(configFromEnv({ HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
   });
 });

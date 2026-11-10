@@ -26,7 +26,7 @@ When something cannot be detected or done, it says what and what to do instead, 
 | Code | What it means, and what to do |
 |---|---|
 | no-package-json | There is no `package.json` where it runs: run it at the root of the Node.js project, and in a monorepo in the directory of the service. |
-| no-framework | None of the frameworks above. In a monorepo, run it in the directory of the service. Elsewhere `check` still compares the runs: the instrumentation observes every request Node's server receives and names its route by the shape of its path (see [How routes are named](routes.md)). A request a test hands the application with no server listening, through a helper of the framework's own, is not observed. |
+| no-framework | None of the frameworks above. In a monorepo, run it in the directory of the service. Elsewhere `check` still compares the runs: the instrumentation observes every request Node's server receives and names its route by the shape of its path. A request a test hands the application with no server listening, through a helper of the framework's own, is not observed. |
 | no-test-command | None of the scripts above. Give `check` a command that sends requests to the routes with their real dependencies: a test script, or a walk of the routes — a script that starts the application, sends a request to each route and stops it — in `downtrace.json` or after `--`. |
 | not-a-repository | No git repository holds the project, and `check` compares the working tree against a commit. |
 | not-installed | The build prunes and `@downtrace/agent` is not a dependency, so a hook that imports it would break the build: install it and run `npx downtrace init` again. |

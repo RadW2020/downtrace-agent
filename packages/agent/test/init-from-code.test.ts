@@ -117,7 +117,6 @@ async function instrumentFile(name: string, body: string): Promise<string> {
 }
 
 describe("an ES module application started with --import ./instrument.mjs (RF-102)", () => {
-  // covers: RF-102, RF-104
   it("is observed as with the register entry, and its token travels in the header, never in the URL", async () => {
     const cloud = await sink();
     try {
@@ -153,7 +152,6 @@ describe("an ES module application started with --import ./instrument.mjs (RF-10
 });
 
 describe("init() with no DSN (RF-104)", () => {
-  // covers: RF-104
   it("warns once, and nothing else: nothing listens and nothing is sent", async () => {
     const instrument = await instrumentFile("inert.mjs", "init({});");
     const { code, stdout, stderr } = await runNode(
@@ -167,7 +165,6 @@ describe("init() with no DSN (RF-104)", () => {
     expect(JSON.parse(stdout)).toEqual({ attached: false });
   });
 
-  // covers: RF-104
   it("with a malformed one, says what is wrong without echoing the token, and stays inert", async () => {
     const instrument = await instrumentFile("malformed.mjs", `init({ dsn: "dt_SECRETVALUE@downtrace.example.com" });`);
     const { code, stdout, stderr } = await runNode(
@@ -201,7 +198,6 @@ describe("one instrumentation per process (RF-105)", () => {
   const ALREADY =
     "[downtrace] init() starts nothing: this process already runs the instrumentation, and keeps its settings";
 
-  // covers: RF-105
   it("starts one when init() is called twice, and the second call says so", async () => {
     const dsn = JSON.stringify("http://dt_a@127.0.0.1:9");
     const instrument = await instrumentFile(
@@ -214,7 +210,6 @@ describe("one instrumentation per process (RF-105)", () => {
     expect(lines(stderr).filter((line) => line === ALREADY)).toHaveLength(1);
   });
 
-  // covers: RF-105
   it("starts nothing new when the register entry already started one", async () => {
     const instrument = await instrumentFile(
       "after-register.mjs",
@@ -234,7 +229,6 @@ describe("one instrumentation per process (RF-105)", () => {
     expect(lines(stderr).filter((line) => line === ALREADY)).toHaveLength(1);
   });
 
-  // covers: RF-105
   it("starts when the register entry was loaded and stayed inert: an inert entry is no instrumentation", async () => {
     const instrument = await instrumentFile(
       "after-inert.mjs",
@@ -248,7 +242,6 @@ describe("one instrumentation per process (RF-105)", () => {
 });
 
 describe("two copies of the package in one process (RF-105)", () => {
-  // covers: RF-105
   it("share the instrumentation one of them started: the other's init() sees it, and its shutdown() drains it", async () => {
     // Two URLs of one file are two modules, as the copy `downtrace check` loads and the application's own are.
     const registered = pathToFileURL(path.join(agentDir, "src", "registered.ts")).href;
@@ -277,7 +270,6 @@ describe("a late init() (RF-105)", () => {
     init({ inspect: ${JSON.stringify(path.join(dir, "late.jsonl"))}, version: "v1" });
   `;
 
-  // covers: RF-105
   it("names express, loaded before it, and what a router mounted before it loses", async () => {
     const { code, stderr } = await runNode(["--input-type=module", "-e", late("")], childEnv());
     expect(code, stderr).toBe(0);
@@ -286,7 +278,6 @@ describe("a late init() (RF-105)", () => {
     ]);
   });
 
-  // covers: RF-105
   it("says nothing when it runs first", async () => {
     const script = `
       import { init } from ${JSON.stringify(index)};
@@ -329,12 +320,10 @@ describe("a late init() (RF-105)", () => {
     return [...new Set(routes)];
   }
 
-  // covers: RF-105
   it("observes express loaded before it whole, when the routers are mounted after", async () => {
     expect(await mountedRoutes("init, then mount")).toEqual(["GET /api/users/:id"]);
   });
 
-  // covers: RF-105
   it("loses the mount path of a router mounted before it, which is what its warning says", async () => {
     expect(await mountedRoutes("mount, then init")).toEqual(["GET /:param/users/:id"]);
   });

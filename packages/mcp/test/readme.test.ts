@@ -49,13 +49,11 @@ describe("the table of tools", () => {
     .map((line) => ({ tools: line.split(" | ")[0] ?? "", says: line.slice(line.indexOf(" | ") + 3) }));
 
   it("puts the brief first, as where to start", () => {
-    // covers: RF-523
     expect(rows[0]?.tools).toBe("| `project_brief`");
     expect(rows[0]?.says).toMatch(/^\*\*start here\*\*/);
   });
 
   it("says start here of no other tool, and keeps changes_since for what changed since you last looked", () => {
-    // covers: RF-523
     for (const row of rows.slice(1)) {
       expect(row.says, row.tools).not.toMatch(/start here|ask it first when a session starts/i);
     }

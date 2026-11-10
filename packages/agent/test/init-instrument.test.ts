@@ -86,7 +86,6 @@ const NEST = {
 };
 
 describe("a NestJS application compiled to CommonJS (RF-106)", () => {
-  // covers: RF-106
   it("writes the instrument file with init({ dsn }), and imports it on the entry's first line", async () => {
     const dir = await project(NEST);
     const { code, report } = await init(dir);
@@ -103,7 +102,6 @@ describe("a NestJS application compiled to CommonJS (RF-106)", () => {
     expect(report.instrument).toEqual({ file: "src/instrument.ts", loadedBy: "src/main.ts", skipped: null });
   });
 
-  // covers: RF-106
   it("run twice, writes nothing twice", async () => {
     const dir = await project(NEST);
     await init(dir);
@@ -173,7 +171,6 @@ describe("an ES module application (RF-106)", () => {
     "server.js": `import express from "express";\nexpress().listen(3000);\n`,
   });
 
-  // covers: RF-106
   it("writes instrument.mjs, and adds --import to the start script", async () => {
     const dir = await project(ESM({ start: "node server.js" }));
     const { code, report } = await init(dir);
@@ -185,7 +182,6 @@ describe("an ES module application (RF-106)", () => {
     expect(await read(dir, "server.js")).toBe(`import express from "express";\nexpress().listen(3000);\n`);
   });
 
-  // covers: RF-106
   it("changes nothing else of package.json, and run twice writes nothing twice", async () => {
     const dir = await project(ESM({ start: "node server.js" }));
     const before = await read(dir, "package.json");
@@ -204,7 +200,6 @@ describe("an ES module application (RF-106)", () => {
     );
   });
 
-  // covers: RF-106
   it("with no start script it can edit, writes instrument.mjs and says what to add", async () => {
     const dir = await project(ESM({ start: "NODE_ENV=production node server.js" }));
     const { code, report } = await init(dir);
@@ -257,7 +252,6 @@ describe("a CommonJS application in JavaScript (RF-106)", () => {
 });
 
 describe("what init does not instrument", () => {
-  // covers: RF-106
   it("writes no instrument file when the package is only a dev dependency, which production does not install", async () => {
     const dir = await project({
       ".git/": "",

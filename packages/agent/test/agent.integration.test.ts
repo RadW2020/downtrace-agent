@@ -478,8 +478,6 @@ describe("agent v0 (integration)", () => {
   //
   // This is the clause ESC-08 was missing: acceptance, effective start and result are three moments, and
   // until the instrumentation could confirm the second one they were two.
-  //
-  // covers: ESC-08
   it("obeys a capture the cloud asked for, and sends what it saw", async () => {
     const startedRoughly = Date.now();
     const REQUEST_START = "http.server.request.start";
@@ -1012,8 +1010,6 @@ describe("agent v0 (integration)", () => {
   //
   // The marker is ESC-08 and not CAP-01 on purpose: CAP-01 also asks that a requested capture compete with
   // the automatic ones for one budget, and no automatic capture exists yet (gh-307).
-  //
-  // covers: ESC-08
   it("counts a request made during the window as observed, and one from before as attached", async () => {
     const REQUEST_START = "http.server.request.start";
     const RESPONSE_FINISH = "http.server.response.finish";
@@ -1085,8 +1081,6 @@ describe("agent v0 (integration)", () => {
   //
   // Stated by putting the agent's clock an hour ahead of the wall clock. Nothing else moves, and everything
   // the agent stamps has to move with it — an instant that stays behind is an instant read somewhere else.
-  //
-  // covers: CAP-01
   it("takes every instant it stamps from its own clock, not from the wall clock", async () => {
     const REQUEST_START = "http.server.request.start";
     const RESPONSE_FINISH = "http.server.response.finish";

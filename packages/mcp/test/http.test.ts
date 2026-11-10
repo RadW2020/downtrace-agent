@@ -162,7 +162,6 @@ async function overStdio(messages: unknown[], fetchImpl: typeof fetch, token = T
 
 describe("over HTTP, a request with a credential", () => {
   it("is answered what the stdio server answers with that credential: every tool, schema, hint and result", async () => {
-    // covers: RF-513
     for (const revision of PROTOCOL_VERSIONS) {
       const stdioCloud = fakeCloud();
       const httpCloud = fakeCloud();
@@ -215,7 +214,6 @@ describe("over HTTP, a request with a credential", () => {
   });
 
   it("takes the revision of MCP-Protocol-Version, and, without the header, the one the transport says to assume", async () => {
-    // covers: RF-513
     const { fetchImpl } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     const list = { jsonrpc: "2.0", id: 2, method: "tools/list" };
@@ -233,7 +231,6 @@ describe("over HTTP, a request with a credential", () => {
   });
 
   it("is refused with 400 when MCP-Protocol-Version names a revision this server does not speak", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     const out = await post(
@@ -252,7 +249,6 @@ describe("over HTTP, a request with a credential", () => {
   });
 
   it("is about the project its URL names: a call that names none is given it, one that names another is refused", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     const call = (args: Record<string, unknown>) =>
@@ -277,7 +273,6 @@ describe("over HTTP, a request with a credential", () => {
   });
 
   it("whose credential the cloud refuses gets the stdio server's 401, asked of the cloud on every call", async () => {
-    // covers: RF-513
     const refused = () => new Response('{"error":"unauthorized"}', { status: 401 });
     const httpCloud = fakeCloud(refused);
     const stdioCloud = fakeCloud(refused);
@@ -304,7 +299,6 @@ describe("over HTTP, a request with a credential", () => {
   });
 
   it("is a session of its own: one request's credential is never another's", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     const call = (token: string) =>
@@ -324,7 +318,6 @@ describe("over HTTP, a request with a credential", () => {
 
 describe("over HTTP, a request without a usable credential", () => {
   it("is answered 401 naming the server's metadata, which names the URL the client used and the cloud", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     for (const headers of [{}, { authorization: "Basic dXNlcjpwYXNz" }, { authorization: "Bearer " }]) {
@@ -348,7 +341,6 @@ describe("over HTTP, a request without a usable credential", () => {
   });
 
   it("names the public URL in the metadata when one is configured, whatever Host the request came with", async () => {
-    // covers: RF-513
     const { fetchImpl } = fakeCloud();
     const { base } = await listening({ fetchImpl, publicUrl: "https://downtrace.example" });
     const out = await raw(`${base}/mcp/shop`, {
@@ -369,7 +361,6 @@ describe("over HTTP, a request without a usable credential", () => {
 
 describe("over HTTP, the transport", () => {
   it("answers a notification 202 with no body", async () => {
-    // covers: RF-513
     const { fetchImpl } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     for (const method of ["notifications/initialized", "notifications/cancelled"]) {
@@ -380,7 +371,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("answers a GET, or any method but POST, 405: a server of tools sends nothing unasked", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     for (const method of ["GET", "DELETE", "PUT", "OPTIONS"]) {
@@ -398,7 +388,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("serves no path but a project's, by a project's slug", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     for (const path of [
@@ -422,7 +411,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("refuses an Origin that is neither its own nor configured with 403, and takes one that is, or none", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl, origins: ["https://app.example"] });
     const call = { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "list_findings", arguments: {} } };
@@ -444,7 +432,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("with no public URL, answers only a loopback Host, so a rebound name cannot reach it", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base, port } = await listening({ fetchImpl });
     const message = JSON.stringify(initialize("2025-11-25"));
@@ -461,7 +448,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("refuses a body over its limit with 413, declared or sent in chunks, and asks the cloud nothing", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl, maxBodyBytes: 256 });
     const big = JSON.stringify({
@@ -503,7 +489,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("ends a request whose body does not arrive in time with 408", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { port } = await listening({ fetchImpl, readTimeoutMs: 200 });
     const answered = await new Promise<string>((resolve, reject) => {
@@ -526,7 +511,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("answers what is not one JSON-RPC message with its error, saying nothing of the parser", async () => {
-    // covers: RF-513
     const { fetchImpl, sent } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     const cases: Array<[string, number, number]> = [
@@ -553,7 +537,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("refuses a body that is not JSON by its type with 415", async () => {
-    // covers: RF-513
     const { fetchImpl } = fakeCloud();
     const { base } = await listening({ fetchImpl });
     for (const type of ["text/plain", "application/x-www-form-urlencoded", "application/jsonx"]) {
@@ -571,7 +554,6 @@ describe("over HTTP, the transport", () => {
   });
 
   it("answers a failure of its own as an internal error that names nothing, and logs it without the credential", async () => {
-    // covers: RF-513
     const { fetchImpl } = fakeCloud();
     const logged: string[] = [];
     const { base } = await listening({
@@ -599,12 +581,10 @@ describe("the HTTP configuration", () => {
   const env = (vars: Record<string, string>) => (name: string) => vars[name];
 
   it("listens on the loopback by default, and names no public URL nor origin", () => {
-    // covers: RF-513
     expect(httpConfigFrom(env({}))).toEqual({ host: "127.0.0.1", port: 8787, publicUrl: "", origins: [] });
   });
 
   it("reads the host, the port, the public URL and the origins once, as origins", () => {
-    // covers: RF-513
     expect(
       httpConfigFrom(
         env({
@@ -623,7 +603,6 @@ describe("the HTTP configuration", () => {
   });
 
   it("refuses a port, a public URL or an origin that is not one, and a host off the loopback with no public URL", () => {
-    // covers: RF-513
     for (const vars of [
       { DOWNTRACE_MCP_PORT: "http" },
       { DOWNTRACE_MCP_PORT: "65536" },
@@ -660,7 +639,6 @@ describe("downtrace-mcp --http", () => {
   }
 
   it("serves HTTP on the configured port, and says where on stderr without any credential", async () => {
-    // covers: RF-513
     const { stderr, exited } = started(["--http"], {
       DOWNTRACE_URL: CLOUD,
       DOWNTRACE_TOKEN: "dtr_must_not_be_used",
@@ -685,7 +663,6 @@ describe("downtrace-mcp --http", () => {
   });
 
   it("exits 2 and says why when the HTTP configuration is not usable, or an argument is unknown", async () => {
-    // covers: RF-513
     const offLoopback = started(["--http"], { DOWNTRACE_URL: CLOUD, DOWNTRACE_MCP_HOST: "0.0.0.0" });
     expect(await offLoopback.exited).toBe(2);
     expect(offLoopback.stderr()).toContain("DOWNTRACE_MCP_PUBLIC_URL");

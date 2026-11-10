@@ -71,7 +71,6 @@ async function verify(over: Partial<VerifyDeps>) {
 const writesTo = (destination: object) => () => ({ status: 200, body: JSON.stringify(destination) });
 
 describe("downtrace verify", () => {
-  // covers: RF-507
   it("prints the project and the environment, exits 0, and sends no batch", async () => {
     const c = await cloud(writesTo({ project: "shop-api", environment: "staging" }));
     const { code, stdout, stderr } = await verify({ env: { DOWNTRACE_TOKEN: TOKEN, DOWNTRACE_URL: `${c.url}/` } });
@@ -82,7 +81,6 @@ describe("downtrace verify", () => {
     expect(c.asked).toEqual([{ method: "GET", url: DESTINATION_PATH, authorization: `Bearer ${TOKEN}` }]);
   });
 
-  // covers: RF-507
   it("says a token that names no environment writes to the one each batch declares", async () => {
     const c = await cloud(writesTo({ project: "shop-api" }));
     const { code, stdout } = await verify({ env: { DOWNTRACE_TOKEN: TOKEN, DOWNTRACE_URL: c.url } });
@@ -92,7 +90,6 @@ describe("downtrace verify", () => {
     expect(code).toBe(0);
   });
 
-  // covers: RF-507
   it("says the token was refused, exits 1, and never echoes it", async () => {
     const c = await cloud(() => ({ status: 401, body: '{"error":"unknown token"}' }));
     const { code, stderr, all } = await verify({ env: { DOWNTRACE_TOKEN: TOKEN, DOWNTRACE_URL: c.url } });
@@ -103,7 +100,6 @@ describe("downtrace verify", () => {
     expect(all).not.toContain(TOKEN.slice(3));
   });
 
-  // covers: RF-507
   it("says the cloud could not be reached, exits 2, with no stack trace", async () => {
     const url = await nobody();
     const { code, stdout, stderr } = await verify({ env: { DOWNTRACE_TOKEN: TOKEN, DOWNTRACE_URL: url } });
@@ -113,7 +109,6 @@ describe("downtrace verify", () => {
     expect(code).toBe(2);
   });
 
-  // covers: RF-507
   it("says the cloud did not answer in time, exits 2", async () => {
     const c = await cloud(() => "never");
     const { code, stderr } = await verify({ env: { DOWNTRACE_TOKEN: TOKEN, DOWNTRACE_URL: c.url }, timeoutMs: 50 });
@@ -154,7 +149,6 @@ describe("downtrace verify", () => {
     }
   });
 
-  // covers: RF-507
   it("reads the token from a DSN, as the instrumentation does, and never echoes the DSN", async () => {
     const c = await cloud(writesTo({ project: "shop-api", environment: "production" }));
     const dsn = c.url.replace("http://", `http://${TOKEN}@`);
@@ -165,7 +159,6 @@ describe("downtrace verify", () => {
     expect(all).not.toContain(TOKEN.slice(3));
   });
 
-  // covers: RF-507
   it("takes the token from its flags, over the environment's", async () => {
     const c = await cloud(writesTo({ project: "shop-api", environment: "staging" }));
     const elsewhere = await nobody();
@@ -226,7 +219,6 @@ describe("downtrace verify, from the command line", () => {
     expect(parsed.kind === "error" ? parsed.message : "").toContain(message);
   });
 
-  // covers: RF-507
   it("runs as `downtrace verify`, with the environment the command was given", async () => {
     const c = await cloud(writesTo({ project: "shop-api", environment: "staging" }));
     const out: string[] = [];

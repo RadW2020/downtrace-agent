@@ -106,7 +106,6 @@ function loaderOf(modules: Record<string, unknown>) {
 const testWorker = { filename: "/app/node_modules/jest-runner/build/testWorker.js" };
 
 describe("require, watched for jest-runtime where Node announces no load (ADR 0258)", () => {
-  // covers: RF-121
   it("wraps the Runtime of the first jest-runtime required, and gives require back", () => {
     const express = { Router: {} };
     const Runtime = runtimeClass({ express });
@@ -123,7 +122,6 @@ describe("require, watched for jest-runtime where Node announces no load (ADR 02
     expect(patch.offered).toEqual([express]);
   });
 
-  // covers: RF-121
   it("calls require on the module that called it, and returns or throws what it did, untouched", () => {
     const lodash = { chunk: () => [] };
     const { loader, callers } = loaderOf({ lodash });
@@ -139,7 +137,6 @@ describe("require, watched for jest-runtime where Node announces no load (ADR 02
     expect(callers).toEqual([testWorker, testWorker]);
   });
 
-  // covers: RF-121
   it("goes on watching past a jest-runtime that exports no Runtime", () => {
     const Runtime = runtimeClass({ pg: {} });
     let exported: unknown = { default: class {} };
@@ -157,7 +154,6 @@ describe("require, watched for jest-runtime where Node announces no load (ADR 02
     expect(loader.require).toBe(own);
   });
 
-  // covers: RF-121
   it("leaves a require wrapped over its own in place, and is then only a way through", () => {
     const Runtime = runtimeClass({});
     const { loader, callers } = loaderOf({ "jest-runtime": { default: Runtime } });
@@ -174,7 +170,6 @@ describe("require, watched for jest-runtime where Node announces no load (ADR 02
     expect(callers).toHaveLength(2);
   });
 
-  // covers: RF-121
   it("gives require back when the instrumentation stops before Jest loaded its runtime", () => {
     const { loader } = loaderOf({});
     const original = loader.require;
@@ -184,7 +179,6 @@ describe("require, watched for jest-runtime where Node announces no load (ADR 02
     expect(loader.require).toBe(original);
   });
 
-  // covers: RF-121
   it("hands a failure of its own to internalError, and the require still returns what it returned", () => {
     const exported = {
       get default(): unknown {
@@ -252,7 +246,6 @@ describe("an agent's start, and the require it watches (ADR 0258)", () => {
     return agent;
   };
 
-  // covers: RF-121
   it("under check, where Node announces no load, in a project that has Jest: until Jest loads its runtime", async () => {
     const dir = await project(true);
     const original = Module.prototype.require;
@@ -265,7 +258,6 @@ describe("an agent's start, and the require it watches (ADR 0258)", () => {
     );
   });
 
-  // covers: RF-121
   it("gives it back when the agent stops first", async () => {
     const dir = await project(true);
     const original = Module.prototype.require;

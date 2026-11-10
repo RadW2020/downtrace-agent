@@ -95,12 +95,10 @@ function runNode(
 const lines = (text: string): string[] => text.split("\n").filter((line) => line !== "");
 
 describe("the oldest Node the package runs on", () => {
-  // covers: RF-121
   it("is Node 18.19.0", () => {
     expect(NODE_FLOOR).toBe("18.19.0");
   });
 
-  // covers: RF-101, RF-121
   it("turns away a Node below the floor, by its major or its minor, naming it and the floor", () => {
     expect(unsupportedNode(OLD)).toMatch(BELOW);
     for (const version of ["10.24.1", "16.20.2", "17.9.1", "18.0.0", "18.17.1", "18.18.2"]) {
@@ -110,7 +108,6 @@ describe("the oldest Node the package runs on", () => {
     }
   });
 
-  // covers: RF-121
   it("lets the floor and everything after it through, by its patch, its minor or its major", () => {
     const after = ["18.19.0", "18.19.1", "18.20.8", "20.0.0", "20.5.1", "22.12.0", "24.13.0", "26.13.0"];
     for (const version of after) expect(unsupportedNode(version), version).toBeUndefined();
@@ -119,7 +116,6 @@ describe("the oldest Node the package runs on", () => {
   // Node 19 is an odd release past its end of life, and is promised nothing (ADR 0257). It is turned away whole: before
   // 19.9 it lacks `tracingChannel`, whose absence ends the application at start-up. Staying off is the side on which
   // nothing breaks.
-  // covers: RF-101, RF-121
   it("turns Node 19 away, every release of it", () => {
     for (const version of ["19.0.0", "19.8.1", "19.9.0", "19.9.0-pre"]) {
       expect(unsupportedNode(version), version).toBe(
@@ -130,7 +126,6 @@ describe("the oldest Node the package runs on", () => {
 
   // A floor with a patch of its own shows that the patch is compared too, as the major and the minor are: the floor
   // is a version, not a major (DT-164).
-  // covers: RF-101
   it("compares the patch as well as the major and the minor", () => {
     expect(unsupportedNode("20.6.0", "20.6.1")).toBe(
       "Node.js 20.6.0 is not supported: it needs Node.js 20.6.1 or newer",
@@ -149,7 +144,6 @@ describe("the oldest Node the package runs on", () => {
     expect(unsupportedNode("18.18.0-rc.1")).toBeDefined();
   });
 
-  // covers: RF-101
   it("turns away a version it cannot read, rather than guess", () => {
     for (const version of ["", "v18.20.8", "unknown", "18", "18.19", "18.x.0", "18.19.0.1"]) {
       expect(unsupportedNode(version), version).toBeDefined();
@@ -164,7 +158,6 @@ describe("the oldest Node the package runs on", () => {
 });
 
 describe("register on a Node below the floor", () => {
-  // covers: RF-101
   it("warns once, naming the version and the floor, and starts nothing, configured or not", async () => {
     for (const env of [childEnv(), childEnv(CONFIGURED)]) {
       const args = [...claiming(OLD), "--import", register, "--input-type=module", "-e", PROBE];
@@ -177,7 +170,6 @@ describe("register on a Node below the floor", () => {
     }
   });
 
-  // covers: RF-121
   it("starts as before on the floor itself, which is what makes the probe above worth reading", async () => {
     const args = [...claiming(NODE_FLOOR), "--import", register, "--input-type=module", "-e", PROBE];
     const { code, stdout, stderr } = await runNode(args, childEnv(CONFIGURED));
@@ -216,7 +208,6 @@ describe("downtrace on Node 20 before 20.6, above the floor and without `import.
   // the command looked its own `register` entry up with `import.meta.resolve` before it read its arguments (DT-142).
   const NODE_20_5 = [...claiming("20.5.1"), ...withoutImportMetaResolve()];
 
-  // covers: RF-101, RF-121
   it("prints its version", async () => {
     const { code, stdout, stderr } = await runNode([...NODE_20_5, cli, "--version"], childEnv());
     expect(stderr).toBe("");
@@ -224,7 +215,6 @@ describe("downtrace on Node 20 before 20.6, above the floor and without `import.
     expect(stdout).toBe(`${AGENT_VERSION}\n`);
   });
 
-  // covers: RF-121
   it("prints its help", async () => {
     const { code, stdout, stderr } = await runNode([...NODE_20_5, cli, "--help"], childEnv());
     expect(stderr).toBe("");

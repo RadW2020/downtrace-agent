@@ -148,8 +148,6 @@ describe("a process asked to stop", () => {
   });
 
   // The orderly shutdown, the first of ERR-04's three ways a process ends.
-  //
-  // covers: ERR-04
   it("hands over what it was holding, and still dies of the signal", async () => {
     // The orderly ending. Everything the instrumentation had in hand goes out in one batch: the interval and
     // the exceptions it had recorded. And the signal is not stolen — invariant 2 is about what the application
@@ -252,8 +250,6 @@ describe("a process an exception kills", () => {
 
   // The exception that kills, the third of ERR-04's three ways a process ends. Every clause of its row in the
   // README is asked here, the half that survives and the half that does not, because the pair is the contract.
-  //
-  // covers: ERR-04
   it("keeps what had already left, and loses the exception that killed it and the interval in hand", async () => {
     // «What survives a crash is what had already left: the aggregates of the previous intervals and the runtime
     // signals» (`product.md:25`), and the exceptions that rode an earlier batch. The exception that did the

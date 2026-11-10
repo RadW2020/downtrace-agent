@@ -542,7 +542,6 @@ describe("instrumentPg, building the profile", () => {
     expect(fingerprints.misses).toBe(1);
   });
 
-  // covers: RF-526
   it("outside check, takes no stack at the call and leaves the pool's own query as pg wrote it", async () => {
     const pg = fakePg();
     const poolQuery = function query(): unknown {

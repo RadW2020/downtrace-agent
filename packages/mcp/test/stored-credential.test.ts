@@ -81,7 +81,6 @@ const textOf = (out: { content: Array<{ text: string }> }): string => out.conten
 
 describe("the stored credential of the project asked about", () => {
   it("is the one sent, and no other project's or cloud's", async () => {
-    // covers: RF-611
     const file = await aFile();
     await storeCredential(entry(), { path: file, uid });
     await storeCredential(entry({ project: "shop-api", token: "dtr_shop" }), { path: file, uid });
@@ -97,7 +96,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("gives way to DOWNTRACE_TOKEN, which is sent as before and the file not read", async () => {
-    // covers: RF-611
     const file = await aFile();
     await storeCredential(entry(), { path: file, uid });
     const { call, sent, read } = serverOf(file, { token: "dtr_from_the_environment" });
@@ -111,7 +109,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("is not sent once expired, and the call says to run login again", async () => {
-    // covers: RF-611
     const file = await aFile();
     await storeCredential(entry({ expiresAt: "2026-11-09T12:00:00Z" }), { path: file, uid });
     const { call, sent } = serverOf(file);
@@ -124,7 +121,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("is read again on each call, so a login made during the session is used without a restart", async () => {
-    // covers: RF-611
     const file = await aFile();
     const { call, sent } = serverOf(file, { status: 401 });
     // Nothing stored: the read goes without a credential, as it did with no token, and the refusal says what to run.
@@ -143,7 +139,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("operates when it is of a project, and says how to get one when there is none", async () => {
-    // covers: RF-611
     const file = await aFile();
     const { call, sent } = serverOf(file);
     const refused = await call("resolve_error", { project: "nidus-api", error: "abc", why: "fixed" });
@@ -158,7 +153,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("for read_credential with no project, is the only one stored for the cloud", async () => {
-    // covers: RF-611
     const file = await aFile();
     await storeCredential(entry(), { path: file, uid });
     await storeCredential(entry({ url: "https://other.example", project: "shop-api" }), { path: file, uid });
@@ -179,7 +173,6 @@ describe("the stored credential of the project asked about", () => {
   });
 
   it("is not taken from a file it cannot use, and the call says why without what the file holds", async () => {
-    // covers: RF-611
     const file = await aFile();
     await mkdir(dirname(file), { recursive: true, mode: 0o700 });
     await writeFile(file, '{"schema":"downtrace.credentials/1","credentials":[{"token":"dtr_in_a_broken_file"', {
@@ -219,7 +212,6 @@ describe("a stored credential that cannot be read", () => {
   });
 
   it("names the projects stored for the cloud when the one asked about is not", async () => {
-    // covers: RF-611
     const file = await aFile();
     await storeCredential(entry({ project: "shop-api" }), { path: file, uid });
     const { call } = serverOf(file, { status: 401 });
@@ -234,7 +226,6 @@ describe("the server's reader of the credentials file", () => {
     readStoredCredential({ url: CLOUD, project }, { path: file, uid, now });
 
   it("reads what login wrote, by cloud and project", async () => {
-    // covers: RF-611
     const file = await aFile();
     expect(await lookup(file, "nidus-api")).toEqual({ kind: "missing", projects: [] });
     await storeCredential(entry({ url: `${CLOUD}/` }), { path: file, uid });
@@ -259,7 +250,6 @@ describe("the server's reader of the credentials file", () => {
   it.skipIf(!posix)(
     "refuses a file others can read or write, a symbolic link, and a file of another user",
     async () => {
-      // covers: RF-611
       const file = await aFile();
       await storeCredential(entry(), { path: file, uid });
       await chmod(file, 0o644);
@@ -288,7 +278,6 @@ describe("the server's reader of the credentials file", () => {
 
 describe("where the server looks for the credentials file", () => {
   it("is where login writes it: $XDG_CONFIG_HOME/downtrace, or ~/.config/downtrace", () => {
-    // covers: RF-611
     for (const env of [{}, { XDG_CONFIG_HOME: "/xdg" }, { XDG_CONFIG_HOME: "relative" }, { XDG_CONFIG_HOME: " " }]) {
       const get = (name: string): string | undefined => (env as Record<string, string>)[name];
       expect(credentialsPathFrom(get, "/home/u"), JSON.stringify(env)).toBe(credentialsPath(env, "/home/u"));

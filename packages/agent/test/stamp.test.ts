@@ -8,7 +8,6 @@ import { USAGE } from "../src/check/args.ts";
 import { IMAGE_PREFIX, lookFurther, STAMP_FILE } from "../src/deployed.ts";
 import { runStamp } from "../src/stamp.ts";
 import { createProject, type Project } from "./support/check-project.ts";
-import { readDocumentation } from "./support/documentation.ts";
 
 /**
  * DT-223: `downtrace stamp` writes the commit a build is made from into the build, for the instrumentation to report
@@ -72,7 +71,6 @@ async function absent(file: string): Promise<boolean> {
 }
 
 describe("downtrace stamp", () => {
-  // covers: RF-122
   it("writes git's HEAD, where the build has the checkout", async () => {
     const { dir, head } = await checkout();
     const run = await stamp(dir);
@@ -80,7 +78,6 @@ describe("downtrace stamp", () => {
     expect(await stamped(dir)).toBe(`${head}\n`);
   });
 
-  // covers: RF-122
   it.each(["GITHUB_SHA", "CODEBUILD_RESOLVED_SOURCE_VERSION", "CI_COMMIT_SHA", "GIT_COMMIT", "BITBUCKET_COMMIT"])(
     "writes the commit %s names, where git cannot read the checkout",
     async (variable) => {
@@ -92,7 +89,6 @@ describe("downtrace stamp", () => {
     },
   );
 
-  // covers: RF-122
   it("passes over a variable that holds no commit: a version name, an S3 object's version, HEAD", async () => {
     const dir = await bare();
     const env = buildEnv(dir, {
@@ -105,7 +101,6 @@ describe("downtrace stamp", () => {
     expect(run.stdout).toBe(`wrote ${SHA} to ${join(dir, STAMP_FILE)}, from GIT_COMMIT\n`);
   });
 
-  // covers: RF-122
   it("writes --commit before git and before any variable, in small letters", async () => {
     const { dir } = await checkout();
     const env = buildEnv(dir, { GITHUB_SHA: OTHER });
@@ -116,14 +111,12 @@ describe("downtrace stamp", () => {
     expect(await stamped(dir)).toBe(`${SHA.slice(0, 7)}\n`);
   });
 
-  // covers: RF-122
   it("takes git before a CI's variable: the variable names what started the run, which a workflow may not check out", async () => {
     const { dir, head } = await checkout();
     const run = await stamp(dir, [], buildEnv(dir, { GITHUB_SHA: OTHER }));
     expect(run.stdout).toBe(`wrote ${head} to ${join(dir, STAMP_FILE)}, from git\n`);
   });
 
-  // covers: RF-122
   it("ends with 1, says how to give a commit, and writes nothing, when there is no git and no variable", async () => {
     const dir = await bare();
     const run = await stamp(dir);
@@ -136,7 +129,6 @@ describe("downtrace stamp", () => {
     expect(await absent(join(dir, STAMP_FILE))).toBe(true);
   });
 
-  // covers: RF-122
   it("ends with 1 when git is not there at all, and says so", async () => {
     const dir = await bare();
     const run = await stamp(dir, [], { GIT_CEILING_DIRECTORIES: dirname(dir), PATH: dir });
@@ -175,7 +167,6 @@ describe("downtrace stamp", () => {
 });
 
 describe("a build that ran downtrace stamp", () => {
-  // covers: RF-122
   it("reports that commit at start-up, before the image's digest and before a fingerprint of its code", async () => {
     const { dir, head } = await checkout();
     expect((await stamp(dir)).code).toBe(0);
@@ -197,7 +188,6 @@ describe("a build that ran downtrace stamp", () => {
     expect((await look("http://169.254.170.2/v4/x")).version).toBe(`${IMAGE_PREFIX}${digest}`);
   });
 
-  // covers: RF-122
   it("is a command of downtrace, as a user runs it", async () => {
     const dir = await bare();
     await writeFile(join(dir, "package.json"), '{"name":"api"}');
@@ -220,25 +210,5 @@ describe("a build that ran downtrace stamp", () => {
       child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
     });
     expect(run).toEqual({ code: 0, stdout: `wrote ${SHA} to ${join(dir, STAMP_FILE)}, from --commit\n`, stderr: "" });
-  });
-});
-
-describe("the documentation of downtrace stamp", () => {
-  it("says where it goes in a Dockerfile and in a build script, where the file is read from, and its exit statuses", async () => {
-    // covers: RF-122
-    const docs = (await readDocumentation()).replaceAll("`", "").replace(/\s+/g, " ");
-    const usage = USAGE.replace(/\s+/g, " ");
-    const statuses = "Exit status of stamp: 0 written, 1 no commit was found and nothing was written, 2";
-    expect(usage).toContain(statuses);
-    expect(docs).toContain(statuses);
-    for (const said of [
-      "RUN npx downtrace stamp",
-      '"build": "tsc && downtrace stamp"',
-      ".dockerignore",
-      "--build-arg",
-      "the closest directory above your entry that has a package.json",
-    ]) {
-      expect(docs, said).toContain(said);
-    }
   });
 });

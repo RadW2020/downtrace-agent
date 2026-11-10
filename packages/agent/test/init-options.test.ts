@@ -114,7 +114,6 @@ function aspect(result: ConfigResult): unknown {
 }
 
 describe("one list of the settings, for options and variables alike (RF-103)", () => {
-  // covers: RF-103
   it("lists as a setting every variable the configuration reads, apart from check's own", async () => {
     const source = await read("../src/config.ts");
     const read_ = variablesIn(source).filter((name) => !isCheckOwn(name));
@@ -122,7 +121,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     expect(read_.filter((name) => !VARIABLES.has(name))).toEqual([]);
   });
 
-  // covers: RF-103
   it("has an option for every variable the README and the guide document", async () => {
     const pages = [
       "../README.md",
@@ -149,13 +147,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     return rows;
   }
 
-  // covers: RF-103
-  it("lists every setting in the guide's table, by its option and its variable", async () => {
-    const rows = await settingsTable("../guide/configuration.md");
-    const expected = Object.entries(SETTINGS).map(([option, { variable }]): [string, string] => [option, variable]);
-    expect([...rows].sort()).toEqual([...expected].sort());
-  });
-
   it("shows in the README's table only what a user sets to get started", async () => {
     const rows = await settingsTable("../README.md");
     expect(rows.map(([option]) => option)).toEqual(["dsn", "env", "version", "inspect"]);
@@ -170,7 +161,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     expect(Object.keys(SAMPLES).sort()).toEqual(Object.keys(SETTINGS).sort());
   });
 
-  // covers: RF-103
   it("gives an option the meaning of its variable, for every setting", () => {
     for (const option of Object.keys(SETTINGS) as Array<keyof typeof SETTINGS>) {
       const { variable } = SETTINGS[option];
@@ -182,7 +172,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     }
   });
 
-  // covers: RF-103
   it("lets the code win over the variable, for every setting", () => {
     for (const option of Object.keys(SETTINGS) as Array<keyof typeof SETTINGS>) {
       const { variable } = SETTINGS[option];
@@ -193,7 +182,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     }
   });
 
-  // covers: RF-103
   it("fills an option left out from its variable, for every setting", () => {
     for (const option of Object.keys(SETTINGS) as Array<keyof typeof SETTINGS>) {
       const { variable } = SETTINGS[option];
@@ -207,7 +195,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     }
   });
 
-  // covers: RF-103
   it("applies the defaults with neither, and leaves the version to the chain that looks further", () => {
     const fromCode = config(configFromCode({ dsn: "https://dt_a@a.example.com" }, {}));
     const fromEnv = config(configFromEnv({ DOWNTRACE_TOKEN: "dt_a", DOWNTRACE_URL: "https://a.example.com" }));
@@ -216,7 +203,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     expect(fromCode.versionFrom).toBeUndefined();
   });
 
-  // covers: RF-103
   it("takes the environment from code over DOWNTRACE_ENV and NODE_ENV", () => {
     const env = { ...CONNECTED, DOWNTRACE_ENV: "staging", NODE_ENV: "development" };
     expect(config(configFromCode({ env: "production" }, env)).environment).toBe("production");
@@ -224,7 +210,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     expect(config(configFromCode({}, { ...CONNECTED, NODE_ENV: "development" })).environment).toBe("development");
   });
 
-  // covers: RF-103
   it("takes the version from code over every variable of the chain, and says it came from init()", () => {
     const env = {
       ...CONNECTED,
@@ -272,7 +257,6 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
 });
 
 describe("a DSN (RF-104)", () => {
-  // covers: RF-104
   it("is split into the URL and the token when it is read, in code or in DOWNTRACE_DSN", () => {
     for (const result of [
       configFromCode({ dsn: "https://dt_abc@downtrace.example.com" }, {}),
@@ -290,7 +274,6 @@ describe("a DSN (RF-104)", () => {
     });
   });
 
-  // covers: RF-104
   it("never leaves the token in the URL", () => {
     const { url } = config(configFromCode({ dsn: "https://dt_secret@downtrace.example.com/x" }, {}));
     expect(url).not.toContain("dt_secret");
@@ -298,7 +281,6 @@ describe("a DSN (RF-104)", () => {
     expect(() => new Request(`${url}/v0/aggregates`)).not.toThrow();
   });
 
-  // covers: RF-104
   it("says what is wrong with a malformed one, without echoing the token, and stays inert", () => {
     const token = "dt_SECRETVALUE";
     const cases: Array<[string, RegExp]> = [
@@ -322,7 +304,6 @@ describe("a DSN (RF-104)", () => {
     expect(fromCode).toEqual({ ok: false, reason: expect.stringMatching(/^init\(\)'s dsn is not a URL/) });
   });
 
-  // covers: RF-104
   it("refuses a DOWNTRACE_URL that carries the token, which fetch would refuse, without echoing it", () => {
     const result = configFromEnv({ DOWNTRACE_TOKEN: "dt_a", DOWNTRACE_URL: "https://dt_SECRETVALUE@x.example.com" });
     expect(result).toEqual({ ok: false, reason: expect.stringMatching(/^DOWNTRACE_URL carries credentials/) });
@@ -333,7 +314,6 @@ describe("a DSN (RF-104)", () => {
     expect(configFromCode({ dsn: 42 }, CONNECTED)).toEqual({ ok: false, reason: "init()'s dsn must be a string" });
   });
 
-  // covers: RF-103, RF-104
   it("from code, wins over the environment's token and URL, and the environment's DSN", () => {
     const env = { ...CONNECTED, DOWNTRACE_DSN: "https://dt_envdsn@envdsn.example.com" };
     expect(config(configFromCode({ dsn: "https://dt_code@code.example.com" }, env))).toMatchObject({
@@ -346,7 +326,6 @@ describe("a DSN (RF-104)", () => {
     );
   });
 
-  // covers: RF-103, RF-104
   it("in the environment, gives the token or the URL the code left out", () => {
     const env = { DOWNTRACE_DSN: "https://dt_env@env.example.com" };
     expect(config(configFromCode({ token: "dt_code" }, env))).toMatchObject({
@@ -364,7 +343,6 @@ describe("a DSN (RF-104)", () => {
     expect(config(configFromEnv(env))).toMatchObject({ token: "dt_dsn", url: "https://dsn.example.com" });
   });
 
-  // covers: RF-104
   it("missing, with no token either, leaves the instrumentation off with one reason", () => {
     expect(configFromEnv({})).toEqual({
       ok: false,

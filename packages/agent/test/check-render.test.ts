@@ -19,7 +19,6 @@ import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint 
  * One report, read three ways: as text by a person, as JSON by a coding agent, as a status by CI. They are the same
  * object, so what the person is told and what the agent is told cannot disagree (invariant 13).
  */
-// covers: LOC-01, ESC-17, ESC-18
 
 const side = (ref: string, over: Partial<SideReport> = {}): SideReport => ({
   ref,
@@ -99,7 +98,6 @@ describe("the report as text", () => {
     expect(text).toMatch(/appeared\s+SELECT n1 FROM t WHERE id = \?\s+\[query n1\]\s+0 -> 12 per request/);
   });
 
-  // covers: RF-526
   it("says under an operation that got worse where the change ran it, when check found where", () => {
     const report = reportOf();
     const checkout = report.routes.find((route) => route.id === "POST /checkout");
@@ -280,7 +278,6 @@ describe("a comparison that could not be made", () => {
 });
 
 describe("a check in which no route could be evaluated", () => {
-  // covers: RF-511
   // One route for each reason a route is not evaluated: called with nothing observed, declared and never called, gone
   // from the change, new in it, called with no profile on either side, and a bucket.
   const run = (side: "base" | "change") =>

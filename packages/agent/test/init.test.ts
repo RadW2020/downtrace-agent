@@ -551,7 +551,6 @@ describe("the ingestion token", () => {
   /** The text as a person reads it, with the wrapping of the lines taken out. */
   const flat = (text: string): string => text.replaceAll(/\s+/g, " ");
 
-  // covers: RF-601
   it("says it is safe to commit, what a leaked one can and cannot do, and how to replace it, in words", async () => {
     const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
     const { code, text } = await initText(dir);
@@ -567,7 +566,6 @@ describe("the ingestion token", () => {
     expect(text.trimEnd().split("\n").at(-1)).toBe("Next: npx @downtrace/agent check");
   });
 
-  // covers: RF-601
   it("says the same to a coding agent, in the JSON, whatever init could configure", async () => {
     for (const files of [{ ".git/": "", "package.json": EXPRESS_PG }, { "package.json": "{}" }, {}]) {
       const { report } = await init(await project(files));

@@ -46,7 +46,6 @@ async function connected(answer: (path: string) => Answer = () => json(200, { ok
 
 describe("downtrace api", () => {
   it("reads each path a brief's next gives, as written, and prints the answer as it came", async () => {
-    // covers: RF-525
     // The paths the cloud's brief names: a finding's report, an error, a route's status and what changed since.
     const paths = [
       "/api/p/nidus-api/findings/42/report",
@@ -65,7 +64,6 @@ describe("downtrace api", () => {
   });
 
   it("sends the credential of the project the path is of, and no other", async () => {
-    // covers: RF-611
     const { cloud, home } = await connected();
     expect((await api(["/api/p/shop-api/findings"], cloud, home)).code).toBe(0);
     expect(cloud.seen.map((r) => r.authorization)).toEqual(["Bearer dtr_shop"]);
@@ -79,7 +77,6 @@ describe("downtrace api", () => {
   });
 
   it("reads an absolute URL on the cloud configured, and --json changes nothing of an answer", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     const run = await api([`${cloud.url}/api/p/nidus-api/brief?since=2026-11-09T15%3A00%3A00Z`, "--json"], cloud, home);
     expect(run).toEqual({ code: 0, stdout: '{"ok":true}\n', stderr: "" });
@@ -108,7 +105,6 @@ describe("downtrace api", () => {
   });
 
   it("says the cloud's refusal in its own words, and exits 1", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected(() => json(404, { error: "no such finding" }));
     const run = await api(["/api/p/nidus-api/findings/7"], cloud, home);
     expect(run.code).toBe(1);
@@ -154,7 +150,6 @@ describe("what downtrace api refuses before sending anything", () => {
     ["/api/p/nidus-api/brief x", "a space"],
     ["/api/p/nidus-api/brief\u0000", "a control character"],
   ])("%j", async (path, says) => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     const run = await api([path], cloud, home);
     expect(run.code).toBe(2);
@@ -164,7 +159,6 @@ describe("what downtrace api refuses before sending anything", () => {
   });
 
   it("refuses another origin that shares the cloud's host, or carries a user and password", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     const host = new URL(cloud.url).host;
     for (const url of [`https://${host}/api/p/nidus-api/brief`, `http://u:p@${host}/api/p/nidus-api/brief`]) {
@@ -176,7 +170,6 @@ describe("what downtrace api refuses before sending anything", () => {
   });
 
   it("sends GET and nothing else: it takes no method", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     for (const [argv, says] of [
       [["--method", "POST", "/api/p/nidus-api/findings/1/close"], "unknown option --method for api"],

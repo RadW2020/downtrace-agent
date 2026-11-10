@@ -353,7 +353,6 @@ describe("reading the routes the applications of a run declared (ESC-18)", () =>
 });
 
 describe("reading where the change run ran its operations (RF-526)", () => {
-  // covers: RF-526
   const site = (route: string, at: unknown, more: Record<string, unknown> = {}) => ({
     route,
     kind: "query",

@@ -391,7 +391,6 @@ describe("the file check reads the declared routes from", () => {
 });
 
 describe("the file check reads where the change ran its operations from", () => {
-  // covers: RF-526
   const inspecting = { DOWNTRACE_INSPECT: "/tmp/run.jsonl" };
 
   it("is what DOWNTRACE_CHECK_SITES says, and only check sets it", () => {

@@ -138,27 +138,23 @@ await new Promise((r) => app.close(r));
     }
   }
 
-  // covers: RF-110
   it("says `unavailable`, as it says it of pg, when the application declares mysql2", async () => {
     const observers = await observersOf({ dependencies: { mysql2: "^3" } });
     expect(observers).toMatchObject({ mysql: "unavailable", pg: "unavailable", http: "on" });
   });
 
-  // covers: RF-110
   it("says it of every MySQL driver the switch observes, and of what brings one", async () => {
     for (const name of ["mysql", "mariadb", "@mikro-orm/mysql"]) {
       expect((await observersOf({ devDependencies: { [name]: "^1" } }))?.mysql, name).toBe("unavailable");
     }
   });
 
-  // covers: RF-110
   it("says nothing of MySQL when the application does not declare it, as an application with no MySQL reads", async () => {
     const observers = await observersOf({ dependencies: { express: "^5" } });
     expect(observers).toMatchObject({ pg: "unavailable", http: "on" });
     expect(observers).not.toHaveProperty("mysql");
   });
 
-  // covers: RF-110
   it("says it of SQLite, SQL Server, MongoDB and Prisma too, each by a package the application declares", async () => {
     const observers = await observersOf({
       dependencies: { "better-sqlite3": "^12", mssql: "^12", mongoose: "^8", "@prisma/client": "^6" },
@@ -173,7 +169,6 @@ await new Promise((r) => app.close(r));
     });
   });
 
-  // covers: RF-110
   it("leaves Prisma out when a driver adapter is beside its client, as on Prisma 7, and says the adapter's driver", async () => {
     const observers = await observersOf({
       dependencies: { "@prisma/client": "^7", "@prisma/adapter-better-sqlite3": "^7" },
@@ -182,7 +177,6 @@ await new Promise((r) => app.close(r));
     expect(observers).not.toHaveProperty("prisma");
   });
 
-  // covers: RF-110
   it("says nothing of any database whose key is left out when the application declares none of it", async () => {
     const observers = await observersOf({ dependencies: { express: "^5" } });
     const leftOut = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name) && name !== "pg");
@@ -208,7 +202,6 @@ describe("the drivers the start found, under DOWNTRACE_DEBUG", () => {
     return lines.filter((line) => line.includes("drivers found"));
   }
 
-  // covers: RF-120
   it("names every driver switch that found its driver, and says when it is wrapped", () => {
     for (const name of drivers) {
       const line = driversFoundLine({ [name]: "on" }, new Set(drivers));
@@ -221,7 +214,6 @@ describe("the drivers the start found, under DOWNTRACE_DEBUG", () => {
     );
   });
 
-  // covers: RF-120
   it("says it found none, and of which, when none resolved", () => {
     expect(driversFoundLine({ pg: "unavailable" }, new Set(drivers))).toBe(
       `drivers found: none, of ${drivers.join(", ")}`,
@@ -237,7 +229,6 @@ describe("the drivers the start found, under DOWNTRACE_DEBUG", () => {
     );
   });
 
-  // covers: RF-120
   it("is one line of the start, with debug on, and none with it off", () => {
     expect(started(["pg", "http"], true, { pgModule: { notAClient: true } })).toEqual([
       "[downtrace] drivers found: none, of pg",

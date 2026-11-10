@@ -15,7 +15,6 @@ import { type CliResult, cleanEnv, downtrace, REGISTER_URL } from "./support/che
  * holds the batches of every process that wrote to it. The base looks each user up once per request; the change, four
  * times.
  */
-// covers: LOC-01
 
 const run = promisify(execFile);
 const EXPRESS_DIR = dirname(createRequire(import.meta.url).resolve("express/package.json"));

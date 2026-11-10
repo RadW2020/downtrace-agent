@@ -37,7 +37,6 @@ function declaredDependencies(from: string | string[], signal = AbortSignal.time
 const manifest = (fields: Record<string, unknown>): string => JSON.stringify({ name: "app", ...fields });
 
 describe("the dependencies the application declares", () => {
-  // covers: RF-110
   it("are those of the closest package.json above the entry, in every field that declares one", async () => {
     const dir = await tree({
       "package.json": manifest({
@@ -52,13 +51,11 @@ describe("the dependencies the application declares", () => {
     expect([...names].sort()).toEqual(["better-sqlite3", "mysql2", "vitest"]);
   });
 
-  // covers: RF-110
   it("are read from inside a directory the process was started with, as `node .` runs it", async () => {
     const dir = await tree({ "package.json": manifest({ dependencies: { mysql2: "^3" } }) });
     expect([...(await declaredDependencies(`${dir}${path.sep}`))]).toEqual(["mysql2"]);
   });
 
-  // covers: RF-110
   it("pass over a package.json that declares nothing, as the one a build writes to say its files are modules", async () => {
     const dir = await tree({
       "package.json": manifest({ dependencies: { mysql2: "^3" } }),
@@ -68,7 +65,6 @@ describe("the dependencies the application declares", () => {
     expect([...(await declaredDependencies(path.join(dir, "dist", "server.js")))]).toEqual(["mysql2"]);
   });
 
-  // covers: RF-110
   it("are never a dependency's, whose own package.json lists what it was built and tested with", async () => {
     // A CLI started from `node_modules` — `node node_modules/typeorm/cli.js` — whose package declares mysql2 among its
     // devDependencies: the application is the project above `node_modules`, and it declares Postgres.
@@ -81,7 +77,6 @@ describe("the dependencies the application declares", () => {
     expect([...names]).toEqual(["pg"]);
   });
 
-  // covers: RF-110
   it("are those of every base under `check`: the runner's project and the one the tests are of", async () => {
     const runner = await tree({ "package.json": manifest({ dependencies: { vitest: "^4" } }), "run.js": "" });
     const project = await tree({ "package.json": manifest({ dependencies: { mysql2: "^3" } }) });
@@ -129,7 +124,6 @@ describe("the dependencies the application declares", () => {
 const LEFT_OUT = INSTRUMENTS.filter((name) => !DRIVERLESS.has(name) && name !== "pg");
 
 describe("a database the application declares a driver of", () => {
-  // covers: RF-110
   it("is each switch's whose key is left out when none resolves, by every package `check` reads for it", () => {
     expect(LEFT_OUT).toEqual(expect.arrayContaining(["mysql", "sqlite", "mssql", "mongodb", "prisma"]));
     for (const name of LEFT_OUT) {
@@ -139,7 +133,6 @@ describe("a database the application declares a driver of", () => {
     }
   });
 
-  // covers: RF-110
   it("is not a switch's when the application declares every other switch's packages and none of its own", () => {
     for (const name of LEFT_OUT) {
       const others = Object.entries(OBSERVER_PACKAGES).flatMap(([observer, packages]) =>
@@ -149,7 +142,6 @@ describe("a database the application declares a driver of", () => {
     }
   });
 
-  // covers: RF-110
   it("is not Prisma's when a driver adapter is beside its client, as Prisma 7 requires: its queries are the driver's", () => {
     for (const adapter of ["@prisma/adapter-pg", "@prisma/adapter-better-sqlite3", "@prisma/adapter-planetscale"]) {
       expect(declaresDriverOf("prisma", new Set(["@prisma/client", adapter])), adapter).toBe(false);

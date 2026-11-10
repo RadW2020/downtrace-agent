@@ -8,7 +8,6 @@ import { linkDependencies, runCommand, runEnv } from "../src/check/run.ts";
  * What a run of the tests is given (LOC-01): an environment in which the instrumentation can only write a file, and
  * which reaches every process the runner starts.
  */
-// covers: LOC-01
 
 const REGISTER = "file:///opt/downtrace/dist/register.js";
 const run = {
@@ -58,7 +57,6 @@ describe("the environment of a run", () => {
     expect(env.DOWNTRACE_PROFILE_MS).toBe("1000");
   });
 
-  // covers: RF-526
   it("has the change's run write where it ran its operations, and the base's take no stack", () => {
     const change = runEnv({}, { ...run, side: "change", sitesFile: "/tmp/dt/change.sites.jsonl" });
     expect(change.DOWNTRACE_CHECK_SITES).toBe("/tmp/dt/change.sites.jsonl");

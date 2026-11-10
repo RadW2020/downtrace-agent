@@ -153,8 +153,6 @@ describe("the minimal mode", () => {
   // gh-395. The batch was the easy half. A capture freezes the black box and sends it down a path of its
   // own, and that path copied the route straight out of the register. The ADR 0105 left the hole named:
   // «el modo mínimo tiene un agujero del tamaño de una captura».
-  //
-  // covers: ESC-08
   it("withholds the route in a capture's evidence too, and still finds the requests it was asked for", async () => {
     const evidence: { path: string; body: string }[] = [];
     let ordered = false;

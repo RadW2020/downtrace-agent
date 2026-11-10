@@ -146,7 +146,6 @@ describe("the AGENTS.md block", () => {
   });
 
   it("asks, of each route that got worse, where the change runs what made it worse: check's `sites`", () => {
-    // covers: RF-526
     // A field `check` writes on an operation that got worse; renamed there, this stops compiling (`make typecheck`).
     const field: keyof OperationResult = "sites";
     expect(rule(block, 1)).toContain(`\`${field}\``);
@@ -154,7 +153,6 @@ describe("the AGENTS.md block", () => {
   });
 
   it("reads the brief from the shell where the MCP server is not there, and each path it names", () => {
-    // covers: RF-523
     const commands = commandsOf(block).map((command) => command.join(" "));
     expect(commands).toContain("brief --json");
     expect(commands.some((command) => command.startsWith("api "))).toBe(true);
@@ -284,7 +282,6 @@ describe("every text a coding agent is handed", () => {
   });
 
   it("starts a session at the brief, says in one line what it found, and when no telemetry arrived", () => {
-    // covers: RF-523
     for (const { name, text } of [
       { name: "rule 5 of AGENTS-block.md", text: rule(block, 5) },
       { name: "rule 5 of SKILL.md", text: rule(skillBody, 5) },
@@ -388,7 +385,6 @@ describe("what a coding agent runs, which is what npm serves and not the source"
 
 describe("the README", () => {
   it("connects the MCP server with downtrace login, and DOWNTRACE_TOKEN is only the override", async () => {
-    // covers: RF-514
     const readme = await read("README.md");
     const { version, commands, flags } = ((await readJson("released.json")) as Released)["@downtrace/agent"];
     const login = commandsOf(readme).find((command) => command[0] === "login");

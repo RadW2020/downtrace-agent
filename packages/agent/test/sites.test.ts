@@ -19,7 +19,6 @@ import { cleanEnv, REGISTER_URL } from "./support/check-project.ts";
  * The calls are made from modules written into a project of the test's own: a frame of this package's tests is a
  * frame of this package, and this package is never a place.
  */
-// covers: RF-526
 
 const quiet: Logger = { warn: () => {}, debug: () => {} };
 

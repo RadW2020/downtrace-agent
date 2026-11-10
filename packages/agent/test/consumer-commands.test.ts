@@ -28,7 +28,6 @@ function scenario(args: string[]): Promise<{ code: number | null; stdout: string
 }
 
 describe("the commands a consumer runs, as pack-test runs them on each Node", () => {
-  // covers: RF-121
   it("answer on this Node as the scenario pins: check, verify, report and compare", { timeout: 120_000 }, async () => {
     const { code, stdout, stderr } = await scenario([CLI, REGISTER_URL]);
     expect(code, `${stdout}\n${stderr}`).toBe(0);

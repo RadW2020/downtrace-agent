@@ -8,7 +8,6 @@ import { type CheckReport, compared, failed, type SideReport } from "../src/chec
  * The link `check` offers when Downtrace could not see something: when it is offered, when it is not, and what the
  * issue it opens says — which is what the report says, and nothing of the code. Nothing is sent by any of it.
  */
-// covers: LOC-01
 
 const side = (ref: string, over: Partial<SideReport> = {}): SideReport => ({
   ref,

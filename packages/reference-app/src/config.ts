@@ -2,8 +2,8 @@ export interface AppConfig {
   port: number;
   /**
    * Where the app listens (HOST env): the loopback unless told otherwise, because `/__admin` switches regressions
-   * with no credential unless `adminToken` is set. A deployment reached from another container, as the canary's
-   * is, says `0.0.0.0`, and sets `adminToken` too.
+   * with no credential unless `adminToken` is set. A deployment reached from another container says `0.0.0.0`,
+   * and sets `adminToken` too.
    */
   host: string;
   providerPort: number;

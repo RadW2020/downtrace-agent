@@ -64,7 +64,6 @@ const mode = async (path: string): Promise<number> => (await stat(path)).mode & 
 
 describe("where login keeps the credentials", () => {
   it("is credentials.json under $XDG_CONFIG_HOME/downtrace, or ~/.config/downtrace without it", () => {
-    // covers: RF-611
     expect(credentialsPath({ XDG_CONFIG_HOME: "/xdg" }, "/home/u")).toBe(join("/xdg", "downtrace", "credentials.json"));
     expect(credentialsPath({}, "/home/u")).toBe(join("/home/u", ".config", "downtrace", "credentials.json"));
     expect(credentialsPath({ XDG_CONFIG_HOME: " " }, "/home/u")).toBe(
@@ -79,7 +78,6 @@ describe("where login keeps the credentials", () => {
 
 describe("storing a credential", () => {
   it.skipIf(!posix)("writes a file only its user reads, in a directory only its user opens", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     await storeCredential(entry(), access);
     expect(await mode(path)).toBe(0o600);
@@ -90,7 +88,6 @@ describe("storing a credential", () => {
   });
 
   it("keeps one entry per cloud and project: the new one replaces the earlier, and the others stay", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     await storeCredential(entry(), access);
     await storeCredential(entry({ project: "shop-api", token: "dtr_shop" }), access);
@@ -127,7 +124,6 @@ describe("storing a credential", () => {
   });
 
   it.skipIf(!posix || root)("says why it cannot write, without the credential, and leaves nothing behind", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     await chmod(dirname(path), 0o500);
@@ -150,7 +146,6 @@ describe("storing a credential", () => {
   });
 
   it("leaves a file it cannot read as it is, and says so without what it holds", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const corrupt = '{"schema":"downtrace.credentials/1","credentials":[{"token":"dtr_kept_by_hand"';
@@ -166,7 +161,6 @@ describe("storing a credential", () => {
   });
 
   it.skipIf(!posix)("follows no symbolic link: not the file's, not the directory's", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     const elsewhere = join(await aHome(), "target.json");
     await writeFile(elsewhere, "{}");
@@ -194,7 +188,6 @@ describe("storing a credential", () => {
 
 describe("reading a stored credential", () => {
   it("finds the one of a cloud and a project, and no other", async () => {
-    // covers: RF-611
     const { access } = await aStore();
     await storeCredential(entry(), access);
     await storeCredential(entry({ project: "shop-api", token: "dtr_shop" }), access);
@@ -216,7 +209,6 @@ describe("reading a stored credential", () => {
   });
 
   it("with no project, takes the only one stored for the cloud, and names them when there are more", async () => {
-    // covers: RF-611
     const { access } = await aStore();
     await storeCredential(entry(), access);
     await storeCredential(entry({ url: "https://other.example", project: "shop-api" }), access);
@@ -235,7 +227,6 @@ describe("reading a stored credential", () => {
   });
 
   it("says an entry expired instead of handing it over as one that opens anything", async () => {
-    // covers: RF-611
     const { access } = await aStore();
     await storeCredential(entry({ expiresAt: "2026-11-09T12:00:00Z" }), access);
     await storeCredential(entry({ project: "forever", expiresAt: "" }), access);
@@ -248,7 +239,6 @@ describe("reading a stored credential", () => {
   });
 
   it("does not use a file it cannot read, and says why without what it holds", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const read = () => readStoredCredential({ url: "https://cloud.example", project: "x" }, { ...access, now: NOW });
@@ -280,7 +270,6 @@ describe("reading a stored credential", () => {
   });
 
   it.skipIf(!posix)("refuses a file other users can read or write, and says how to close it", async () => {
-    // covers: RF-611
     // Like ssh with a private key: a secret others could have read is not used as if it were still one.
     const { path, access } = await aStore();
     await storeCredential(entry(), access);
@@ -297,7 +286,6 @@ describe("reading a stored credential", () => {
   });
 
   it.skipIf(!posix)("follows no symbolic link, and reads no file of another user", async () => {
-    // covers: RF-611
     const { path, access } = await aStore();
     const elsewhere = credentialsPath({}, await aHome());
     await storeCredential(entry(), { path: elsewhere, uid });

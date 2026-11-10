@@ -10,8 +10,6 @@ import { afterEach, describe, expect, it } from "vitest";
 /**
  * ESC-16: the tracker Downtrace is meant to replace, loaded in the same process.
  *
- * covers: ERR-01, ERR-02, ESC-16
- *
  * «Each instrumentation observes what it would observe alone —requests, operations per request, errors— and
  * neither disables the other.» The only way to check that is to run the four configurations —each alone, and
  * both in each load order— against the same traffic, in real processes, and compare exact counts. The

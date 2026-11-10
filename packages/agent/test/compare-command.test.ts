@@ -16,7 +16,6 @@ import { REGISTER_URL } from "./support/check-project.ts";
  * by composition and never by latency, the same exit status, and nothing presented as unchanged that was not
  * evaluated.
  */
-// covers: LOC-01
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -131,7 +130,6 @@ describe("the verdict of downtrace compare", () => {
     });
   });
 
-  // covers: RF-511
   it("says, when no route could be evaluated, why each route the JSON carries was not, in check's words", async () => {
     const nothing = fileOf(
       batch("app", {

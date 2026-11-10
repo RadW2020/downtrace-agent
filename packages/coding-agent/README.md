@@ -36,7 +36,7 @@ Or, for one session, from a clone of the repository: `claude --plugin-dir packag
 2. Set that configuration's `DOWNTRACE_URL` in the environment that starts Claude Code, and leave `DOWNTRACE_TOKEN` unset: with none, the server sends, on each call, the credential login kept for its cloud and the call's project. `DOWNTRACE_TOKEN` is only an override: when it is set, every call sends it and the kept credential is not read. It is an access credential, never the ingestion token the instrumentation sends with, which reads nothing.
 3. Start a new session: a server connected during one is there only in the next. Until then, and wherever the server is not, `npx @downtrace/agent@0.22.0 brief --json` reads the same brief from the shell, and `npx @downtrace/agent@0.22.0 api "<path>"` each path it names, with the kept credential and no configuration.
 
-Without `DOWNTRACE_URL` the server does not start, Claude Code shows it as failed, and the rest of the plugin works as it does without it. See [`@downtrace/mcp`](../mcp#readme) for what the server offers and what each credential level opens, and [`downtrace login`](../agent/guide/login.md) for the rest of login's options.
+Without `DOWNTRACE_URL` the server does not start, Claude Code shows it as failed, and the rest of the plugin works as it does without it. See [`@downtrace/mcp`](../mcp#readme) for what the server offers and what each credential level opens.
 
 `marketplace.json` is the plugin's marketplace: the mirror publishes it at its root as `.claude-plugin/marketplace.json`, which is where `claude plugin marketplace add` looks for it.
 

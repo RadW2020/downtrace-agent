@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { USAGE } from "../src/check/args.ts";
 import { READ_SCHEMA, renderVerdict, runRead, sleepFor, WAIT_BOUNDS } from "../src/read.ts";
-import { readDocumentation } from "./support/documentation.ts";
 import { type Answer, aHome, cleanUp, json, type StandIn, standIn, stored } from "./support/stand-in-cloud.ts";
 
 /**
@@ -146,7 +144,6 @@ const WAITING = 'downtrace brief: waiting until 2026-11-09T16:10:00Z for the ver
 
 describe("downtrace brief --deploy --wait", () => {
   it("reads again when the cloud says, and exits 0 when the verdict arrives and nothing got worse", async () => {
-    // covers: RF-527
     const run = await waitFor(["--deploy", "abc1234", "--wait", "10m"], [json(200, PENDING), json(200, UNCHANGED)]);
     expect(run.code).toBe(0);
     expect(run.slept).toEqual([60_000]);
@@ -160,7 +157,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("exits 1 when something got worse, and says where its rows are", async () => {
-    // covers: RF-527
     const run = await waitFor(["--deploy", "abc1234", "--wait", "10m"], [json(200, PENDING), json(200, WORSE)]);
     expect(run.code).toBe(1);
     expect(run.stdout).toBe(
@@ -173,7 +169,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("exits 2 with the cloud's reason when the duration ends with no verdict, its last wait cut to the deadline", async () => {
-    // covers: RF-527
     const run = await waitFor(["--deploy=abc1234", "--wait=150s"], [json(200, PENDING)]);
     expect(run.code).toBe(2);
     expect(run.slept).toEqual([60_000, 60_000, 30_000]);
@@ -188,7 +183,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("exits 2 when no environment reported the version by then, and says so", async () => {
-    // covers: RF-527
     const absent = briefWith(
       "pending",
       "no environment reported this version in the last 24 hours: an instrumentation running it has not sent a batch yet, or it reports another version",
@@ -204,7 +198,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("exits 2 at once when the verdict is that no comparison will come", async () => {
-    // covers: RF-527
     const none = briefWith("none", "1 of the 1 environment(s) that ran it will have no comparison, and each says why", [
       environment(
         "staging",
@@ -221,7 +214,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("waits what the cloud says within its bounds, and the default when it says nothing", async () => {
-    // covers: RF-527
     for (const [retry, waited] of [
       [1, WAIT_BOUNDS.minMs],
       [90, 90_000],
@@ -238,7 +230,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("prints the cloud's last answer as it came with --json, and exits with its verdict", async () => {
-    // covers: RF-527
     const worse = await waitFor(
       ["--deploy", "abc1234", "--wait", "10m", "--json"],
       [json(200, PENDING), json(200, WORSE)],
@@ -253,7 +244,6 @@ describe("downtrace brief --deploy --wait", () => {
   });
 
   it("reads once with --deploy alone, and says nothing while it does", async () => {
-    // covers: RF-527
     const run = await waitFor(["--deploy", "abc1234"], [json(200, PENDING), json(200, UNCHANGED)]);
     expect(run.code).toBe(2);
     expect(run.cloud.seen).toHaveLength(1);
@@ -271,7 +261,6 @@ describe("downtrace brief --deploy --wait", () => {
 
 describe("what downtrace brief --deploy says when a read fails", () => {
   it("reads again after a request that timed out, a cloud that failed or one it could not reach", async () => {
-    // covers: RF-527
     const run = await waitFor(
       ["--deploy", "abc1234", "--wait", "10m"],
       [json(200, PENDING), "hang", json(503, { error: "restarting" }), json(200, UNCHANGED)],
@@ -283,7 +272,6 @@ describe("what downtrace brief --deploy says when a read fails", () => {
   });
 
   it("exits 2 with the last failure when the duration ends on one", async () => {
-    // covers: RF-527
     const run = await waitFor(["--deploy", "abc1234", "--wait", "1m"], ["hang"], { timeoutMs: 100 });
     expect(run.code).toBe(2);
     expect(run.cloud.seen).toHaveLength(2);
@@ -293,7 +281,6 @@ describe("what downtrace brief --deploy says when a read fails", () => {
   });
 
   it("exits 2, never 1, when the cloud refuses, with its words and without reading again", async () => {
-    // covers: RF-527
     const run = await waitFor(
       ["--deploy", "abc1234", "--wait", "10m"],
       [json(200, PENDING), json(403, { error: "this credential's level is read and this needs operate" })],
@@ -311,7 +298,6 @@ describe("what downtrace brief --deploy says when a read fails", () => {
   });
 
   it("stops when the credential stops being taken while it waits, and says how to get another", async () => {
-    // covers: RF-527, RF-611
     const refused = await waitFor(
       ["--deploy", "abc1234", "--wait", "10m"],
       [json(200, PENDING), { status: 401, body: "unauthorized\n" }],
@@ -332,7 +318,6 @@ describe("what downtrace brief --deploy says when a read fails", () => {
   });
 
   it("exits 2 when the cloud's brief says no verdict, or one this command does not know", async () => {
-    // covers: RF-527
     const older = await waitFor(["--deploy", "abc1234", "--wait", "10m"], [json(200, { headline: "h" })]);
     expect(older.code).toBe(2);
     expect(older.stderr).toContain(`says no verdict of "abc1234": it is older than this command`);
@@ -346,7 +331,6 @@ describe("what downtrace brief --deploy says when a read fails", () => {
   });
 
   it("ends when it is interrupted while it waits, and exits 2", async () => {
-    // covers: RF-527
     const abort = new AbortController();
     const cloud = await standIn(inTurn(json(200, PENDING)));
     const home = await aHome();
@@ -427,19 +411,5 @@ describe("a deploy's verdict as text", () => {
     );
     // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are what it looks for.
     expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f‪-‮]/);
-  });
-});
-
-describe("the documentation of downtrace brief --deploy", () => {
-  it("says the exit statuses of a verdict, and that a refusal is not 1", async () => {
-    // covers: RF-527
-    const docs = (await readDocumentation()).replaceAll("`", "").replace(/\s+/g, " ");
-    const usage = USAGE.replace(/\s+/g, " ");
-    const statuses =
-      "Exit status of brief --deploy: 0 nothing got worse, 1 something did, 2 no verdict (no comparison by then, the version did not appear, or nothing could be read; it says why, and a refusal of the cloud is 2)";
-    expect(usage).toContain(statuses);
-    expect(docs).toContain(statuses);
-    expect(usage).toContain("--wait <duration>");
-    expect(docs).toContain("--wait <duration>");
   });
 });

@@ -245,7 +245,6 @@ const ask = async (path) => {
     });
   }
 
-  // covers: RF-121
   it.each(Object.entries(CALLS))("names each request by its template when the suite %s", async (_how, call) => {
     const dir = mkdtempSync(join(tmpdir(), "downtrace-hapi-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -318,7 +317,6 @@ describe("attachHapi, when the instrumentation's own doors fail or it stopped", 
    * DT-175. Where Node announces no module loads, the start loads Hapi's request class itself. A Hapi whose class
    * cannot be loaded is one the application meets as it loads Hapi, and nothing of the instrumentation's own.
    */
-  // covers: RF-121
   it("starts as without Hapi when its request class throws as the start loads it, on a Node that announces no loads (invariant 2)", () => {
     const dir = mkdtempSync(join(tmpdir(), "downtrace-hapi-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));

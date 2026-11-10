@@ -205,8 +205,6 @@ describe("what one capture saw", () => {
   // gh-397. The order says what to watch and this used to hand over the whole register: a capture of one
   // route arrived carrying the name, the timing and the composition of every other route in the service,
   // and the two coverages counted all of it.
-  //
-  // covers: ESC-08
   it("hands over the route it was asked for, and counts only that one", () => {
     const slice = sliceFor(
       live({ footprint: { method: "GET", route: "/orders" } }),

@@ -21,7 +21,6 @@ import { batch, endpoint, fileOf, interval, operation, profile, profileEndpoint 
  * Each case builds the two runs as the instrumentation would have written them and reads them back, so the input
  * of the comparison is always what the reader makes of a file.
  */
-// covers: LOC-01, ESC-17, ESC-18
 
 interface Spec {
   method?: "GET" | "POST";

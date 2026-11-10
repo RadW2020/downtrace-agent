@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { USAGE } from "../src/check/args.ts";
 import { credentialsPath, storeCredential } from "../src/login/store.ts";
 import { READ_SCHEMA, renderBrief, runRead } from "../src/read.ts";
-import { readDocumentation } from "./support/documentation.ts";
 import { type Answer, aHome, cleanUp, json, type StandIn, standIn, stored } from "./support/stand-in-cloud.ts";
 
 /**
@@ -97,7 +96,6 @@ async function connected(answer: (path: string) => Answer = briefOf()): Promise<
 
 describe("downtrace brief", () => {
   it("prints the cloud's answer as it came with --json, read with the credential login stored", async () => {
-    // covers: RF-525, RF-611
     const { cloud, home } = await connected();
     const run = await brief(["--json"], { home, env: { DOWNTRACE_URL: cloud.url } });
     expect(run.code).toBe(0);
@@ -107,7 +105,6 @@ describe("downtrace brief", () => {
   });
 
   it("prints the headline, what needs attention and where to read next, short, as text", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     const run = await brief([], { home, env: { DOWNTRACE_URL: cloud.url } });
     expect(run.code).toBe(0);
@@ -132,7 +129,6 @@ describe("downtrace brief", () => {
   });
 
   it("prints what there is of a brief that lacks a part, and never fails for it", async () => {
-    // covers: RF-525
     expect(renderBrief({}, "nidus-api")).toBe(
       "Brief of nidus-api.\nRoutes, hotspots, telemetry and what the brief cannot say: downtrace brief --project nidus-api --json\n",
     );
@@ -167,7 +163,6 @@ describe("downtrace brief", () => {
   });
 
   it("asks for what is new since --since, and the project --project names", async () => {
-    // covers: RF-525
     const cloud = await standIn(() => json(200, BRIEF));
     const home = await aHome();
     await stored(home, [{ url: cloud.url }, { url: cloud.url, project: "shop-api", token: "dtr_shop" }]);
@@ -186,7 +181,6 @@ describe("downtrace brief", () => {
   });
 
   it("reads --url, before DOWNTRACE_URL, with the credential stored for that cloud", async () => {
-    // covers: RF-611
     const named = await standIn(briefOf());
     const other = await standIn(briefOf());
     const home = await aHome();
@@ -210,7 +204,6 @@ describe("downtrace brief", () => {
 
 describe("the credential downtrace brief sends", () => {
   it("is DOWNTRACE_TOKEN when it is set, and not the stored one", async () => {
-    // covers: RF-611
     const { cloud, home } = await connected();
     const run = await brief(["--json"], { home, env: { DOWNTRACE_URL: cloud.url, DOWNTRACE_TOKEN: " dtr_env " } });
     expect(run.code).toBe(0);
@@ -219,7 +212,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is not DOWNTRACE_TOKEN when that holds an ingestion token, which reads nothing", async () => {
-    // covers: RF-611
     const { cloud, home } = await connected();
     const run = await brief(["--json"], { home, env: { DOWNTRACE_URL: cloud.url, DOWNTRACE_TOKEN: "dt_ingest" } });
     expect(run.code).toBe(0);
@@ -234,7 +226,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is the only one stored for the cloud when no project is named, and several are named back", async () => {
-    // covers: RF-611
     const cloud = await standIn(briefOf());
     const elsewhere = await standIn(briefOf());
     const home = await aHome();
@@ -251,7 +242,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is none when login stored none for the project, and the command says how to get one", async () => {
-    // covers: RF-611
     const cloud = await standIn(briefOf());
     const home = await aHome();
     const nothing = await brief([], { home, env: { DOWNTRACE_URL: cloud.url } });
@@ -274,7 +264,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is not an expired one, which the command says to renew, as it was asked for", async () => {
-    // covers: RF-611
     const cloud = await standIn(briefOf());
     const home = await aHome();
     await stored(home, [
@@ -293,7 +282,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is not read from a file others can read, and the command says why", async () => {
-    // covers: RF-611
     const { cloud, home } = await connected();
     await chmod(credentialsPath({}, home), 0o644);
     const run = await brief([], { home, env: { DOWNTRACE_URL: cloud.url } });
@@ -303,7 +291,6 @@ describe("the credential downtrace brief sends", () => {
   });
 
   it("is under $XDG_CONFIG_HOME when it names a directory", async () => {
-    // covers: RF-611
     const cloud = await standIn(briefOf());
     const config = await aHome();
     const home = await aHome();
@@ -331,7 +318,6 @@ describe("the credential downtrace brief sends", () => {
 
 describe("what downtrace brief says when it cannot read", () => {
   it("exits 1 with the cloud's own words when the cloud refuses", async () => {
-    // covers: RF-525
     for (const [answer, says] of [
       [{ status: 401, body: "unauthorized\n" }, "answered 401: unauthorized"],
       [
@@ -354,7 +340,6 @@ describe("what downtrace brief says when it cannot read", () => {
   });
 
   it("says, of a stored credential the cloud does not take, to run login again", async () => {
-    // covers: RF-611
     const { cloud, home } = await connected(() => ({ status: 401, body: "unauthorized\n" }));
     const run = await brief([], { home, env: { DOWNTRACE_URL: cloud.url } });
     expect(run.stderr).toContain("the credential downtrace login stored for nidus-api is expired, revoked or unknown");
@@ -365,7 +350,6 @@ describe("what downtrace brief says when it cannot read", () => {
   });
 
   it("exits 2 when nothing could be read: a failing cloud, an answer that is not JSON, a redirect", async () => {
-    // covers: RF-525
     const target = await standIn(() => json(200, BRIEF));
     for (const [answer, says] of [
       [json(500, { error: "could not read the project's brief" }), "answered 500: could not read the project's brief"],
@@ -386,7 +370,6 @@ describe("what downtrace brief says when it cannot read", () => {
   });
 
   it("waits a bounded time for a cloud that does not answer, and exits 2", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected(() => "hang");
     const run = await brief([], { home, env: { DOWNTRACE_URL: cloud.url }, timeoutMs: 100 });
     expect(run.code).toBe(2);
@@ -452,7 +435,6 @@ describe("what downtrace brief says when it cannot read", () => {
 
 describe("downtrace brief, as a user runs it", () => {
   it("is a command of downtrace, which reads the credentials file of the user's configuration", async () => {
-    // covers: RF-525
     const { cloud, home } = await connected();
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home, DOWNTRACE_URL: cloud.url };
     const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
@@ -473,19 +455,5 @@ describe("downtrace brief, as a user runs it", () => {
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual(BRIEF);
     expect(cloud.seen.map((r) => r.authorization)).toEqual(["Bearer dtr_stored"]);
-  });
-});
-
-describe("the documentation of downtrace brief and api", () => {
-  it("says their exit statuses, the shape of a failure, and that api only reads", async () => {
-    // covers: RF-525
-    const docs = (await readDocumentation()).replaceAll("`", "").replace(/\s+/g, " ");
-    const usage = USAGE.replace(/\s+/g, " ");
-    const statuses =
-      "Exit status of brief and api: 0 read, 1 the cloud refused (in its own words), 2 nothing could be read";
-    expect(usage).toContain(statuses);
-    expect(docs).toContain(statuses);
-    expect(docs).toContain(`schema: "${READ_SCHEMA}"`);
-    expect(docs).toContain("it sends GET and takes no method");
   });
 });

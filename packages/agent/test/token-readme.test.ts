@@ -25,7 +25,6 @@ beforeAll(async () => {
 });
 
 describe("the README on the ingestion token", () => {
-  // covers: RF-601
   it("has a section of its own, which says the token is safe to commit and gives it where the token is given", () => {
     expect(section).not.toBe("");
     expect(section).toContain("safe to commit");
@@ -33,19 +32,16 @@ describe("the README on the ingestion token", () => {
     expect(section).toContain("DOWNTRACE_TOKEN");
   });
 
-  // covers: RF-601
   // The DSN carries the cloud's URL and the token, and is written in code by design: it is public for the same reason.
   it("says the DSN, which carries the token, is public for the same reason", () => {
     expect(section).toContain("DOWNTRACE_DSN");
     expect(section).toContain("init({ dsn })");
   });
 
-  // covers: RF-601
   it.each(INGESTION_TOKEN.can)("says that whoever holds it can %s", (can) => {
     expect(section).toContain(can);
   });
 
-  // covers: RF-601
   it("says what whoever holds it cannot do, and how it is replaced", () => {
     expect(section).toContain(INGESTION_TOKEN.cannot);
     expect(section).toContain(INGESTION_TOKEN.replace);

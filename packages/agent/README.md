@@ -9,12 +9,12 @@ It observes these, each of which can be switched off with `DOWNTRACE_INSTRUMENT`
 | Name | What it sees |
 |---|---|
 | `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
-| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, [through `pg`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#prisma); [Neon's driver](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#neon)'s over its WebSocket; and [postgres.js](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#postgresjs)'s, with no wait and no server |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, through `pg`; Neon's driver's over its WebSocket; and postgres.js's, with no wait and no server |
 | `mysql` | MySQL and MariaDB queries per request through `mysql2`, `mysql` and `mariadb`, their time and errors, and how long a request waited for a connection |
-| `mssql` | [SQL Server](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#sql-server) statements per request through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma's adapter, by server, their time and errors |
-| `sqlite` | [SQLite](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#sqlite) statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
-| `mongodb` | [MongoDB](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#mongodb) commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
-| `prisma` | [Prisma](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#prisma)'s operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
+| `mssql` | SQL Server statements per request through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma's adapter, by server, their time and errors |
+| `sqlite` | SQLite statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
+| `mongodb` | MongoDB commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
+| `prisma` | Prisma's operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
 | `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
 | `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
 
@@ -142,10 +142,8 @@ Each setting is an option of `init()` and a variable of the environment: an opti
 |---|---|---|
 | `dsn` | `DOWNTRACE_DSN` | The cloud's URL with the ingest token as its user: one string that connects. Or, apart, `token` and `url` (`DOWNTRACE_TOKEN`, `DOWNTRACE_URL`) |
 | `env` | `DOWNTRACE_ENV` | Environment; falls back to `NODE_ENV`, then `production`. The token's environment is what decides where the data lands (below) |
-| `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found: a platform or CI variable, the commit `downtrace stamp` wrote, the image digest on ECS, or a fingerprint of your code ([how](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md#the-deployed-version)) |
+| `version` | `DOWNTRACE_VERSION` | Deployed version or commit. Unset, it is found: a platform or CI variable, the commit `downtrace stamp` wrote, the image digest on ECS, or a fingerprint of your code |
 | `inspect` | `DOWNTRACE_INSPECT` | `stderr` or a file path: writes every batch exactly as it would be sent, and needs no DSN ([below](#see-exactly-what-would-leave-your-server)) |
-
-The rest — debug, the interval, the profile, which observers run, minimal mode, query text, exclusions, the benchmark's switches — and what a late or a second `init()` does are in [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md).
 
 An ingest token belongs to one environment, and **that** is the environment everything sent with it is stored as, whatever `DOWNTRACE_ENV` says. If the two disagree, the data still lands — going blind over a mislabelled deploy would be worse than the wrong label — and the project's page shows the instance as declaring something else, which is usually a variable to fix. Tokens minted before per-environment tokens existed are unbound and keep letting the batch declare.
 
@@ -209,8 +207,6 @@ Only structural metadata: method, **route template** (`/products/:id`, never the
 
 `DOWNTRACE_MINIMAL=1` withholds everything you wrote: route templates, dependency targets, your hostname and your deployed version travel as stable digests, and query text, the labels of calls and commands, error messages and exception signatures do not travel at all. Downtrace keeps detecting and comparing; what it loses is the ability to **name** anything, and it says so.
 
-The details — every field, each driver, the profile, captures, reference samples and what the instrumentation itself costs — are in [What leaves your server](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md), [Databases](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md) and [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
-
 ## See exactly what would leave your server
 
 You do not have to take our word for it, and you do not need an account:
@@ -262,11 +258,11 @@ try {
 app.use(expressErrorHandler());
 ```
 
-`captureException` has your error tracker's shape, never throws, and does nothing without the instrumentation loaded. Its context is flat, small and sanitised: anything that looks like a value travels as `?`. How the sanitising works, what each way of ending keeps and loses, and how to run it beside your error tracker are in [Errors](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/errors.md).
+`captureException` has your error tracker's shape, never throws, and does nothing without the instrumentation loaded. Its context is flat, small and sanitised: anything that looks like a value travels as `?`.
 
 ## Guarantees
 
-- HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To see queries and route templates the instrumentation wraps a few methods of the drivers and frameworks it names ([which](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md#what-is-wrapped)): they pass arguments, results and errors through untouched, and if a wrapper itself fails your code still runs. `DOWNTRACE_INSTRUMENT=none` disables them.
+- HTTP requests are observed through Node's `diagnostics_channel`, without touching your code. To see queries and route templates the instrumentation wraps a few methods of the drivers and frameworks it names: they pass arguments, results and errors through untouched, and if a wrapper itself fails your code still runs. `DOWNTRACE_INSTRUMENT=none` disables them.
 - Sending is asynchronous with `fetch`, off the request path; a bounded queue of 6 intervals — if the cloud is unreachable, the oldest is dropped.
 - Each kind of cloud failure gets its own answer: a batch the cloud calls invalid (400, 413, 422) is **discarded**, counted as `rejected` and reported once, rather than taking a queue slot from batches that are fine; a rejected **token** (401, 403) keeps the batch, because that is temporary and those intervals are worth having once it is fixed; a 429 **waits** for what `Retry-After` asks, up to a day; a 5xx or a network error is retried.
 - Every hook is guarded; after 10 internal errors the instrumentation disables itself and says so once.
@@ -281,20 +277,15 @@ app.use(expressErrorHandler());
 
 Node.js 18.19.0 or newer, other than Node 19, an odd release past its end of life; the built package is exercised on Node 18.19.0, 20.5.1, 20, 22 and 24 in CI. The package declares no Node version to its package manager, so adding it never fails the install of a workspace whose other apps run an older Node. On an older Node, and on 19, the instrumentation prints one warning and does nothing else, and `downtrace` says so in one line and exits with 2.
 
-Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4, on Node 18 in the versions that run there; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`. See [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md).
+Routes are named by their templates in Express 4 and 5, Koa (`@koa/router`, `koa-router`, and so Strapi 5), Next.js, Fastify 4 and 5, Hapi 21 and Hono 4, on Node 18 in the versions that run there; a request that no route names is `(unmatched)`, and nothing of its path travels. Anywhere else a heuristic collapses what looks like a value into `:id`.
 
-The drivers are the ones your application loads, resolved from its entry: see [where the drivers are found](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md#where-the-drivers-are-found). A driver that is not found is reported, and `DOWNTRACE_DEBUG=1` says at start-up which were found and which were not.
+The drivers are the ones your application loads, resolved from its entry. A driver that is not found is reported, and `DOWNTRACE_DEBUG=1` says at start-up which were found and which were not.
 
 ## Documentation
 
 The reference pages live beside this README, in `guide/` of the package:
 
-- [Configuration](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/configuration.md) — every setting, as an option of `init()` and a variable, and what a late `init()` loses
-- [What leaves your server](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/data.md) — every field, the profile, captures, reference samples, minimal mode
-- [Databases](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/databases.md) — Postgres, Neon, postgres.js, MySQL, SQL Server, SQLite, MongoDB and Prisma, driver by driver
-- [How routes are named](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/routes.md) — each framework, the heuristic, and what is wrapped
-- [Errors](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/errors.md) — the two calls, sanitising, how a process ends, beside your error tracker
-- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`login`, `brief`, `api`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/login.md)
+- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`report`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/report.md)
 
 ## Changelog
 

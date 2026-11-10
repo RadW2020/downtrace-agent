@@ -22,7 +22,6 @@ import { generatePrisma, PRISMA_DIR, PRISMA_QUIET, type PrismaLayout, prismaSche
  * a worktree that is made and must be removed, a working tree that must not be touched, a process that must not
  * reach the network, and a run that fails in the ways a project's does.
  */
-// covers: LOC-01, ESC-17, ESC-18
 
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 
@@ -1997,7 +1996,6 @@ await sql.end();
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("an operation that got worse, and where the project runs it", () => {
-  // covers: RF-526
   // An Express service whose route reads an order and then each of its lines, one query per line: the N+1, in a file
   // of the project's own, through `pool.query`, which runs the query from a connection the pool hands over later.
   const ORDERS = `import { readFileSync } from "node:fs";
@@ -2214,7 +2212,6 @@ const tracingChannel = dc.tracingChannel;
 dc.tracingChannel = (name) => tracingChannel(name === "module.require" ? "downtrace.test.unannounced" : name);`)}`;
 
 describe.each(JESTS)("a suite Jest runs, %s, on a Node that announces no load (ADR 0258)", (_name, jest) => {
-  // covers: RF-121
   it.each([
     ["in band", "--runInBand"],
     ["in two workers", "--maxWorkers=2"],
@@ -2271,7 +2268,6 @@ describe.skipIf(!process.env.DATABASE_URL)("a suite Jest runs whose queries go t
   });
 
   it("names the line of the test's own application that runs it, through the copy of pg Jest hands it", () => {
-    // covers: RF-526
     const line = JEST_APP.split("\n").findIndex((text) => text.includes("await pg.query(")) + 1;
     const users = route(checked.report, "GET /v1/users/:userId");
     expect(users.operations.find((operation) => operation.kind === "query")?.sites).toEqual([`app.js:${line}`]);

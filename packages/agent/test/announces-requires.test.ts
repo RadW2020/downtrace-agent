@@ -51,12 +51,10 @@ const ABOUT_LOADS = (passage: string): boolean => /module\.require|\bload/i.test
 const BARE_MAJOR = /\b(?:Node|from|before|until|on) 2[0-3](?!\d|\.\d)/g;
 
 describe("whether Node announces what modules require (RF-121)", () => {
-  // covers: RF-121
   it("is what the running Node does: from 22.4, and not before", () => {
     expect(announcesRequires(createRequire(import.meta.url))).toBe(from224(process.versions.node));
   });
 
-  // covers: RF-121
   it("is no, and throws nothing, when the require it is handed throws", () => {
     const refusing = Object.assign(
       () => {
@@ -67,7 +65,6 @@ describe("whether Node announces what modules require (RF-121)", () => {
     expect(announcesRequires(refusing)).toBe(false);
   });
 
-  // covers: RF-121
   it("is said, in every passage of the package that names the Node it starts on, as 22.4", async () => {
     const found: string[] = [];
     for (const { file, text } of await texts()) {
