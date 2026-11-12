@@ -6,6 +6,24 @@ Part of the documentation of [`@downtrace/agent`](../README.md).
 
 **Its limits.** It is experimental. Downtrace is free: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions.
 
+## What it observes
+
+It observes these, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
+
+| Name | What it sees |
+|---|---|
+| `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
+| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, through `pg`; Neon's driver's over its WebSocket; and postgres.js's, with no wait and no server |
+| `mysql` | MySQL and MariaDB queries per request through `mysql2`, `mysql` and `mariadb`, their time and errors, and how long a request waited for a connection |
+| `mssql` | SQL Server statements per request through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma's adapter, by server, their time and errors |
+| `sqlite` | SQLite statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
+| `mongodb` | MongoDB commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
+| `prisma` | Prisma's operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
+| `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
+| `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
+
+It watches only the process it is loaded into: one process, one service.
+
 ## Install
 
 ```sh
@@ -14,7 +32,7 @@ npx downtrace init                      # writes the instrument file and the lin
 npx downtrace login --project shop-api  # asks Downtrace's cloud for the project; you approve it in the browser
 ```
 
-The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN. `downtrace init` writes what the recipes below show, and `downtrace login` prints the ingest token and the cloud's URL the DSN is made of ([their guides](../README.md#documentation)). As written, the file reads `DOWNTRACE_DSN` from the environment; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
+The instrumentation starts from an instrument file your application loads before anything else, which calls `init()` with your DSN. `downtrace init` writes what the recipes below show, and `downtrace login` prints the ingest token and the cloud's URL the DSN is made of ([`init`'s guide](init.md)). As written, the file reads `DOWNTRACE_DSN` from the environment; where you cannot set the environment, write the DSN in its place, and the file sends from every machine that runs it.
 
 ### NestJS, compiled to CommonJS
 

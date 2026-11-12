@@ -21,8 +21,8 @@ beforeAll(async () => {
 const NUMBERS = ["zero", "one", "two", "three", "four", "five"];
 
 describe("the documentation of downtrace report and downtrace compare", () => {
-  it("puts both in the README, where it says what to do before a deploy with no account", () => {
-    const start = readme.indexOf("## Before you deploy, with no account");
+  it("puts both in the README, where it says what to do with no tests that reach the application", () => {
+    const start = readme.indexOf("## Without tests that reach the application");
     const section = readme.slice(start, readme.indexOf("\n## ", start + 1));
     expect(start).toBeGreaterThan(-1);
     expect(section).toContain("npx downtrace report");

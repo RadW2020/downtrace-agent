@@ -1,26 +1,10 @@
 # @downtrace/agent
 
-**Downtrace tells you when a change breaks the performance of your Node.js backend: before you deploy, which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed.** This is its **instrumentation**: it observes your application from the inside, aggregates locally per route and 10-second interval, and, in production, ships compact batches to the Downtrace cloud — never in your request path, never able to throw into your code, with bounded memory.
+> Your coding agent just introduced an N+1. `downtrace check` catches it before you push.
 
-It observes these, each of which can be switched off with `DOWNTRACE_INSTRUMENT`:
+`downtrace check` runs your tests twice, on `HEAD` and on your working tree, and names the routes that got worse: a query that now runs once per row, a query or an outgoing call that was not there. It needs no account, and nothing leaves your machine.
 
-| Name | What it sees |
-|---|---|
-| `http` | Incoming requests by route, and outgoing calls by host, with status and duration |
-| `pg` | Postgres queries per request, their time and errors, and how long a request waited for a connection; Prisma 7's too, through `pg`; Neon's driver's over its WebSocket; and postgres.js's, with no wait and no server |
-| `mysql` | MySQL and MariaDB queries per request through `mysql2`, `mysql` and `mariadb`, their time and errors, and how long a request waited for a connection |
-| `mssql` | SQL Server statements per request through `tedious`, and so through `mssql`, TypeORM, Knex, Sequelize and Prisma's adapter, by server, their time and errors |
-| `sqlite` | SQLite statements per request through `better-sqlite3`, `libsql` (and so `@libsql/client` on a file, and the ORMs that run on either) or `sqlite3` (Knex's and Sequelize's), their time and errors |
-| `mongodb` | MongoDB commands per request through its official driver, and so through Mongoose, by command and collection, their time and errors |
-| `prisma` | Prisma's operations per request from 3.15 to 6, through its own engine, by action and model (`findMany Post`), under the database they reach, their time and errors |
-| `redis` | Redis commands per request, by server, through `ioredis` or `redis` (node-redis 5.12 and later) |
-| `runtime` | Event loop delay, GC pauses, heap, RSS and requests in flight |
-
-It watches only the process it is loaded into: one process, one service. In this documentation the **instrumentation** is this library and a **coding agent** is whoever operates Downtrace; the package keeps its older name.
-
-## Before you deploy, with no account
-
-Your tests pass, and a change made a route run a query once per row. `downtrace check` runs your tests on `HEAD` and on your working tree, and tells you, route by route, what each request now runs that it did not:
+## Three commands
 
 ```sh
 npm install --save-dev @downtrace/agent
@@ -29,42 +13,76 @@ npx downtrace check    # exit 0: no route got worse · 1: one did · 2: no compa
 ```
 
 ```
+1 of 1 routes evaluated: 1 worse, 0 unchanged.
+
 Worse (1)
-  GET /orders   3 requests in the base, 3 in the change
-    appeared   SELECT name FROM users WHERE id = ?  [query 0ee1294e0ade7fb8]  0 -> 50 per request
-    appeared   SELECT id, total, user_id FROM orders ORDER BY id  [query fb36696aebd98a68]  0 -> 1 per request
-    gone       SELECT o.id, o.total, u.name FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id  [query 0ad9139c76ae524a]  1 -> 0 per request
-    request duration, shown and not judged: 1 ms -> 14.82 ms
+  GET /posts   1 request in the base, 1 in the change
+    appeared   select name from authors where id = ?  [query ca05af865ef461a0]  0 -> 5 per request
+               ran at src/app.js:9
+    request duration, shown and not judged: 3.16 ms -> 7.27 ms
 ```
 
-Nothing leaves the machine: the runs get no token and no URL. Durations are shown and never judged, since a test run is not production; the verdict comes from what each request ran — queries, outgoing calls, Redis commands — and how many times. A route the tests did not reach is said to be not evaluated, by name, and never unchanged. A coding agent reads the same result with `--json`.
+The verdict comes from what each request ran (queries, outgoing calls, Redis commands) and how many times. Durations are shown and never judged: a test run is not production. A query that only took the place of another is not worse, so the join that fixes the N+1 passes. A route your tests did not reach is said to be not evaluated, by name, and never unchanged.
 
-No tests that reach your application over HTTP? Start it with `DOWNTRACE_INSPECT`, use it, stop it, and read what each route ran, the most queries per request first:
+It needs tests that reach your application over HTTP, with its database behind it. The whole of it: [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md).
+
+## With your coding agent
+
+Paste this into your `AGENTS.md` or `CLAUDE.md`:
+
+```md
+Before pushing, run `npx downtrace check`. If it exits 1, fix the routes it lists or explain why the change is intended.
+```
+
+The output names the route, the query and the line of yours that ran it, which is what a coding agent needs to fix it. With `--json` it is one object, whose contract is a [JSON Schema](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/schema/check.schema.json) in the package.
+
+## In CI
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v5
+  # install the project and start what its tests need, as your test job does
+  - uses: RadW2020/downtrace-agent/packages/check-action@main
+```
+
+The Action runs `check` against the pull request's base, keeps one comment with the routes that got worse, and fails the job when one did. [Its inputs](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md#on-a-pull-request).
+
+## What is supported
+
+With no configuration:
+
+| | |
+|---|---|
+| Frameworks | Express 4 and 5, NestJS on Express, Fastify 4 and 5 |
+| Database | Postgres through `pg` or Prisma |
+| Test runners | Jest, Vitest |
+| Node | 18.19 or newer, other than 19 |
+
+[`examples/`](https://github.com/RadW2020/downtrace-agent/tree/main/examples) has one small application for each combination, with the change that introduces an N+1: clone it and see `check` fail.
+
+Others work, no guarantees: Koa, Hapi, Hono and Next.js; MySQL, SQL Server, SQLite, MongoDB and Redis; other test runners. If one fails you, [say so](https://github.com/RadW2020/downtrace-agent/issues/new).
+
+## Without tests that reach the application
+
+Start it with `DOWNTRACE_INSPECT`, use it, stop it, and read what each route ran:
 
 ```sh
 DOWNTRACE_INSPECT=./run.jsonl node --import @downtrace/agent/register app.js
-npx downtrace report run.jsonl                # each route: requests, queries per request, what repeats, the slowest
-npx downtrace compare base.jsonl run.jsonl    # check's verdict over two such files, recorded however you can
+npx downtrace report run.jsonl                # each route: queries per request, what repeats, the slowest
+npx downtrace compare base.jsonl run.jsonl    # check's verdict over two such files
 ```
 
-```
-  GET /orders   2 requests  ·  21 queries per request on average, median 21 to 50
-    repeated   select * from "users" where "id" = ?  [query 81ca38dfd955b40d]  20 per request
-```
+[`report` and `compare`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/report.md).
 
-The whole of it: [`downtrace init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), which configures a project asking nothing and making no network request, [`downtrace check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md), and [`downtrace report` and `downtrace compare`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/report.md). Production, with the cloud, is experimental and has [a page of its own](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/production.md).
+## Production monitoring (experimental)
 
-## Documentation
+The same library, loaded in production, sends what it aggregates per route to the Downtrace cloud, which says which route got slower or started failing after a deploy. It is experimental, and it has [a page of its own](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/production.md).
 
-The reference pages live beside this README, in `guide/` of the package:
+## Changelog and source
 
-- `downtrace` [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md), [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`report`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/report.md)
-- [In production, with the cloud](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/production.md) (experimental): install, configuration, the ingestion token, what leaves your server, errors, guarantees and requirements
+[`CHANGELOG.md`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/CHANGELOG.md). The package is developed in a monorepo and mirrored read-only to [RadW2020/downtrace-agent](https://github.com/RadW2020/downtrace-agent), where issues are welcome. MIT.
 
-## Changelog
-
-See [`CHANGELOG.md`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/CHANGELOG.md).
-
-## Source
-
-This package is developed in a monorepo and mirrored read-only to [RadW2020/downtrace-agent](https://github.com/RadW2020/downtrace-agent). Issues are welcome there. MIT.
+In this documentation the **instrumentation** is this library and a **coding agent** is whoever runs Downtrace; the package keeps its older name.

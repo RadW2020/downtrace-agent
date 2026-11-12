@@ -1,28 +1,32 @@
 # Downtrace — open-source packages
 
-**Downtrace tells you when a change breaks the performance of your Node.js backend: before you deploy, which route now runs a query once per row or one more outgoing call per request; after you deploy, which route got slower or started failing, and what changed.** It learns what each route normally runs and how long it takes, from inside the process and never in the request's path, and when that changes it captures what happened and shows its evidence.
+> Your coding agent just introduced an N+1. `downtrace check` catches it before you push.
 
-Downtrace is free: no plans, no billing and no SLA. The ingestion protocol is `v0` and can still change between minor versions.
+`downtrace check` compares two runs of your tests and names the routes that got worse: a query that now runs once per row, a query or an outgoing call that was not there. A developer, or their coding agent, runs it before pushing. No account, and nothing leaves the machine.
 
 [![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@downtrace/agent)](https://www.npmjs.com/package/@downtrace/agent)
 
-**Catch an N+1 before you deploy, with no account.** In a Node.js project with tests:
+In a Node.js project whose tests reach it over HTTP:
 
 ```sh
 npm install --save-dev @downtrace/agent
 npx downtrace init && npx downtrace check
 ```
 
-`check` runs your tests on `HEAD` and on your working tree and says, route by route, which queries, outgoing calls and Redis commands each request now runs that it did not — `SELECT name FROM users WHERE id = ?  0 -> 50 per request` — while your tests still pass. Nothing leaves the machine. [How it decides, and what it does not judge](packages/agent#before-you-deploy-with-no-account).
+When a change adds an N+1, it exits 1 and says `GET /posts … appeared   select name from authors where id = ?   0 -> 5 per request   ran at src/app.js:9` while your tests still pass. [The three commands, with a coding agent and in CI](packages/agent#readme) · [try it on an example](examples) · [how it decides](packages/agent/guide/check.md).
+
+The same library also monitors production with the Downtrace cloud. That half is experimental: free, no plans, no billing and no SLA, on a protocol, `v0`, that can still change between minor versions. [Its page](packages/agent/guide/production.md).
 
 This repository is a **read-only mirror** of the public packages of Downtrace, synchronised from the private monorepo where development happens, together with the hosted backend and the project's documents. Every published version is tagged and every commit carries the subject of the change it brought over, so you can read what changed between two releases. The tests above run here, on this code, and the packages are published to npm from this repository so that npm can attest their provenance.
 
-[`docs/adr/`](docs/adr) holds the decisions behind this code: why the benchmark measures the way it does, why the agent patches the driver the way it does, and how the protocol is allowed to change. Issues are welcome and answered here. Pull requests cannot be merged in place; see [CONTRIBUTING.md](CONTRIBUTING.md) for why, and how a patch gets in. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+Issues are welcome and answered here. Pull requests cannot be merged in place; see [CONTRIBUTING.md](CONTRIBUTING.md) for why, and how a patch gets in. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 | Package | What it is |
 |---|---|
 | [`packages/agent`](packages/agent) | `@downtrace/agent` — the Node.js agent (`node --import @downtrace/agent/register`) |
+| [`packages/check-action`](packages/check-action) | The GitHub Action that runs `check` on a pull request, keeps one comment with the routes that got worse and fails the job when one did |
+| [`examples`](examples) | One small application per supported combination, each with the change that introduces an N+1 |
 | [`packages/protocol`](packages/protocol) | `@downtrace/protocol` — the ingestion contract: JSON Schema, fixtures, generated types |
 | [`packages/reference-app`](packages/reference-app) | A reference backend with switchable regressions (N+1, slow dependency, aggressive retries, pool leak, new error) used as benchmark target and test bed |
 | [`packages/mcp`](packages/mcp) | `@downtrace/mcp` — the same queries and operations as tools a coding agent can discover and use, over MCP |
