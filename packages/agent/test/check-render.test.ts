@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { compareRuns, NOT_EVALUATED_REASONS } from "../src/check/compare.ts";
-import { readRun } from "../src/check/read.ts";
+import { COMPOSITION_KINDS, readRun } from "../src/check/read.ts";
 import { fmt, renderJson, renderText } from "../src/check/render.ts";
 import {
   type CheckReport,
@@ -10,6 +12,7 @@ import {
   FAILURE_CODES,
   failed,
   REPORT_SCHEMA,
+  REPORT_SCHEMA_VERSION,
   type SideReport,
 } from "../src/check/report.ts";
 import { judge } from "../src/check/run.ts";
@@ -233,6 +236,70 @@ describe("the report as JSON", () => {
 
   it("counts them", () => {
     expect(json.summary).toEqual({ worse: 1, unchanged: 1, notEvaluated: 2 });
+  });
+});
+
+/**
+ * The contract of `check --json`, as a file a reader can validate against: `schema/check.schema.json`, published with
+ * the package. It lets a reader ignore what it does not know, since fields are only ever added; these tests read it
+ * closed, so that a field `check` writes and the file does not name fails here and not in somebody's CI.
+ */
+describe("the JSON Schema of the report", () => {
+  type Node = { [key: string]: unknown };
+  const schema = JSON.parse(readFileSync(new URL("../schema/check.schema.json", import.meta.url), "utf8")) as Node;
+  const closed = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(closed);
+    if (node === null || typeof node !== "object") return node;
+    const out: Node = Object.fromEntries(Object.entries(node).map(([key, value]) => [key, closed(value)]));
+    if ("properties" in out && !("additionalProperties" in out)) out.additionalProperties = false;
+    return out;
+  };
+  const validate = new Ajv2020({ allErrors: true, strict: true }).compile(closed(schema) as Node);
+  const valid = (report: CheckReport) => {
+    const ok = validate(JSON.parse(renderJson(report)));
+    return ok ? "valid" : JSON.stringify(validate.errors);
+  };
+  const defs = schema.$defs as Record<string, Node>;
+  const properties = (node: Node | undefined) => node?.properties as Record<string, Node>;
+
+  it("is the version the report says it is", () => {
+    const report = JSON.parse(renderJson(reportOf())) as CheckReport;
+    expect(report.schemaVersion).toBe(REPORT_SCHEMA_VERSION);
+    expect(properties(schema).schemaVersion?.const).toBe(REPORT_SCHEMA_VERSION);
+    expect(properties(schema).schema?.const).toBe(REPORT_SCHEMA);
+  });
+
+  it("holds a comparison, with every field it carries", () => {
+    expect(valid(reportOf())).toBe("valid");
+  });
+
+  it("holds an operation with the places that ran it, and a link to report what could not be seen", () => {
+    const report = reportOf();
+    const worse = report.routes.find((route) => route.verdict === "worse")?.operations.find((op) => op.worse);
+    if (worse === undefined) throw new Error("the fixture has no operation that got worse");
+    worse.sites = ["src/orders.ts:42"];
+    report.feedback = { why: "no query was observed", url: "https://github.com/RadW2020/downtrace-agent/issues/new" };
+    expect(valid(report)).toBe("valid");
+  });
+
+  it("holds every way of having no comparison", () => {
+    for (const code of FAILURE_CODES) {
+      const failure = { code, side: "base" as const, message: "m", advice: null, outputTail: "tail" };
+      expect(valid(failed({ failure })), code).toBe("valid");
+      expect(valid(failed({ failure, base: side("main", { exitCode: null, commit: null }) })), code).toBe("valid");
+    }
+  });
+
+  it("names the same codes, reasons and kinds as the code does", () => {
+    expect(properties(defs.failure).code?.enum).toEqual([...FAILURE_CODES]);
+    expect(properties(defs.reason).code?.enum).toEqual([...NOT_EVALUATED_REASONS]);
+    expect(properties(defs.operation).kind?.enum).toEqual([...COMPOSITION_KINDS]);
+  });
+
+  it("refuses a report of another version, and one with a field it does not name", () => {
+    const report = JSON.parse(renderJson(reportOf())) as Record<string, unknown>;
+    expect(validate({ ...report, schemaVersion: 2 })).toBe(false);
+    expect(validate({ ...report, extra: true })).toBe(false);
   });
 });
 

@@ -9,10 +9,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./register": "./src/register.ts",
+    "./check.schema.json": "./schema/check.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "schema",
     "README.md",
     "guide",
     "LICENSE"
@@ -118,6 +120,7 @@
         "types": "./dist/register.d.ts",
         "default": "./dist/register.js"
       },
+      "./check.schema.json": "./schema/check.schema.json",
       "./package.json": "./package.json"
     }
   }

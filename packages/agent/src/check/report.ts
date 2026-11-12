@@ -10,6 +10,13 @@ import type { Feedback } from "./feedback.ts";
 /** Part of the contract with whoever reads the JSON: a change that breaks a reader moves this number. */
 export const REPORT_SCHEMA = "downtrace-check/1";
 
+/**
+ * The same number on its own, for a reader that compares and does not parse. The contract is the file
+ * `schema/check.schema.json`: fields are only ever added under one version, and a field removed, renamed or given
+ * another meaning moves it, with a major version of the package.
+ */
+export const REPORT_SCHEMA_VERSION = 1;
+
 /** Why no comparison was made. Stable: an agent branches on these. */
 export const FAILURE_CODES = [
   "not-a-repository",
@@ -62,6 +69,7 @@ export interface Failure {
 
 export interface CheckReport {
   schema: typeof REPORT_SCHEMA;
+  schemaVersion: typeof REPORT_SCHEMA_VERSION;
   /** `failed` is «no comparison could be made», which is never the same as «nothing got worse». */
   status: "compared" | "failed";
   summary: Summary | null;
@@ -91,6 +99,7 @@ export function compared(parts: {
 }): CheckReport {
   return {
     schema: REPORT_SCHEMA,
+    schemaVersion: REPORT_SCHEMA_VERSION,
     status: "compared",
     summary: summarize(parts.routes),
     routes: parts.routes,
@@ -112,6 +121,7 @@ export function failed(parts: {
   const routes = parts.routes ?? [];
   return {
     schema: REPORT_SCHEMA,
+    schemaVersion: REPORT_SCHEMA_VERSION,
     status: "failed",
     summary: routes.length > 0 ? summarize(routes) : null,
     routes,
