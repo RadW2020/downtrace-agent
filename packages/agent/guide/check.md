@@ -102,6 +102,16 @@ says nothing.
 
 For CI, the exit status: **0** no route got worse, **1** at least one did, **2** no comparison could be made — the test command failed on either side (a comparison needs two runs that end well), a run left no profile, no route could be evaluated, or the command was interrupted.
 
+## With a coding agent
+
+Paste this into the `AGENTS.md` or `CLAUDE.md` of your project:
+
+```md
+Before pushing, run `npx downtrace check`. If it exits 1, fix the routes it lists or explain why the change is intended.
+```
+
+That is all a coding agent needs: on exit 1 the text names each route that got worse, the operation that appeared or multiplied, how many times a request runs it now, and where it can the `file:line` of yours that ran it. Exit 2 is no comparison, and says why. An agent that would rather read an object than text adds `--json`.
+
 ## A test run: what each runner keeps of its profile
 
 A profile covers a minute and a test run lasts seconds, so what a run keeps of its profile is what each process hands

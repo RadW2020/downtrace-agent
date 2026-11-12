@@ -54,6 +54,13 @@ describe("the README on downtrace check", () => {
     expect(says(`schema: "${REPORT_SCHEMA}"`)).toBe(true);
   });
 
+  it("gives the lines to paste into AGENTS.md or CLAUDE.md, as the launch copy quotes them", () => {
+    const snippet =
+      "Before pushing, run npx downtrace check. If it exits 1, fix the routes it lists or explain why the change is intended.";
+    expect(says(snippet)).toBe(true);
+    expect(says("AGENTS.md")).toBe(true);
+  });
+
   it.each(NOT_SESSION_LEADS)("says SET %s is judged, not taken for a setting of the session", (word) => {
     expect(says(`SET ${word}`), word).toBe(true);
   });
