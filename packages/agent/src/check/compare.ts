@@ -16,10 +16,12 @@ import {
  * never does is turn *«there is nothing to compare»* into *«nothing changed»*: a route a run did not call, did
  * not profile, or ran with nothing observed on it is not evaluated, and says why (COB-01).
  *
- * A route is worse when an operation appeared or multiplied, with one exception: a query that only sets something
+ * A route is worse when an operation appeared or multiplied, with two exceptions. A query that only sets something
  * for the session (`isSessionSetting`) is listed with how it moved and never judged. A pool sends those when it
  * opens a connection, inside whichever request made it open one, so which request runs them is decided by when the
  * pool grew and not by the code: the same tree ran twice called a route worse once and unchanged the next time.
+ * And an operation that appeared in the place of one that is gone (`markReplacements`) is not worse: a query whose
+ * text changed is the same work under another fingerprint, and the join that fixes an N+1 is exactly that.
  */
 
 /**
@@ -143,6 +145,11 @@ export interface OperationResult {
    * pool decides which request runs it.
    */
   judged: boolean;
+  /**
+   * True, and only present, on an operation that appeared in the place of one that is gone (`markReplacements`): it
+   * is listed as appeared and is not worse.
+   */
+  replacement?: true;
   /** Executions per request, over the requests whose composition is known. */
   perRequest: Pair<number>;
   executions: Pair<number>;
@@ -209,6 +216,37 @@ function classify(base: number, change: number): OperationChange {
   if (change >= base * MIN_RISE_RATIO && change - base >= MIN_RISE_PER_REQUEST) return "multiplied";
   if (base >= change * MIN_RISE_RATIO && base - change >= MIN_RISE_PER_REQUEST) return "reduced";
   return "unchanged";
+}
+
+/** Two counts per request, each a division: the same number of executions over the same requests, to this. */
+const SAME_COUNT = 1e-9;
+
+/**
+ * Marks what appeared in the place of what is gone, kind by kind, and takes its `worse` away. All three must hold,
+ * among the operations that are judged:
+ *
+ * - something of the kind is gone, and what appeared runs, in all, no more per request than what is gone ran: the
+ *   route does the work it did. One query gone and two appeared is one query more, and which of the two is the new
+ *   one cannot be told, so both stay worse.
+ * - each one that appeared runs at most once per request: five queries removed do not pay for a loop of five.
+ *
+ * An N+1 passes none of it: the query it adds runs once per row, beside the one that was there.
+ */
+function markReplacements(operations: OperationResult[]): void {
+  for (const kind of COMPOSITION_KINDS) {
+    const judged = operations.filter((operation) => operation.kind === kind && operation.judged);
+    const appeared = judged.filter((operation) => operation.change === "appeared");
+    const gone = judged.filter((operation) => operation.change === "disappeared");
+    if (appeared.length === 0 || gone.length === 0) continue;
+    const ran = appeared.reduce((sum, operation) => sum + operation.perRequest.change, 0);
+    const freed = gone.reduce((sum, operation) => sum + operation.perRequest.base, 0);
+    if (ran > freed + SAME_COUNT) continue;
+    if (appeared.some((operation) => operation.perRequest.change > 1 + SAME_COUNT)) continue;
+    for (const operation of appeared) {
+      operation.worse = false;
+      operation.replacement = true;
+    }
+  }
 }
 
 /** What is said when a run saw requests and no profile covered them, which the advice on the command completes. */
@@ -298,6 +336,7 @@ export function evaluateRoute(id: string, base: RouteTally | undefined, change: 
   if (operations.length === 0) {
     return notEvaluated(id, base, change, [{ code: "nothing-observed", message: REASON_MESSAGES["nothing-observed"] }]);
   }
+  markReplacements(operations);
   // What moved most first: the reader came for the operation that appeared and how many times it repeats.
   operations.sort((a, b) => {
     if (a.worse !== b.worse) return a.worse ? -1 : 1;

@@ -41,7 +41,9 @@ function operationLine(operation: OperationResult): string {
   // The only operations that are not judged are settings of the session: said, so that one that appeared beside an
   // unchanged verdict carries its reason.
   const unjudged = operation.judged ? "" : "  (a setting of the session: shown and not judged)";
-  return `    ${MOVED[operation.change].padEnd(10)} ${name}  [${identity}]  ${counts}${unjudged}`;
+  // In the place of one that is gone, listed beside it: not something the route did not do before.
+  const moved = operation.replacement === true ? "replaced" : MOVED[operation.change];
+  return `    ${moved.padEnd(10)} ${name}  [${identity}]  ${counts}${unjudged}`;
 }
 
 function dependencyPart(dependency: DependencyResult): string {

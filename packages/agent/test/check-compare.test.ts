@@ -168,6 +168,77 @@ describe("what is not worse", () => {
   });
 });
 
+describe("an operation in the place of one that is gone", () => {
+  const SET = (count: number) => operation("query", "s1", "SET search_path TO app", count);
+
+  it("is not worse: the join that replaces a select is the fix of an N+1, and the route runs what it ran", () => {
+    const base = runOf({ route: "/posts", requests: 2, operations: [Q("posts", 2)] });
+    const change = runOf({ route: "/posts", requests: 2, operations: [Q("join", 2)] });
+    const route = only(base, change, "GET /posts");
+    expect(route.verdict).toBe("unchanged");
+    expect(route.operations.find((operation) => operation.hash === "join")).toMatchObject({
+      change: "appeared",
+      worse: false,
+      replacement: true,
+      perRequest: { base: 0, change: 1 },
+    });
+    expect(route.operations.find((operation) => operation.hash === "posts")).toMatchObject({ change: "disappeared" });
+    expect(route.dependencies).toEqual([{ kind: "query", perRequest: { base: 1, change: 1 }, worse: false }]);
+  });
+
+  it("is said of nothing else: an operation that did not appear carries no such mark", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: [Q("a", 2), Q("b", 2)] });
+    const change = runOf({ route: "/p", requests: 2, operations: [Q("a", 2), Q("c", 2)] });
+    const marked = only(base, change, "GET /p").operations.filter((operation) => "replacement" in operation);
+    expect(marked.map((operation) => operation.hash)).toEqual(["c"]);
+  });
+
+  it("is still worse when nothing is gone: the N+1 beside the query that was there", () => {
+    const base = runOf({ route: "/posts", requests: 2, operations: [Q("posts", 2)] });
+    const change = runOf({ route: "/posts", requests: 2, operations: [Q("posts", 2), Q("author", 10)] });
+    const route = only(base, change, "GET /posts");
+    expect(route.verdict).toBe("worse");
+    expect(route.operations.find((operation) => operation.hash === "author")).not.toHaveProperty("replacement");
+  });
+
+  it("is still worse when it runs more than once per request: a loop does not replace the queries it removed", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: ["a", "b", "c", "d", "e"].map((hash) => Q(hash, 2)) });
+    const change = runOf({ route: "/p", requests: 2, operations: [Q("loop", 10)] });
+    expect(only(base, change, "GET /p").verdict).toBe("worse");
+  });
+
+  it("is still worse when more appeared than is gone: which one is new cannot be told, so all are", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] });
+    const change = runOf({ route: "/p", requests: 2, operations: [Q("b", 2), Q("c", 2)] });
+    const route = only(base, change, "GET /p");
+    expect(route.verdict).toBe("worse");
+    expect(route.operations.filter((operation) => operation.worse).map((operation) => operation.hash)).toEqual([
+      "b",
+      "c",
+    ]);
+  });
+
+  it("counts per request: half a query gone covers half a query, and not a whole one", () => {
+    const base = runOf({ route: "/p", requests: 4, operations: [Q("a", 2)] });
+    expect(only(base, runOf({ route: "/p", requests: 4, operations: [Q("b", 2)] }), "GET /p").verdict).toBe(
+      "unchanged",
+    );
+    expect(only(base, runOf({ route: "/p", requests: 4, operations: [Q("b", 4)] }), "GET /p").verdict).toBe("worse");
+  });
+
+  it("is of its own kind: a query that is gone does not cover an outgoing call that appeared", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: [Q("a", 2)] });
+    const change = runOf({ route: "/p", requests: 2, operations: [CALL("api", 2)] });
+    expect(only(base, change, "GET /p").verdict).toBe("worse");
+  });
+
+  it("is not covered by a setting of the session that is gone: the pool sent that one, not the code", () => {
+    const base = runOf({ route: "/p", requests: 2, operations: [Q("a", 2), SET(2)] });
+    const change = runOf({ route: "/p", requests: 2, operations: [Q("a", 2), Q("b", 2)] });
+    expect(only(base, change, "GET /p").verdict).toBe("worse");
+  });
+});
+
 describe("durations", () => {
   // «Given two runs whose durations differ, then no verdict depends on a duration» (LOC-01).
   it("move no verdict: the same composition with durations a thousand times apart is unchanged", () => {

@@ -70,8 +70,33 @@ function reportOf(): CheckReport {
   return compared({ base: side("main"), change: side("working tree"), routes, notes: ["a note"] });
 }
 
+/** A route whose one query has another text in the change: the same work, under another fingerprint. */
+function replacedReport(): CheckReport {
+  const run = (hash: string) =>
+    readRun(
+      fileOf(
+        batch("p", {
+          intervals: [interval(1000, 1000, [endpoint("GET", "/posts", 2, { requestsWithCalls: 2 })])],
+          profile: profile(1000, 1000, [
+            profileEndpoint("GET", "/posts", [operation("query", hash, `SELECT ${hash} FROM posts`, 2)]),
+          ]),
+        }),
+      ),
+    );
+  const routes = compareRuns(run("plain"), run("joined"));
+  return compared({ base: side("main"), change: side("working tree"), routes, notes: [] });
+}
+
 describe("the report as text", () => {
   const text = renderText(reportOf());
+
+  it("says replaced, and not appeared, of an operation in the place of one that is gone", () => {
+    const rendered = renderText(replacedReport());
+    expect(rendered).toContain("Unchanged (1)");
+    expect(rendered).toMatch(/replaced\s+SELECT joined FROM posts\s+\[query joined\]\s+0 -> 1 per request/);
+    expect(rendered).toMatch(/gone\s+SELECT plain FROM posts\s+\[query plain\]\s+1 -> 0 per request/);
+    expect(rendered).not.toContain("appeared");
+  });
 
   it("says one request as one, and any other count in the plural", () => {
     const one = (n: number) =>
@@ -279,6 +304,12 @@ describe("the JSON Schema of the report", () => {
     if (worse === undefined) throw new Error("the fixture has no operation that got worse");
     worse.sites = ["src/orders.ts:42"];
     report.feedback = { why: "no query was observed", url: "https://github.com/RadW2020/downtrace-agent/issues/new" };
+    expect(valid(report)).toBe("valid");
+  });
+
+  it("holds an operation in the place of one that is gone", () => {
+    const report = replacedReport();
+    expect(report.routes[0]?.operations.some((operation) => operation.replacement === true)).toBe(true);
     expect(valid(report)).toBe("valid");
   });
 

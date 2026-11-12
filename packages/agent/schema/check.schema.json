@@ -204,6 +204,10 @@
           "description": "False for a setting of the session: how it moved is said, and it is never worse.",
           "type": "boolean"
         },
+        "replacement": {
+          "description": "Present, and true, on an operation that appeared in the place of one that is gone: it is not worse.",
+          "const": true
+        },
         "perRequest": { "$ref": "#/$defs/numbers" },
         "executions": { "$ref": "#/$defs/counts" },
         "msPerExecution": { "description": "Data, never judged.", "$ref": "#/$defs/durations" },
