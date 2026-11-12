@@ -1,0 +1,27 @@
+diff --git a/src/posts.controller.ts b/src/posts.controller.ts
+index b4cf0e99..4e4ac92d 100644
+--- a/src/posts.controller.ts
++++ b/src/posts.controller.ts
+@@ -8,6 +8,11 @@ export class PostsController {
+   @Get()
+   async list() {
+     const posts = await this.prisma.post.findMany({ orderBy: { id: "asc" } });
+-    return posts;
++    const withAuthors = [];
++    for (const post of posts) {
++      const author = await this.prisma.author.findUnique({ where: { id: post.authorId } });
++      withAuthors.push({ ...post, author: author?.name });
++    }
++    return withAuthors;
+   }
+ }
+diff --git a/test/posts.test.ts b/test/posts.test.ts
+index 951741f9..9cef46aa 100644
+--- a/test/posts.test.ts
++++ b/test/posts.test.ts
+@@ -36,4 +36,5 @@ test("GET /posts lists every post", async () => {
+     "Post 4",
+     "Post 5",
+   ]);
++  expect(res.body.map((post: { author: string }) => post.author)).toEqual(["Grace", "Ada", "Grace", "Ada", "Grace"]);
+ });

@@ -1,0 +1,25 @@
+diff --git a/src/app.js b/src/app.js
+index b55f1e30..9bd97a77 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -5,6 +5,10 @@ export function createApp(pool) {
+ 
+   app.get("/posts", async () => {
+     const { rows: posts } = await pool.query("select id, title, author_id from posts order by id");
++    for (const post of posts) {
++      const { rows } = await pool.query("select name from authors where id = $1", [post.author_id]);
++      post.author = rows[0].name;
++    }
+     return posts;
+   });
+ 
+diff --git a/test/posts.test.js b/test/posts.test.js
+index 351a74c2..cd197a1a 100644
+--- a/test/posts.test.js
++++ b/test/posts.test.js
+@@ -22,4 +22,5 @@ test("GET /posts lists every post", async () => {
+   const res = await app.inject({ method: "GET", url: "/posts" });
+   expect(res.statusCode).toBe(200);
+   expect(res.json().map((post) => post.title)).toEqual(["Post 1", "Post 2", "Post 3", "Post 4", "Post 5"]);
++  expect(res.json().map((post) => post.author)).toEqual(["Grace", "Ada", "Grace", "Ada", "Grace"]);
+ });
