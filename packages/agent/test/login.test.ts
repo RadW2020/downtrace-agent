@@ -661,11 +661,11 @@ describe("the command line of downtrace login", () => {
 describe("the documentation of downtrace login", () => {
   it("says how to get a token with downtrace login, with no address to fill in", async () => {
     const page = (path: string): Promise<string> => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-    const readme = await page("README.md");
-    const start = readme.indexOf("\n## Install\n");
+    const production = await page("guide/production.md");
+    const start = production.indexOf("\n## Install\n");
     expect(start).toBeGreaterThanOrEqual(0);
-    const install = readme.slice(start, readme.indexOf("\n## ", start + 1));
-    for (const [where, text] of [["the README's install section", install]] as const) {
+    const install = production.slice(start, production.indexOf("\n## ", start + 1));
+    for (const [where, text] of [["the production page's install section", install]] as const) {
       const commands = fenced(text).filter((line) => /\blogin --project\b/.test(line));
       expect(commands, where).not.toEqual([]);
       for (const command of commands) {

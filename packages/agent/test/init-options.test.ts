@@ -147,8 +147,8 @@ describe("one list of the settings, for options and variables alike (RF-103)", (
     return rows;
   }
 
-  it("shows in the README's table only what a user sets to get started", async () => {
-    const rows = await settingsTable("../README.md");
+  it("shows in the production page's table only what a user sets to get started", async () => {
+    const rows = await settingsTable("../guide/production.md");
     expect(rows.map(([option]) => option)).toEqual(["dsn", "env", "version", "inspect"]);
     for (const [option, variable] of rows) expect(SETTINGS[option as keyof typeof SETTINGS].variable).toBe(variable);
   });

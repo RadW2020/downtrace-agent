@@ -150,10 +150,10 @@ describe("the oldest Node the package runs on", () => {
     }
   });
 
-  it("is stated in the README, which is where it is looked for now that no engines field says it", async () => {
-    const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
-    expect(readme).toContain(`Node.js ${NODE_FLOOR} or newer`);
-    expect(readme).not.toContain("`engines`");
+  it("is stated in the requirements, which is where it is looked for now that no engines field says it", async () => {
+    const requirements = await readFile(new URL("../guide/production.md", import.meta.url), "utf8");
+    expect(requirements).toContain(`Node.js ${NODE_FLOOR} or newer`);
+    expect(requirements).not.toContain("`engines`");
   });
 });
 

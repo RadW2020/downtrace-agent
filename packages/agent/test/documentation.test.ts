@@ -83,9 +83,12 @@ describe("the documentation", () => {
       }
     }
     expect(found).toEqual([]);
-    const readme = await read("README.md");
-    expect(readme).toMatch(/\bno SLA\b/);
-    expect(readme).toMatch(/protocol is `v0`/);
+    // The limits of production are said on production's page, and not at the top of the README.
+    const production = await read("guide/production.md");
+    expect(production).toMatch(/\bexperimental\b/);
+    expect(production).toMatch(/\bno SLA\b/);
+    expect(production).toMatch(/protocol is `v0`/);
+    expect(await read("README.md")).not.toMatch(/\bno SLA\b/);
   });
 
   it("lists in its table of observers every one DOWNTRACE_INSTRUMENT switches, and only those", async () => {

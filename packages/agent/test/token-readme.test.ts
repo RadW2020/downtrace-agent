@@ -18,13 +18,13 @@ const flat = (text: string): string => text.replaceAll("`", "").replaceAll("**",
 let section: string;
 let docs: string;
 beforeAll(async () => {
-  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
-  const start = readme.indexOf(HEADING);
-  section = start < 0 ? "" : flat(readme.slice(start, readme.indexOf("\n## ", start + 1)));
+  const page = await readFile(new URL("../guide/production.md", import.meta.url), "utf8");
+  const start = page.indexOf(HEADING);
+  section = start < 0 ? "" : flat(page.slice(start, page.indexOf("\n## ", start + 1)));
   docs = flat(await readDocumentation());
 });
 
-describe("the README on the ingestion token", () => {
+describe("the production page on the ingestion token", () => {
   it("has a section of its own, which says the token is safe to commit and gives it where the token is given", () => {
     expect(section).not.toBe("");
     expect(section).toContain("safe to commit");
