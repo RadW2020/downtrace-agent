@@ -104,6 +104,22 @@ says nothing.
 
 For CI, the exit status: **0** no route got worse, **1** at least one did, **2** no comparison could be made — the test command failed on either side (a comparison needs two runs that end well), a run left no profile, no route could be evaluated, or the command was interrupted.
 
+## On a pull request
+
+A GitHub Action runs `check` against the pull request's base, keeps one comment with the routes that got worse — posted the first time one does, updated on every run after — and fails the job when one did:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v5
+  # install the project and start what its tests need, as your test job does
+  - uses: RadW2020/downtrace-agent/packages/check-action@main
+```
+
+It runs `npx downtrace check --json`, so the project has `@downtrace/agent` installed and the `downtrace.json` that `npx downtrace init` wrote. Its inputs: `base`, a ref other than the pull request's base branch; `working-directory`, when the project is not at the root; `github-token`, when the job's own cannot comment. The job ends with `check`'s exit status.
+
 ## With a coding agent
 
 Paste this into the `AGENTS.md` or `CLAUDE.md` of your project:

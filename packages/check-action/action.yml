@@ -1,0 +1,39 @@
+name: Downtrace check
+description: >-
+  Runs `downtrace check` on a pull request, keeps one comment with the routes that got worse, and fails the job
+  when one did.
+inputs:
+  base:
+    description: The ref to compare with. Default, the pull request's base branch.
+    required: false
+    default: ""
+  working-directory:
+    description: Where the project is, when it is not the repository's root.
+    required: false
+    default: "."
+  github-token:
+    description: "The token that writes the comment. It needs `pull-requests: write`."
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    # The project is installed and `npx downtrace init` was committed: this runs what a developer runs before pushing.
+    # Exit 0 no route got worse, 1 at least one did, 2 no comparison could be made; the step ends with it.
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DOWNTRACE_BASE: ${{ inputs.base }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        base=$DOWNTRACE_BASE
+        if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+          # A checkout of a pull request has the merge commit and nothing else: bring the base it merges into.
+          git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          base=origin/$GITHUB_BASE_REF
+        fi
+        report=$RUNNER_TEMP/downtrace-check-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json
+        status=0
+        npx downtrace check --json ${base:+--base "$base"} > "$report" || status=$?
+        node "$GITHUB_ACTION_PATH/comment.mjs" "$report"
+        exit "$status"
