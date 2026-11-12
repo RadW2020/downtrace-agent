@@ -9,15 +9,15 @@ Write them exactly as here, with the version they name: use no flag they do not 
 
 | To | Run |
 |---|---|
-| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent@0.22.0 init --json` |
-| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent@0.22.0 check --json` |
-| Compare a branch with the point where it left main | `npx @downtrace/agent@0.22.0 check --json --base "$(git merge-base origin/main HEAD)"` |
-| Give the test command when `downtrace.json` has none | `npx @downtrace/agent@0.22.0 check --json -- npm test` |
-| Allow each test run more than the default 900 seconds | `npx @downtrace/agent@0.22.0 check --json --timeout 1800` |
-| Read the project's brief from the shell, with the credential `downtrace login` stored (rule 5); add `--project` and the slug when it stored several | `npx @downtrace/agent@0.22.0 brief --json` |
-| Read, from the shell, the path an item of the brief names under `next.api` | `npx @downtrace/agent@0.22.0 api "<next.api>"` |
-| After a deploy, wait for its version's verdict: run it in the background and read its exit status when it ends, instead of asking each turn. The version is the deploy's: its commit, when the build runs `stamp` | `npx @downtrace/agent@0.22.0 brief --deploy "<version>" --wait 30m --json` |
-| In the build, beside the app's `package.json`: writes the commit, which the instrumentation then reports as the deployed version (rule 7) | `npx @downtrace/agent@0.22.0 stamp` |
+| Configure the project: writes `downtrace.json` with its test command. Asks nothing, needs no token, makes no network request | `npx @downtrace/agent@0.23.0 init --json` |
+| Compare the working tree with `HEAD`: what is not committed yet | `npx @downtrace/agent@0.23.0 check --json` |
+| Compare a branch with the point where it left main | `npx @downtrace/agent@0.23.0 check --json --base "$(git merge-base origin/main HEAD)"` |
+| Give the test command when `downtrace.json` has none | `npx @downtrace/agent@0.23.0 check --json -- npm test` |
+| Allow each test run more than the default 900 seconds | `npx @downtrace/agent@0.23.0 check --json --timeout 1800` |
+| Read the project's brief from the shell, with the credential `downtrace login` stored (rule 5); add `--project` and the slug when it stored several | `npx @downtrace/agent@0.23.0 brief --json` |
+| Read, from the shell, the path an item of the brief names under `next.api` | `npx @downtrace/agent@0.23.0 api "<next.api>"` |
+| After a deploy, wait for its version's verdict: run it in the background and read its exit status when it ends, instead of asking each turn. The version is the deploy's: its commit, when the build runs `stamp` | `npx @downtrace/agent@0.23.0 brief --deploy "<version>" --wait 30m --json` |
+| In the build, beside the app's `package.json`: writes the commit, which the instrumentation then reports as the deployed version (rule 7) | `npx @downtrace/agent@0.23.0 stamp` |
 
 Never shorten them to `npx downtrace` unless `@downtrace/agent` is a dependency of the project: without it, that name on the registry is not Downtrace's, and npx would run whatever is published under it.
 

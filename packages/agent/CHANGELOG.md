@@ -1,5 +1,15 @@
 # @downtrace/agent
 
+## 0.23.0
+
+### Minor Changes
+
+- 8e64a19: `downtrace check --json` says its `schemaVersion` (1), and its contract is a JSON Schema published in the package: `@downtrace/agent/check.schema.json`. Under one `schemaVersion` fields are only ever added; a field removed, renamed or given another meaning moves it, with a major version of the package.
+
+### Patch Changes
+
+- 4a4688e: `downtrace check` and `downtrace compare` no longer call a route worse when an operation only took the place of one that is gone: a query whose text changed, such as the join that fixes an N+1, was listed as «appeared» and failed the check with the route running what it ran. It is now listed as «replaced» and is not worse, when something of its kind is gone, what appeared runs no more per request than what is gone ran, and each one that appeared runs at most once per request. In `--json` such an operation has `change: "appeared"`, `worse: false` and `replacement: true`. An N+1 is worse as before.
+
 ## 0.22.0
 
 ### Minor Changes
