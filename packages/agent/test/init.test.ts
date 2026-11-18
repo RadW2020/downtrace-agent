@@ -552,9 +552,9 @@ describe("the ingestion token", () => {
   const flat = (text: string): string => text.replaceAll(/\s+/g, " ");
 
   it("says it is safe to commit, what a leaked one can and cannot do, and how to replace it, in words", async () => {
-    const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
-    const { code, text } = await initText(dir);
-    expect(code).toBe(0);
+    // Where init wires production: the package is a dependency of the application, and not only of its tests.
+    const dir = await project({ ".git/": "", "package.json": NEXT_APP(), "next.config.mjs": "export default {};\n" });
+    const { text } = await initText(dir);
     const said = flat(text);
     expect(said).toContain("DOWNTRACE_TOKEN");
     expect(said).toContain("DOWNTRACE_DSN");
@@ -563,6 +563,18 @@ describe("the ingestion token", () => {
     expect(said).toContain(`It cannot ${INGESTION_TOKEN.cannot}.`);
     expect(said).toContain(`To replace it, ${INGESTION_TOKEN.replace}.`);
     // What to run next stays the last thing said.
+    expect(text.trimEnd().split("\n").at(-1)).toMatch(/^Next: /);
+  });
+
+  it("says nothing of it in words where production is not instrumented, and ends on what to run", async () => {
+    // What `npx downtrace init && npx downtrace check` is for: the package is a dev dependency or none, production
+    // loads nothing, and a paragraph on a token nobody has stood between the summary and the next command.
+    const dir = await project({ ".git/": "", "package.json": EXPRESS_PG });
+    const { code, text } = await initText(dir);
+    expect(code).toBe(0);
+    expect(text).toContain("not instrumented");
+    expect(text).not.toContain("DOWNTRACE_TOKEN");
+    expect(text).not.toContain("safe to commit");
     expect(text.trimEnd().split("\n").at(-1)).toBe("Next: npx @downtrace/agent check");
   });
 
@@ -575,7 +587,14 @@ describe("the ingestion token", () => {
   });
 
   it("says it too when there is something left to do", async () => {
-    const dir = await project({ ".git/": "", "package.json": "{}" });
+    // A hook of the project's own is in the way: production is to be instrumented, and init could not finish it.
+    const dir = await project({
+      ".git/": "",
+      "package.json": NEXT_APP(),
+      "next.config.js": 'module.exports = { output: "standalone" };\n',
+      "instrumentation.ts": "export async function register() {\n  await import('./otel');\n}\n",
+      "tsconfig.json": "{}",
+    });
     const { code, text } = await initText(dir);
     expect(code).toBe(1);
     expect(flat(text)).toContain(`To replace it, ${INGESTION_TOKEN.replace}.`);

@@ -153,14 +153,17 @@ export function renderInitText(report: InitReport): string {
     for (const item of report.missing) lines.push(`  - ${item.message}.`, `    ${item.advice}`);
   }
 
-  lines.push(
-    "",
-    "Production: the ingestion token, in DOWNTRACE_TOKEN or inside DOWNTRACE_DSN, is public like a Sentry DSN, and safe to commit.",
-    "  Whoever holds it can:",
-    ...report.token.can.map((can) => `    - ${can}`),
-    `  It cannot ${report.token.cannot}.`,
-    `  To replace it, ${report.token.replace}.`,
-  );
+  // Said where production is, or may be, instrumented. Where init left it out on purpose there is no token to ask
+  // about, and the paragraph stood between the summary and the command to run next. The JSON says it always.
+  if (!report.instrument?.skipped)
+    lines.push(
+      "",
+      "Production: the ingestion token, in DOWNTRACE_TOKEN or inside DOWNTRACE_DSN, is public like a Sentry DSN, and safe to commit.",
+      "  Whoever holds it can:",
+      ...report.token.can.map((can) => `    - ${can}`),
+      `  It cannot ${report.token.cannot}.`,
+      `  To replace it, ${report.token.replace}.`,
+    );
 
   if (report.next !== null) lines.push("", `Next: ${report.next}`);
   return `${lines.join("\n")}\n`;
