@@ -12,7 +12,7 @@
     "pg": "^8.23.1"
   },
   "devDependencies": {
-    "@downtrace/agent": "^0.22.0",
+    "@downtrace/agent": "^0.23.0",
     "vitest": "^5.1.0"
   }
 }

@@ -17,7 +17,7 @@
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
-    "@downtrace/agent": "^0.22.0",
+    "@downtrace/agent": "^0.23.0",
     "@nestjs/testing": "^12.4.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
