@@ -1,0 +1,85 @@
+diff --git a/src/app.js b/src/app.js
+index b4e34b9..c51eb3a 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,11 +1,24 @@
+ const express = require("express");
++const { getAuthor } = require("./authors");
++const { getPost, listPosts, serializePost } = require("./posts");
+ 
+ function createApp(pool) {
+   const app = express();
+ 
+   app.get("/posts", async (_req, res) => {
+-    const { rows: posts } = await pool.query("select id, title, author_id from posts order by id");
+-    res.json(posts);
++    res.json(await listPosts(pool));
++  });
++
++  app.get("/posts/:id", async (req, res) => {
++    const post = await getPost(pool, req.params.id);
++    if (!post) return res.sendStatus(404);
++    res.json(await serializePost(pool, post));
++  });
++
++  app.get("/authors/:id", async (req, res) => {
++    const author = await getAuthor(pool, req.params.id);
++    if (!author) return res.sendStatus(404);
++    res.json(author);
+   });
+ 
+   return app;
+diff --git a/src/authors.js b/src/authors.js
+new file mode 100644
+index 0000000..de5eafd
+--- /dev/null
++++ b/src/authors.js
+@@ -0,0 +1,6 @@
++async function getAuthor(pool, id) {
++  const { rows } = await pool.query("select id, name from authors where id = $1", [id]);
++  return rows[0];
++}
++
++module.exports = { getAuthor };
+diff --git a/src/posts.js b/src/posts.js
+new file mode 100644
+index 0000000..f85b716
+--- /dev/null
++++ b/src/posts.js
+@@ -0,0 +1,18 @@
++const { getAuthor } = require("./authors");
++
++async function listPosts(pool) {
++  const { rows } = await pool.query("select id, title, author_id from posts order by id");
++  return rows;
++}
++
++async function getPost(pool, id) {
++  const { rows } = await pool.query("select id, title, author_id from posts where id = $1", [id]);
++  return rows[0];
++}
++
++// The shape the API returns for a post.
++async function serializePost(pool, post) {
++  return { id: post.id, title: post.title, author: await getAuthor(pool, post.author_id) };
++}
++
++module.exports = { listPosts, getPost, serializePost };
+diff --git a/test/posts.test.js b/test/posts.test.js
+index 9146dca..8516aff 100644
+--- a/test/posts.test.js
++++ b/test/posts.test.js
+@@ -19,3 +19,13 @@ test("GET /posts lists every post", async () => {
+   const res = await request(app).get("/posts").expect(200);
+   expect(res.body.map((post) => post.title)).toEqual(["Post 1", "Post 2", "Post 3", "Post 4", "Post 5"]);
+ });
++
++test("GET /authors/:id returns one author", async () => {
++  const res = await request(app).get("/authors/1").expect(200);
++  expect(res.body).toEqual({ id: 1, name: "Ada" });
++});
++
++test("GET /posts/:id returns one post with its author", async () => {
++  const res = await request(app).get("/posts/1").expect(200);
++  expect(res.body).toEqual({ id: 1, title: "Post 1", author: { id: 2, name: "Grace" } });
++});

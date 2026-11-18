@@ -4,6 +4,10 @@
 
 `downtrace check` compares two runs of your tests and names the routes that got worse: a query that now runs once per row, a query or an outgoing call that was not there. A developer, or their coding agent, runs it before pushing. No account, and nothing leaves the machine.
 
+![A coding agent is asked for a feature and adds an N+1; downtrace check exits 1 and the agent fixes it](examples/demo/demo.gif)
+
+Claude Code with Haiku, in real time. Nothing after the request is scripted.
+
 [![ci](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RadW2020/downtrace-agent/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@downtrace/agent)](https://www.npmjs.com/package/@downtrace/agent)
 

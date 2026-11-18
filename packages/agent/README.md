@@ -4,6 +4,10 @@
 
 `downtrace check` runs your tests twice, on `HEAD` and on your working tree, and names the routes that got worse: a query that now runs once per row, a query or an outgoing call that was not there. It needs no account, and nothing leaves your machine.
 
+![A coding agent is asked for a feature and adds an N+1; downtrace check exits 1 and the agent fixes it](https://raw.githubusercontent.com/RadW2020/downtrace-agent/main/examples/demo/demo.gif)
+
+Claude Code with Haiku, in real time. Nothing after the request is scripted.
+
 ## Three commands
 
 ```sh
