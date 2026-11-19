@@ -271,7 +271,7 @@ describe("what init does not instrument", () => {
     expect(report.instrument).toEqual({
       file: null,
       loadedBy: null,
-      skipped: expect.stringContaining("not a dependency"),
+      skipped: expect.stringContaining("not among the dependencies production installs"),
     });
     expect(await initText(dir)).toMatch(/production\s+not instrumented: /);
   });

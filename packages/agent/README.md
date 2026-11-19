@@ -15,7 +15,7 @@ npx downtrace init     # finds your test command, writes downtrace.json; asks no
 npx downtrace check    # exit 0: no route got worse · 1: one did · 2: no comparison could be made
 ```
 
-Nothing to install first. To pin the version, add `@downtrace/agent` as a dev dependency: `npx downtrace` then runs that one.
+Nothing to install first: [`downtrace`](https://www.npmjs.com/package/downtrace) on npm is this package's command, and `npx` fetches it. To pin the version, install `@downtrace/agent` as a dev dependency: it brings the same command, and `npx downtrace` runs that one. Commit `downtrace.json`.
 
 ```
 1 of 1 routes evaluated: 1 worse, 0 unchanged.
@@ -29,7 +29,7 @@ Worse (1)
 
 The verdict comes from what each request ran (queries, outgoing calls, Redis commands) and how many times. Durations are shown and never judged: a test run is not production. A query that only took the place of another is not worse, so the join that fixes the N+1 passes. A route your tests did not reach is said to be not evaluated, by name, and never unchanged.
 
-It needs tests that reach your application over HTTP, with its database behind it. The whole of it: [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md).
+It needs tests that reach your application over HTTP, with its database behind it and running, as for `npm test`. Exit 2 is a test command that failed or reached no route; it says which. The whole of it: [`check`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/check.md) and [`init`](https://github.com/RadW2020/downtrace-agent/blob/main/packages/agent/guide/init.md).
 
 ## With your coding agent
 

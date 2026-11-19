@@ -15,6 +15,7 @@ import {
   unseenObservers,
 } from "./hints.ts";
 import { type RunTally, readDeclaredFile, readRunFile, readSitesFile, type SitesRead } from "./read.ts";
+import { plural } from "./render.ts";
 import {
   type CheckReport,
   compared,
@@ -835,7 +836,9 @@ async function check(options: CheckOptions, made: Made): Promise<CheckReport> {
       const said = noProfile({ command: options.command, scripts: await scriptsIn(dir), processes: tally.processes });
       throw new CheckFailure("no-profile", side, said.message, { advice: said.advice, outputTail: ran.outputTail });
     }
-    options.progress(`${side}: ${tally.requests} requests on ${made.sides[side]?.routes ?? 0} routes`);
+    options.progress(
+      `${side}: ${plural(tally.requests, "request")} on ${plural(made.sides[side]?.routes ?? 0, "route")}`,
+    );
   }
 
   const base = tallies.get("base");

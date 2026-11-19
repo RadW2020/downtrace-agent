@@ -541,7 +541,7 @@ async function instrumentLayout(dir: string, pkg: PackageJson): Promise<Instrume
   if (!pkg.production.has(AGENT_PACKAGE)) {
     return {
       kind: "skipped",
-      reason: `${AGENT_PACKAGE} is not a dependency of the project, only a dev dependency or none, and production installs neither`,
+      reason: `${AGENT_PACKAGE} is not among the dependencies production installs, and check does not need it there`,
     };
   }
   if (pkg.esm) {

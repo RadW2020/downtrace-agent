@@ -181,6 +181,8 @@ describe("a change that makes a route run more than it did (ESC-17)", () => {
 
   it("keeps the progress of a run that takes minutes on stderr, so that stdout is the result alone", () => {
     expect(checked.stderr).toContain("downtrace: base: running node app.mjs");
+    expect(checked.stderr).toMatch(/downtrace: base: \d+ requests? on \d+ routes?\n/);
+    expect(checked.stderr).not.toMatch(/\b1 (requests|routes)\b/);
     expect(() => JSON.parse(checked.stdout)).not.toThrow();
   });
 });
