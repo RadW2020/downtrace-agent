@@ -14,11 +14,10 @@ Claude Code with Haiku, in real time. Nothing after the request is scripted.
 In a Node.js project whose tests reach it over HTTP:
 
 ```sh
-npm install --save-dev @downtrace/agent
 npx downtrace init && npx downtrace check
 ```
 
-When a change adds an N+1, it exits 1 and says `GET /posts … appeared   select name from authors where id = ?   0 -> 5 per request   ran at src/app.js:9` while your tests still pass. [The three commands, with a coding agent and in CI](packages/agent#readme) · [try it on an example](examples) · [how it decides](packages/agent/guide/check.md).
+When a change adds an N+1, it exits 1 and says `GET /posts … appeared   select name from authors where id = ?   0 -> 5 per request   ran at src/app.js:9` while your tests still pass. [The commands, with a coding agent and in CI](packages/agent#readme) · [try it on an example](examples) · [how it decides](packages/agent/guide/check.md).
 
 The same library also monitors production with the Downtrace cloud. That half is experimental: free, no plans, no billing and no SLA, on a protocol, `v0`, that can still change between minor versions. [Its page](packages/agent/guide/production.md).
 

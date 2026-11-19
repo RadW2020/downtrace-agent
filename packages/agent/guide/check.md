@@ -118,7 +118,7 @@ steps:
   - uses: RadW2020/downtrace-agent/packages/check-action@main
 ```
 
-It runs `npx downtrace check --json`, so the project has `@downtrace/agent` installed and the `downtrace.json` that `npx downtrace init` wrote. Its inputs: `base`, a ref other than the pull request's base branch; `working-directory`, when the project is not at the root; `github-token`, when the job's own cannot comment. The job ends with `check`'s exit status.
+It runs `npx downtrace check --json`, so the project has the `downtrace.json` that `npx downtrace init` wrote; where `@downtrace/agent` is among its dev dependencies, that version runs. Its inputs: `base`, a ref other than the pull request's base branch; `working-directory`, when the project is not at the root; `github-token`, when the job's own cannot comment. The job ends with `check`'s exit status.
 
 ## With a coding agent
 

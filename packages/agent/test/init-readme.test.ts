@@ -62,7 +62,7 @@ describe("the README on downtrace init", () => {
     }
   });
 
-  it("tells a project without the package to run it under the package's own name", () => {
-    expect(says("npx @downtrace/agent init")).toBe(true);
+  it("spells the command the way it runs with or without the package installed", () => {
+    expect(says("npx downtrace init")).toBe(true);
   });
 });

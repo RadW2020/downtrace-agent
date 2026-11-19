@@ -8,13 +8,14 @@
 
 Claude Code with Haiku, in real time. Nothing after the request is scripted.
 
-## Three commands
+## Two commands
 
 ```sh
-npm install --save-dev @downtrace/agent
 npx downtrace init     # finds your test command, writes downtrace.json; asks nothing
 npx downtrace check    # exit 0: no route got worse · 1: one did · 2: no comparison could be made
 ```
+
+Nothing to install first. To pin the version, add `@downtrace/agent` as a dev dependency: `npx downtrace` then runs that one.
 
 ```
 1 of 1 routes evaluated: 1 worse, 0 unchanged.

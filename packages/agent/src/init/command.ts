@@ -189,15 +189,13 @@ export async function initProject(dir: string): Promise<InitReport> {
 
 /**
  * How a command of this package is spelled for a project: `npx downtrace` finds the bin of a project that has the
- * package, and where it does not, it would look the name up on the registry, and that name is not ours.
+ * package, and where it does not, the `downtrace` package on the registry, which depends on this one and runs it.
  */
-function npx(found: Detection): string {
-  return found.installed ? "npx downtrace" : `npx ${AGENT_PACKAGE}`;
-}
+const NPX = "npx downtrace";
 
 /** What is left to do about what `detect` found, apart from the Next.js hook. */
 function missingOf(found: Detection, command: string | undefined, dir: string): Missing[] {
-  const invoke = npx(found);
+  const invoke = NPX;
   const missing: Missing[] = [];
   if (found.frameworks.length === 0) {
     missing.push({
@@ -335,7 +333,7 @@ async function configure(dir: string): Promise<InitReport> {
     command: command ?? null,
     files,
     missing,
-    next: command === undefined ? null : `${npx(found)} check`,
+    next: command === undefined ? null : `${NPX} check`,
     instrument: instrument.instrument,
   });
 }

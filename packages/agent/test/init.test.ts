@@ -101,7 +101,7 @@ describe("a project it can configure", () => {
       files: [{ path: "downtrace.json", action: "created" }],
       missing: [],
       failure: null,
-      next: "npx @downtrace/agent check",
+      next: "npx downtrace check",
     });
     // What check finds and reads, from where it runs: exactly the command init wrote, and nothing it would refuse.
     const found = await findConfig(dir, dir);
@@ -263,7 +263,7 @@ describe("a project it can configure", () => {
     expect(text).toMatch(/observed\s+pg, outgoing HTTP/);
     expect(text).toMatch(/check runs\s+npm run test:integration/);
     expect(text).toMatch(/created\s+downtrace\.json/);
-    expect(text).toContain("Next: npx @downtrace/agent check");
+    expect(text).toContain("Next: npx downtrace check");
   });
 });
 
@@ -317,7 +317,7 @@ describe("a Next.js build with output: standalone", () => {
     expect(await contents(dir)).not.toHaveProperty("instrumentation.js");
     // What could be written was: check can run, with the package from the registry under its own name.
     expect(report.files).toEqual([{ path: "downtrace.json", action: "created" }]);
-    expect(report.next).toBe("npx @downtrace/agent check");
+    expect(report.next).toBe("npx downtrace check");
   });
 
   it("does not touch a hook the project already has, and says what to add to it", async () => {
@@ -376,7 +376,7 @@ describe("what it cannot detect", () => {
     expect(report.status).toBe("incomplete");
     expect(report.missing.map((item) => item.code)).toEqual(["no-framework", "no-test-command"]);
     expect(report.missing[1]?.advice).toContain("walk of the routes");
-    expect(report.missing[1]?.advice).toContain("npx @downtrace/agent check -- <command>");
+    expect(report.missing[1]?.advice).toContain("npx downtrace check -- <command>");
     expect(report).toMatchObject({ command: null, files: [], next: null });
     expect(await contents(dir)).toEqual(before);
   });
@@ -414,7 +414,7 @@ describe("what it cannot detect", () => {
     expect(report.missing.map((item) => item.code)).toEqual(["no-framework"]);
     expect(report.missing[0]?.advice).toContain("by the shape of its path");
     expect(report.command).toBe("npm test");
-    expect(report.next).toBe("npx @downtrace/agent check");
+    expect(report.next).toBe("npx downtrace check");
   });
 
   it("says check needs a git repository when no repository holds the project", async () => {
@@ -434,13 +434,14 @@ describe("what it cannot detect", () => {
     expect(await contents(dir)).toEqual({});
   });
 
-  it("never spells a bare npx downtrace for a project that does not have the package", async () => {
+  it("spells npx downtrace, never the scoped name, for a project that does not have the package", async () => {
     const dir = await project({ "package.json": json({ scripts: { build: "tsc" } }) });
     const { text } = await initText(dir);
     const { report } = await init(dir);
     expect(report.missing.length).toBeGreaterThan(0);
-    expect(text).not.toMatch(/npx downtrace\b/);
-    expect(JSON.stringify(report)).not.toMatch(/npx downtrace\b/);
+    expect(text).toMatch(/npx downtrace\b/);
+    expect(text).not.toContain("npx @downtrace/agent");
+    expect(JSON.stringify(report)).not.toContain("npx @downtrace/agent");
   });
 });
 
@@ -575,7 +576,7 @@ describe("the ingestion token", () => {
     expect(text).toContain("not instrumented");
     expect(text).not.toContain("DOWNTRACE_TOKEN");
     expect(text).not.toContain("safe to commit");
-    expect(text.trimEnd().split("\n").at(-1)).toBe("Next: npx @downtrace/agent check");
+    expect(text.trimEnd().split("\n").at(-1)).toBe("Next: npx downtrace check");
   });
 
   it("says the same to a coding agent, in the JSON, whatever init could configure", async () => {
@@ -646,7 +647,7 @@ describe("as a user runs it", () => {
     const env = cleanEnv({ npm_config_update_notifier: "false" });
     const initialised = await downtrace(["init"], { cwd: made.dir, env }).done;
     expect(initialised.code, initialised.stdout).toBe(0);
-    expect(initialised.stdout).toContain("Next: npx @downtrace/agent check");
+    expect(initialised.stdout).toContain("Next: npx downtrace check");
 
     const checked = await downtrace(["check", "--json"], { cwd: made.dir, env }).done;
     const report = JSON.parse(checked.stdout) as CheckReport;

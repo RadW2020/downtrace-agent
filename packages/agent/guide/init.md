@@ -3,7 +3,7 @@
 Part of the documentation of [`@downtrace/agent`](../README.md).
 
 ```sh
-npx @downtrace/agent init
+npx downtrace init
 ```
 
 It reads the project in the directory it runs in — its `package.json`, the lockfile beside it (or above it, up to the top of its git repository, where a workspace keeps the one lockfile), its `next.config`, its `tsconfig.json`, its `nest-cli.json` and the entry the application starts from — and writes what the project needs. It asks for no token and no URL, asks no question, and makes no network request: locally there is no cloud. What it says of the token, where it instruments production, is what a person wiring production asks first: it is [safe to commit](production.md#the-ingestion-token-is-safe-to-commit), with what whoever holds it can and cannot do, and how it is replaced. Installed with the project, `npx downtrace init` is the same command; where `@downtrace/agent` is not installed, `npx downtrace` is not (see [`downtrace check`](check.md)), and every command `init` prints is spelled for whether the project has the package.

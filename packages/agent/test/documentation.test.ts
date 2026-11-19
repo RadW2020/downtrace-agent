@@ -81,7 +81,7 @@ describe("the documentation", () => {
 
   it("is about check: its commands, a coding agent, CI, what is supported, and production as a link", async () => {
     const readme = await read("README.md");
-    for (const command of ["npm install --save-dev @downtrace/agent", "npx downtrace init", "npx downtrace check"]) {
+    for (const command of ["npx downtrace init", "npx downtrace check"]) {
       expect(readme, command).toContain(command);
     }
     expect(readme).toContain("Worse (1)");
