@@ -175,6 +175,12 @@ importers:
 
   packages/coding-agent: {}
 
+  packages/downtrace:
+    dependencies:
+      '@downtrace/agent':
+        specifier: workspace:*
+        version: link:../agent
+
   packages/mcp: {}
 
   packages/protocol:

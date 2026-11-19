@@ -29,6 +29,7 @@ Issues are welcome and answered here. Pull requests cannot be merged in place; s
 | Package | What it is |
 |---|---|
 | [`packages/agent`](packages/agent) | `@downtrace/agent` — the Node.js agent (`node --import @downtrace/agent/register`) |
+| [`packages/downtrace`](packages/downtrace) | `downtrace` — the same command with nothing to install first: `npx downtrace check` |
 | [`packages/check-action`](packages/check-action) | The GitHub Action that runs `check` on a pull request, keeps one comment with the routes that got worse and fails the job when one did |
 | [`examples`](examples) | One small application per supported combination, each with the change that introduces an N+1 |
 | [`packages/protocol`](packages/protocol) | `@downtrace/protocol` — the ingestion contract: JSON Schema, fixtures, generated types |
