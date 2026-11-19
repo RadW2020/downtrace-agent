@@ -1,6 +1,6 @@
 {
   "@downtrace/agent": {
-    "version": "0.23.1",
+    "version": "0.23.2",
     "commands": ["api", "brief", "check", "compare", "init", "login", "report", "stamp", "verify"],
     "flags": [
       "--base",

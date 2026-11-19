@@ -1,5 +1,11 @@
 # @downtrace/agent
 
+## 0.23.2
+
+### Patch Changes
+
+- 832bc58: `downtrace check` counts its progress lines in the singular where there is one (`1 request on 1 route`), and `downtrace init` says in fewer words why production is not instrumented: the package is not among the dependencies production installs, and `check` does not need it there.
+
 ## 0.23.1
 
 ### Patch Changes

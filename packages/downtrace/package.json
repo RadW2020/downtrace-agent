@@ -1,6 +1,6 @@
 {
   "name": "downtrace",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "npx downtrace check: names the routes a change made worse, an N+1 or a new call, before you push. The command of @downtrace/agent, with nothing to install first",
   "type": "module",
   "bin": {
