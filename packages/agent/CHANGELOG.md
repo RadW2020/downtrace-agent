@@ -1,5 +1,12 @@
 # @downtrace/agent
 
+## 0.23.1
+
+### Patch Changes
+
+- fa50993: `downtrace init` spells every command it suggests `npx downtrace …`, with or without the package installed: the unscoped `downtrace` package now runs this one, so the name resolves either way.
+- 2c3e54b: `downtrace init` says what it says of the ingestion token only where it instruments production. With the package as a dev dependency, or not installed, its output ends on the summary and the command to run next.
+
 ## 0.23.0
 
 ### Minor Changes
